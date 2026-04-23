@@ -1,0 +1,45 @@
+# * config/data_prep.yaml
+columns:
+  target: "misstatement firm-year"
+  firm_col: "gvkey"
+  year_col: "data_year"
+  identifiers: ["gvkey", "data_year"] # drop from features
+  stratify_on: "__TARGET__"
+  group_on: "gvkey" # group by firm for StratifiedGroupKFold CV
+
+processing:
+  # Holdout (strictly out-of-time); mirror real deployment, train on past to score future
+  test_split:
+    kind: "last_years" # last contiguous years as test
+    n_years: 3 # or use fraction: test_frac_years: 0.2
+
+  # CV within train years
+  cv:
+    # ! kind: "year_blocked" or "stratified_group_kfold" or "repeated_stratified_kfold"
+    kind: "year_blocked"
+    n_splits: 5
+    n_repeats: 2
+    shuffle: true
+    purge_years: 0 # set >0 if you add lag features
+
+  # * Preprocessing knobs
+  scale_numeric: false
+  scaler_kind: "standard" # * "minmax" / "robust"
+  min_cat_freq: 25
+  autodrop_missing_threshold: 0.91 # drop columns missing >91%
+  # leakage guard, if you know post-outcome fields:
+  drop_columns: []
+
+  numeric_cleaning:
+    replace_inf: true
+    clip_quantiles: null # e.g., [0.001, 0.999] if needed
+    abs_max: null # e.g., 1e12
+
+  numeric_coercion:
+    enable: true
+    percent_as_fraction: false
+    threshold: 0.9
+
+  numeric_to_categorical:
+    enable: true # * let 0/1 to go through the categorical branch
+    max_unique: 2

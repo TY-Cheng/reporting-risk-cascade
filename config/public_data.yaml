@@ -1,0 +1,17 @@
+sec:
+  user_agent: "Tuoyuan Cheng tuoyuan.cheng@nus.edu.sg"
+  forms: ["10-K", "10-K/A", "8-K"]
+  start_year: 2001
+  end_year: 2019
+  ticker_url: "https://www.sec.gov/files/company_tickers.json"
+  submissions_template: "https://data.sec.gov/submissions/CIK{cik}.json"
+
+pcaob:
+  form_ap_zip_url: "https://pcaobus.org/assets/PCAOBFiles/FirmFilings.zip"
+  form_ap_dictionary_url: "https://assets.pcaobus.org/pcaob-dev/docs/default-source/rusdocuments/auditorsearch-form-ap-data-references.pdf"
+
+notes:
+  gvkey_cik_link_required_for_sec_index: true
+  gvkey_cik_link_fallback_candidates:
+    - "WRDS SEC Analytics Suite GVKEY-CIK link table"
+    - "Research package / reproducibility archive with dated GVKEY-CIK links"
