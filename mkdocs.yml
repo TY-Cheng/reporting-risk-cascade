@@ -1,11 +1,57 @@
-site_name: cls_miss
-site_description: Documentation for accounting misstatement classification experiments.
+site_name: Reporting Risk Cascade
+site_description: Documentation for the public reporting-risk cascade workflow.
 docs_dir: docs
+dev_addr: 127.0.0.1:8001
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - content.tabs.link
+    - search.highlight
+    - search.suggest
+  icon:
+    annotation: material/arrow-right-circle
 nav:
   - Home: index.md
+  - Paper Plan: paper_plan.md
+  - Audit Prompts:
+      - Development Audit: development_audit_prompt.md
+      - Manuscript Audit: manuscript_audit_prompt.md
+  - Future Work: future_work.md
 markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.snippets:
       base_path:
         - .
       check_paths: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
 strict: true

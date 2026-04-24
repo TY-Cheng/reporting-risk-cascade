@@ -1,10 +1,10 @@
 """
-Paper 1 pipeline for drift-aware and lag-aware misstatement analysis.
+Benchmark pipeline for drift-aware and lag-aware misstatement analysis.
 
 This module implements the near-term empirical spine:
 
 1. Build a firm-year master panel with leakage guards and label-timing metadata.
-2. Run naive versus matured rolling backtests across candidate training windows.
+2. Run naive versus proxy-sensitivity rolling backtests across candidate training windows.
 3. Diagnose drift via yearly metrics and feature-family importance stability.
 4. Model strategic silence using missing-profile clustering and DML-style adjustment.
 5. Emit decision-oriented summaries for retraining and top-K inspection policies.
@@ -30,7 +30,7 @@ from sklearn.metrics import (
 )
 from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import KFold
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from xgboost import XGBClassifier
 
 from . import SEED_DEFAULT
@@ -210,6 +210,103 @@ def _merge_external_timing(
     return merged
 
 
+def build_timing_coverage_report(
+    panel: pd.DataFrame,
+    *,
+    target_col: str,
+    leakage_cols: Sequence[str],
+) -> Tuple[pd.DataFrame, str]:
+    target = pd.to_numeric(panel[target_col], errors="coerce").fillna(0).astype(int)
+    positive = target.eq(1)
+    timing_flags = pd.DataFrame(index=panel.index)
+    for col in leakage_cols:
+        if col in panel.columns:
+            timing_flags[col] = pd.to_numeric(panel[col], errors="coerce").fillna(0).astype(int)
+    any_same_row_proxy = (
+        timing_flags.eq(1).any(axis=1)
+        if not timing_flags.empty
+        else pd.Series(False, index=panel.index)
+    )
+    positive_with_proxy = positive & panel["detection_year_proxy"].notna()
+    positive_without_proxy = positive & panel["detection_year_proxy"].isna()
+    external_positive = positive & panel["detection_source"].eq("external_timing")
+
+    summary_rows: List[Dict[str, object]] = [
+        {"section": "summary", "metric": "rows", "value": int(len(panel))},
+        {"section": "summary", "metric": "positive_rows", "value": int(positive.sum())},
+        {
+            "section": "summary",
+            "metric": "same_row_positive_with_any_res_an",
+            "value": int((positive & any_same_row_proxy).sum()),
+        },
+        {
+            "section": "summary",
+            "metric": "same_row_positive_without_any_res_an",
+            "value": int((positive & ~any_same_row_proxy).sum()),
+        },
+        {
+            "section": "summary",
+            "metric": "positive_with_detection_proxy",
+            "value": int(positive_with_proxy.sum()),
+        },
+        {
+            "section": "summary",
+            "metric": "positive_without_detection_proxy",
+            "value": int(positive_without_proxy.sum()),
+        },
+        {
+            "section": "summary",
+            "metric": "external_timing_positive_rows",
+            "value": int(external_positive.sum()),
+        },
+    ]
+    rows = [
+        {
+            "section": row["section"],
+            "metric": row["metric"],
+            "target_value": "",
+            "flag_value": "",
+            "count": "",
+            "value": row["value"],
+        }
+        for row in summary_rows
+    ]
+    for col in leakage_cols:
+        if col not in timing_flags.columns:
+            rows.append(
+                {
+                    "section": "res_an_crosstab",
+                    "metric": col,
+                    "target_value": "",
+                    "flag_value": "",
+                    "count": "",
+                    "value": "missing_column",
+                }
+            )
+            continue
+        flag = timing_flags[col]
+        for target_value in (0, 1):
+            for flag_value in (0, 1):
+                rows.append(
+                    {
+                        "section": "res_an_crosstab",
+                        "metric": col,
+                        "target_value": target_value,
+                        "flag_value": flag_value,
+                        "count": int((target.eq(target_value) & flag.eq(flag_value)).sum()),
+                        "value": "",
+                    }
+                )
+
+    if int(external_positive.sum()) > 0 and int(positive_without_proxy.sum()) == 0:
+        claim_status = "external_timing"
+    elif int(positive_with_proxy.sum()) > 0:
+        claim_status = "proxy_sensitivity"
+    else:
+        claim_status = "blocked"
+    return pd.DataFrame(rows), claim_status
+
+
 def infer_feature_family(column: str) -> str:
     if column in LEAKAGE_COLS_DEFAULT:
         return "timing_proxy"
@@ -289,7 +386,8 @@ def summarize_panel(
     firm_col: str,
     year_col: str,
     target_col: str,
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    leakage_cols: Sequence[str],
+) -> Tuple[pd.DataFrame, Dict[str, Any], pd.DataFrame]:
     year_summary = (
         panel.groupby(year_col)[target_col]
         .agg(["sum", "count", "mean"])
@@ -297,6 +395,15 @@ def summarize_panel(
         .reset_index()
     )
     year_summary["positive_rate"] = year_summary["positive_rate"].round(6)
+    timing_coverage, timing_claim_status = build_timing_coverage_report(
+        panel, target_col=target_col, leakage_cols=leakage_cols
+    )
+    summary_metrics = timing_coverage.loc[timing_coverage["section"].eq("summary")]
+    summary_values = {
+        str(row["metric"]): int(row["value"])
+        for _, row in summary_metrics.iterrows()
+        if str(row["value"]).isdigit()
+    }
     timing_summary = {
         "rows": int(len(panel)),
         "firms": int(panel[firm_col].nunique()),
@@ -304,9 +411,16 @@ def summarize_panel(
         "positive_rate": float(panel[target_col].mean()),
         "detection_source_counts": panel["detection_source"].value_counts(dropna=False).to_dict(),
         "positive_without_proxy": int(panel["positive_without_proxy"].sum()),
+        "timing_claim_status": timing_claim_status,
+        "same_row_positive_with_any_res_an": summary_values.get(
+            "same_row_positive_with_any_res_an", 0
+        ),
+        "same_row_positive_without_any_res_an": summary_values.get(
+            "same_row_positive_without_any_res_an", 0
+        ),
         "raw_missing_columns": sorted([c for c in panel.columns if c.startswith("raw_missing_")]),
     }
-    return year_summary, timing_summary
+    return year_summary, timing_summary, timing_coverage
 
 
 def get_feature_columns(
@@ -348,7 +462,7 @@ def _prepare_xy(
 ) -> Tuple[pd.DataFrame, np.ndarray, pd.DataFrame, np.ndarray]:
     y_train = train_df[target_col].astype(int).copy()
 
-    if label_mode == "matured":
+    if label_mode in {"matured", "proxy_sensitivity"}:
         detection_year = pd.to_numeric(train_df["detection_year_proxy"], errors="coerce")
         future_positive = (
             y_train.eq(1)
@@ -361,7 +475,7 @@ def _prepare_xy(
             train_df = train_df.loc[~drop_mask].copy()
             y_train = y_train.loc[train_df.index]
     elif label_mode != "naive":
-        raise ValueError("label_mode must be 'naive' or 'matured'")
+        raise ValueError("label_mode must be 'naive', 'proxy_sensitivity', or 'matured'")
 
     X_train = train_df[list(feature_cols)].apply(pd.to_numeric, errors="coerce")
     X_test = test_df[list(feature_cols)].apply(pd.to_numeric, errors="coerce")
@@ -684,6 +798,12 @@ def fit_missing_profile_model(
     panel_with_cluster["opaque_cluster"] = (
         panel_with_cluster["missing_profile_cluster"].eq(opaque_cluster).astype(int)
     )
+    density = pd.to_numeric(panel_with_cluster["missing_profile_rate"], errors="coerce")
+    density_std = float(density.std(ddof=0))
+    if density_std > 0:
+        panel_with_cluster["missingness_density_score"] = (density - float(density.mean())) / density_std
+    else:
+        panel_with_cluster["missingness_density_score"] = 0.0
 
     model_meta = {
         "best_k": best_k,
@@ -708,14 +828,19 @@ def fit_dml_adjustment(
         for col in feature_cols
         if not col.startswith("missing_")
         and not col.startswith("raw_missing_")
-        and col not in {"missing_profile_width", "missing_profile_rate", treatment_col}
+        and col not in {
+            "missing_profile_width",
+            "missing_profile_rate",
+            "missingness_density_score",
+            treatment_col,
+        }
     ]
     work = panel[controls + [target_col, treatment_col]].copy()
     work = work.dropna(subset=[target_col, treatment_col])
     X = work[controls].apply(pd.to_numeric, errors="coerce")
     X = X.replace([np.inf, -np.inf], np.nan).clip(lower=-1e12, upper=1e12)
     y = work[target_col].astype(int).to_numpy()
-    t = work[treatment_col].astype(int).to_numpy()
+    t = pd.to_numeric(work[treatment_col], errors="coerce").to_numpy(dtype=float)
 
     imputer = SimpleImputer(strategy="median")
     X_imp = imputer.fit_transform(X)
@@ -725,12 +850,18 @@ def fit_dml_adjustment(
     splitter = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(X_imp), start=1):
-        y_model = HistGradientBoostingClassifier(random_state=seed + fold)
-        t_model = HistGradientBoostingClassifier(random_state=seed + 100 + fold)
-        y_model.fit(X_imp[train_idx], y[train_idx])
-        t_model.fit(X_imp[train_idx], t[train_idx])
-        y_hat[test_idx] = y_model.predict_proba(X_imp[test_idx])[:, 1]
-        t_hat[test_idx] = t_model.predict_proba(X_imp[test_idx])[:, 1]
+        if len(np.unique(y[train_idx])) < 2:
+            y_hat[test_idx] = float(np.mean(y[train_idx]))
+        else:
+            y_model = HistGradientBoostingClassifier(random_state=seed + fold)
+            y_model.fit(X_imp[train_idx], y[train_idx])
+            y_hat[test_idx] = y_model.predict_proba(X_imp[test_idx])[:, 1]
+        if np.nanstd(t[train_idx]) == 0:
+            t_hat[test_idx] = float(np.mean(t[train_idx]))
+        else:
+            t_model = HistGradientBoostingRegressor(random_state=seed + 100 + fold)
+            t_model.fit(X_imp[train_idx], t[train_idx])
+            t_hat[test_idx] = t_model.predict(X_imp[test_idx])
 
     y_res = y - y_hat
     t_res = t - t_hat
@@ -743,6 +874,7 @@ def fit_dml_adjustment(
         "n_obs": int(len(work)),
         "treatment": treatment_col,
         "outcome": target_col,
+        "treatment_kind": "continuous",
         "coef": coef,
         "std_err": se,
         "p_value": p_value,
@@ -789,7 +921,7 @@ def render_summary_markdown(
     recommendation: Dict[str, Any],
 ) -> str:
     lines = [
-        "# Paper 1 Summary",
+        "# Benchmark Summary",
         "",
         "## Panel",
         f"- Rows: {timing_summary['rows']:,}",
@@ -797,9 +929,16 @@ def render_summary_markdown(
         f"- Years: {timing_summary['years'][0]}-{timing_summary['years'][1]}",
         f"- Positive rate: {timing_summary['positive_rate']:.4f}",
         f"- Positive rows without timing proxy: {timing_summary['positive_without_proxy']:,}",
+        f"- Timing claim status: `{timing_summary['timing_claim_status']}`",
         "",
         "## Timing Coverage",
         f"- Detection sources: `{_safe_json(timing_summary['detection_source_counts'])}`",
+        "- The proxy-visible benchmark is a timing-sensitivity diagnostic, not a "
+        "paper-grade label-maturation result unless external timing is available.",
+        f"- Same-row positive rows with any `res_an*`: "
+        f"{timing_summary['same_row_positive_with_any_res_an']:,}",
+        f"- Same-row positive rows without any `res_an*`: "
+        f"{timing_summary['same_row_positive_without_any_res_an']:,}",
         "",
         "## Rolling Backtests",
     ]
@@ -824,7 +963,7 @@ def render_summary_markdown(
     lines.extend(["", "## DML-Style Adjustment"])
     if dml_result:
         lines.append(
-            f"- Opaque-cluster effect: coef={dml_result['coef']:.4f}, "
+            f"- {dml_result['treatment']} effect: coef={dml_result['coef']:.4f}, "
             f"SE={dml_result['std_err']:.4f}, p={dml_result['p_value']:.4f}"
         )
     else:
@@ -841,7 +980,7 @@ def render_summary_markdown(
     return "\n".join(lines)
 
 
-def run_paper1(
+def run_benchmark(
     *,
     config_path: Path,
     raw_csv: Path,
@@ -866,13 +1005,17 @@ def run_paper1(
         target_col=target_col,
         leakage_cols=leakage_cols,
         raw_missing_threshold=float(analysis.get("raw_missing_threshold", 0.30)),
-        unknown_positive_strategy=analysis.get("unknown_positive_strategy", "current_year"),
+        unknown_positive_strategy=analysis.get("unknown_positive_strategy", "drop"),
         timing_csv=timing_csv,
         detection_year_col=columns.get("external_detection_year_col", "detection_year"),
         filing_date_col=columns.get("external_filing_date_col"),
     )
-    year_summary, timing_summary = summarize_panel(
-        panel, firm_col=firm_col, year_col=year_col, target_col=target_col
+    year_summary, timing_summary, timing_coverage = summarize_panel(
+        panel,
+        firm_col=firm_col,
+        year_col=year_col,
+        target_col=target_col,
+        leakage_cols=leakage_cols,
     )
     feature_cols = get_feature_columns(
         panel,
@@ -888,11 +1031,11 @@ def run_paper1(
         year_col=year_col,
         target_col=target_col,
         feature_cols=feature_cols,
-        label_modes=analysis.get("label_modes", ["naive", "matured"]),
+        label_modes=analysis.get("label_modes", ["naive", "proxy_sensitivity"]),
         candidate_windows=analysis.get("candidate_train_windows", [None, 5, 7, 10]),
         min_train_years=int(analysis.get("min_train_years", 5)),
         top_k=analysis.get("top_k", [50, 100, 200, 500]),
-        unknown_positive_strategy=analysis.get("unknown_positive_strategy", "current_year"),
+        unknown_positive_strategy=analysis.get("unknown_positive_strategy", "drop"),
         model_cfg=analysis.get("xgb", {}),
         seed=int(analysis.get("seed", SEED_DEFAULT)),
     )
@@ -911,19 +1054,20 @@ def run_paper1(
     dml_result = fit_dml_adjustment(
         panel_with_cluster,
         target_col=target_col,
-        treatment_col="opaque_cluster",
-        feature_cols=feature_cols + ["opaque_cluster"],
+        treatment_col=analysis.get("dml_treatment_col", "missingness_density_score"),
+        feature_cols=feature_cols + ["missingness_density_score"],
         seed=int(analysis.get("seed", SEED_DEFAULT)),
         n_splits=int(analysis.get("dml_folds", 5)),
     )
     recommendation = build_recommendation(
         window_summary,
-        focus_label_mode=analysis.get("recommendation_label_mode", "matured"),
+        focus_label_mode=analysis.get("recommendation_label_mode", "proxy_sensitivity"),
     )
 
     panel_path = out_dir / "master_panel.csv.gz"
     panel_with_cluster.to_csv(panel_path, index=False, compression="gzip")
     year_summary.to_csv(out_dir / "year_summary.csv", index=False)
+    timing_coverage.to_csv(out_dir / "timing_coverage.csv", index=False)
     rolling.metrics.to_csv(out_dir / "rolling_metrics.csv", index=False)
     rolling.feature_importance.to_csv(out_dir / "feature_family_importance.csv", index=False)
     rolling.predictions.to_csv(
@@ -943,9 +1087,9 @@ def run_paper1(
         dml_result=dml_result,
         recommendation=recommendation,
     )
-    (out_dir / "paper1_summary.md").write_text(summary_md, encoding="utf-8")
+    (out_dir / "benchmark_summary.md").write_text(summary_md, encoding="utf-8")
 
-    print("=== PAPER 1 ===")
+    print("=== BENCHMARK ===")
     print(f"Master panel: {panel_path}")
     print(f"Rolling metrics rows: {len(rolling.metrics):,}")
     print(f"Best retraining window: {recommendation.get('recommended_window', 'n/a')}")
@@ -953,6 +1097,7 @@ def run_paper1(
 
     return {
         "timing_summary": timing_summary,
+        "timing_coverage_csv": out_dir / "timing_coverage.csv",
         "recommendation": recommendation,
         "dml_result": dml_result,
         "cluster_meta": cluster_meta,

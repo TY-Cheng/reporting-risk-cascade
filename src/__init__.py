@@ -24,17 +24,22 @@ PAPER_DIR = Path(
 PAPER_DIR = PAPER_DIR.resolve()
 DOC_DIR = PAPER_DIR
 DIR_MANUSCRIPT = Path(
-    os.getenv("DIR_MANUSCRIPT") or PROJECT_ROOT.parent / f"{PROJECT_ROOT.name}_manuscript"
+    os.getenv("DIR_MANUSCRIPT") or PROJECT_ROOT.parent / f"{PROJECT_ROOT.name}-manuscript"
 ).expanduser()
 DIR_MANUSCRIPT = DIR_MANUSCRIPT.resolve()
 ARTIFACTS_DIR = (
     Path(os.getenv("ARTIFACTS_DIR") or PROJECT_ROOT / "artifacts").expanduser().resolve()
 )
-PUBLIC_DATA_DIR = Path(os.getenv("PUBLIC_DATA_DIR") or DATA_DIR / "public").expanduser().resolve()
-SEC_DATA_DIR = Path(os.getenv("SEC_DATA_DIR") or PUBLIC_DATA_DIR / "sec").expanduser().resolve()
-PCAOB_DATA_DIR = (
-    Path(os.getenv("PCAOB_DATA_DIR") or PUBLIC_DATA_DIR / "pcaob").expanduser().resolve()
+PUBLIC_LAKE_DIR = (
+    Path(os.getenv("PUBLIC_LAKE_DIR") or DATA_DIR / "public_lake").expanduser().resolve()
 )
+LAKE_BRONZE_DIR = (
+    Path(os.getenv("LAKE_BRONZE_DIR") or PUBLIC_LAKE_DIR / "bronze").expanduser().resolve()
+)
+LAKE_SILVER_DIR = (
+    Path(os.getenv("LAKE_SILVER_DIR") or PUBLIC_LAKE_DIR / "silver").expanduser().resolve()
+)
+LAKE_GOLD_DIR = Path(os.getenv("LAKE_GOLD_DIR") or PUBLIC_LAKE_DIR / "gold").expanduser().resolve()
 DEFAULT_CONFIG_PATH = (
     Path(os.getenv("DEFAULT_CONFIG_PATH") or PROJECT_ROOT / "config" / "data_prep.yaml")
     .expanduser()
@@ -61,9 +66,10 @@ if __name__ == "__main__":
     print("PAPER_DIR:", PAPER_DIR)
     print("DIR_MANUSCRIPT:", DIR_MANUSCRIPT)
     print("ARTIFACTS_DIR:", ARTIFACTS_DIR)
-    print("PUBLIC_DATA_DIR:", PUBLIC_DATA_DIR)
-    print("SEC_DATA_DIR:", SEC_DATA_DIR)
-    print("PCAOB_DATA_DIR:", PCAOB_DATA_DIR)
+    print("PUBLIC_LAKE_DIR:", PUBLIC_LAKE_DIR)
+    print("LAKE_BRONZE_DIR:", LAKE_BRONZE_DIR)
+    print("LAKE_SILVER_DIR:", LAKE_SILVER_DIR)
+    print("LAKE_GOLD_DIR:", LAKE_GOLD_DIR)
     print("SAMPLE_DATASET_PATH:", SAMPLE_DATASET_PATH)
     print("DEFAULT_CONFIG_PATH:", DEFAULT_CONFIG_PATH)
     print("SEED_DEFAULT:", SEED_DEFAULT)

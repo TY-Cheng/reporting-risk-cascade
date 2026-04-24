@@ -1,120 +1,152 @@
 <!-- --8<-- [start:docs-home] -->
-# cls_miss
+# Reporting Risk Cascade
 
-Code workspace for firm-year accounting misstatement classification experiments.
-The sibling directory `../cls_miss_manuscript/` is reserved for paper writing.
+`reporting-risk-cascade` is the code workspace for a corporate reporting-risk project.
+The goal is not to run another model horse race on a static `restatement = 1`
+label. The goal is to rebuild the measurement problem around label timing,
+concept drift, strategic missingness, and the public scrutiny-correction-
+enforcement cascade.
 
-## Local inputs
+**Current main claim:** with public data alone, we can model the publicly observable
+review-comment-amendment-enforcement cascade and estimate a **pre-disclosure reporting-risk state**.
+The old restatement CSV remains a benchmark and validation layer, not the sole research object.
 
-- `data/raw_dataset_misstatement.csv`: full firm-year panel with 82,908 rows, 9,156
-  firms, 2001-2019 coverage, and 86 columns including the binary target
-  `misstatement firm-year`.
-- `doc/s11142-020-09563-8.pdf`: source paper describing the prediction problem,
-  feature families, and benchmark framing.
-- There is no checked-in sample CSV. `just smoke-sample` materializes a deterministic
-  500-firm sample under `artifacts/sample_dataset_misstatement.csv` at runtime.
+## What This Repo Does
+
+| Path | Purpose | Main files |
+| --- | --- | --- |
+| Benchmark | Rebuild the old firm-year restatement benchmark with label maturation, drift diagnostics, missingness regimes, and DML-style adjustment. | `src/benchmark.py`, `scripts/run_benchmark.py`, `config/benchmark.yaml` |
+| Public cascade | Build and model a filing-native SEC/PCAOB public cascade over comment letters, amendments, 8-K Item 4.02, and AAER proxy events. | `src/public_lake.py`, `src/public_cascade.py`, `scripts/run_public_cascade.py`, `config/public_cascade.yaml` |
+| Study workflow | Run the benchmark and public cascade together, then report what is still needed for overlap validation. | `scripts/run_study.py`, `config/study.yaml` |
+
+The detailed paper design is in `docs/paper_plan.md`. Deferred multimodal, graph,
+and market-attention extensions are in `docs/future_work.md`.
+
+## Research Spine
+
+The current paper combines two evidence layers.
+
+**Benchmark layer:** `data/raw_dataset_misstatement.csv` is a `gvkey x data_year`
+panel covering 2001-2019. It is used to show why traditional pooled restatement
+prediction is fragile: labels are delayed, positive rates drift, and missingness is
+economically meaningful.
+
+**Public cascade layer:** public SEC and PCAOB data are organized around filing-native
+keys: `issuer_cik`, `accession/adsh`, `filing_date`, `report_date`,
+`fiscal_period_end`, and `origin_date`. The cascade separates comment-letter
+scrutiny, amendments, 8-K Item 4.02 non-reliance events, and AAER proxy events.
+
+The bridge still needed for final integration is a provenance-controlled
+`gvkey-CIK-year` crosswalk.
 
 ## Layout
 
-- `src/`: reusable project code.
-- `scripts/`: thin wrappers for repeatable local runs.
-- `config/`: YAML configuration for data prep and evaluation settings.
-- `artifacts/`: generated sample datasets and run outputs.
-- `data/public/`: fetched SEC and PCAOB public inputs (ignored by git).
-- `docs/`: reserved for future MkDocs source pages; intentionally light for now.
-- `doc/`: local reference material such as the source paper PDF.
-
-## Current runtime state
-
-- `src/data_prep.py` loads the CSV, infers schema, performs an out-of-time test
-  split, builds CV folds, and writes baseline artifacts.
-- `src/paper1.py` now implements the first paper spine:
-  matured-label fallback timing, rolling backtests, drift diagnostics, missing-profile
-  clustering, DML-style adjustment, and retraining recommendations.
-- `src/public_data.py` and `src/paper2.py` now implement the public-data and
-  lightweight multimodal spine for the second paper:
-  SEC reference fetches, filing indexes, filing downloads, section parsing,
-  cheap text features, compact CPU-friendly embeddings, and PCAOB Form AP
-  monitoring aggregates.
-- `scripts/generate_sample_dataset.py` creates a deterministic firm-level sample
-  panel for quick smoke runs.
+```text
+config/       YAML settings for benchmark, public cascade, public data, and study runs
+data/         local raw inputs and ignored public-lake data
+docs/         MkDocs source pages
+scripts/      thin command-line wrappers and operational scripts
+src/          reusable implementation modules
+tests/        targeted tests for docs, public lake, and runtime surface
+artifacts/    generated outputs, sample panels, logs, and run reports
+doc/          local reference PDFs
+```
 
 ## Setup
 
-1. Copy `.env.example` to `.env` and fill in repo-local absolute paths.
-2. Set `DIR_MANUSCRIPT` to the sibling manuscript workspace.
-3. Run `just setup` to lock and sync the external uv environment declared in
-   `.env`.
+Use `just` as the front door. It loads `.env`, uses the configured external
+`UV_PROJECT_ENVIRONMENT`, and runs `ruff` after mutating or analysis recipes.
 
-## Main workflow
+```bash
+cp .env.example .env
+just setup
+just status
+```
+
+The required local raw input is:
+
+```text
+data/raw_dataset_misstatement.csv
+```
+
+## 5-Minute Workflow
 
 ```bash
 just setup
 just status
-just run dataset=sample
-just analysis stage=paper1 dataset=raw
-just fetch source=references
-just check
-just docs build
+just run sample
+just analysis benchmark raw
+just fetch sec-bulk
+just fetch form-ap
+just fetch build-lake
+just analysis cascade
+just analysis bridge raw
+just analysis study raw
+just docs
 ```
 
-The canonical local workflow is `just` rather than ad hoc `uv` calls, because
-`justfile` loads `.env` and therefore uses the intended `UV_PROJECT_ENVIRONMENT`.
-
-## Just entrypoints
+Common variants:
 
 ```bash
-just setup
-just status
-just run dataset=sample
-just run dataset=raw
-just analysis stage=paper1 dataset=raw
-just fetch source=references
-just check dataset=raw
-just format
-just docs build
-just docs serve
+just analysis benchmark raw artifacts/benchmark
+just analysis bridge raw artifacts/bridge_probe
+just analysis study raw artifacts/study
+just docs
 ```
 
-## Paper 1 workflow
+## Public Lake Run
+
+For the full public lake, use the operational script so logs and monitoring are
+captured.
 
 ```bash
-just analysis stage=paper1 dataset=raw
-just analysis stage=paper1 dataset=raw out_dir=artifacts/paper1_with_timing extra="--timing-csv path/to/restatement_timing.csv"
+bash scripts/run_public_lake_full.sh --dry-run
+bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200
+nohup bash scripts/run_public_lake_full.sh --mode full > artifacts/logs/public_lake_full/nohup.log 2>&1 &
 ```
 
-Outputs include:
+The first full lake includes SEC bulk submissions, FSDS, Notes, Form AP, PCAOB
+inspections, and AAER proxy events. It intentionally excludes raw filing HTML, 13F,
+insider transactions, EDGAR logs, and market-structure data until the gold panel
+coverage is validated.
 
-- `artifacts/paper1/master_panel.csv.gz`
-- `artifacts/paper1/rolling_metrics.csv`
-- `artifacts/paper1/feature_family_importance.csv`
-- `artifacts/paper1/missing_profile_clusters.csv`
-- `artifacts/paper1/dml_result.json`
-- `artifacts/paper1/recommendation.json`
-- `artifacts/paper1/paper1_summary.md`
+## Main Outputs
 
-## Paper 2 public-data workflow
+Benchmark:
 
-```bash
-just fetch source=references
-just fetch source=sec-index extra="--master-panel artifacts/paper1/master_panel.csv.gz --gvkey-cik-csv path/to/gvkey_cik.csv"
-just fetch source=sec-download extra="--out-csv data/public/sec/sec_filing_index.csv --limit 100"
-just analysis stage=paper2 dataset=raw extra="--master-panel artifacts/paper1/master_panel.csv.gz"
-```
+- `artifacts/benchmark/rolling_metrics.csv`
+- `artifacts/benchmark/feature_family_importance.csv`
+- `artifacts/benchmark/missing_profile_clusters.csv`
+- `artifacts/benchmark/benchmark_summary.md`
 
-Notes:
+Public cascade:
 
-- `gvkey -> cik` is still the main external link dependency for SEC filing joins.
-- The public SEC spine is exact on `reportDate` when available and falls back to
-  filing-year heuristics only when the submissions JSON omits the report date.
-- Paper 2 currently stops at data/feature readiness and lightweight CPU embeddings;
-  detector-specific labels and long-context GPU embeddings remain follow-on work.
+- `data/public_lake/gold/issuer_origin_panel.csv.gz`
+- `data/public_lake/gold/filing_origin_panel.csv.gz`
+- `artifacts/public_cascade/public_cascade_metrics.csv`
+- `artifacts/public_cascade/public_cascade_summary.md`
 
-## Near-term next steps still pending
+Bridge probe:
 
-- Merge Audit Analytics / WRDS timing data to replace the fallback `res_an*`
-  maturation proxy in the Paper 1 production run.
-- Add detector and severity labels once notifier/comment-letter/enforcement data are available.
-- Upgrade text features from TF-IDF + SVD to finance-specific long-context embeddings
-  after GPU access is in place.
+- `artifacts/bridge_probe/bridge_probe_summary.json`
+- `artifacts/bridge_probe/coverage_report.csv`
+- `artifacts/bridge_probe/multiplicity_report.csv`
+- `artifacts/bridge_probe/unmatched_raw_characteristics.csv`
+
+Study:
+
+- `artifacts/study/benchmark/`
+- `artifacts/study/public_cascade/`
+- `artifacts/study/bridge_probe/`
+- `artifacts/study/study_run_manifest.json`
+- `artifacts/study/study_summary.md`
+
+## Current Priorities
+
+1. Audit and enrich the existing public lake with core `xbrl_ratio_*` features.
+2. Run benchmark timing-coverage outputs and public cascade readiness summaries.
+3. Run the public-only bridge probe and report `raw_identifier_blocker`, coverage, and
+   multiplicity instead of guessing crosswalks.
+4. Use XBRL baseline plus bridge-probe evidence to decide whether the project remains one
+   integrated paper or splits into benchmark critique and public cascade papers.
 <!-- --8<-- [end:docs-home] -->

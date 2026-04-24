@@ -1,0 +1,22 @@
+sample:
+  start_year: 2011
+  end_year: 2023
+  domestic_only: true
+
+analysis:
+  candidate_train_windows: [null, 5, 7, 10]
+  min_train_years: 5
+  feature_sets: ["metadata", "xbrl", "auditor", "oversight", "all"]
+
+model:
+  seed: 42
+  xgb:
+    n_estimators: 250
+    max_depth: 4
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_weight: 5.0
+    reg_lambda: 1.0
+    n_jobs: -1
+    tree_method: "hist"

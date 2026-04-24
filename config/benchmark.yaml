@@ -8,15 +8,16 @@ columns:
 
 analysis:
   raw_missing_threshold: 0.30
-  unknown_positive_strategy: "current_year"
-  label_modes: ["naive", "matured"]
+  unknown_positive_strategy: "drop"
+  label_modes: ["naive", "proxy_sensitivity"]
   candidate_train_windows: [null, 5, 7, 10]
   min_train_years: 5
   top_k: [50, 100, 200, 500]
   break_years: [2005, 2010, 2017]
   mixture_k_values: [3, 4, 5]
+  dml_treatment_col: "missingness_density_score"
   dml_folds: 5
-  recommendation_label_mode: "matured"
+  recommendation_label_mode: "proxy_sensitivity"
   seed: 42
   xgb:
     n_estimators: 250

@@ -1,17 +1,55 @@
-sec:
-  user_agent: "Tuoyuan Cheng tuoyuan.cheng@nus.edu.sg"
-  forms: ["10-K", "10-K/A", "8-K"]
-  start_year: 2001
-  end_year: 2019
-  ticker_url: "https://www.sec.gov/files/company_tickers.json"
-  submissions_template: "https://data.sec.gov/submissions/CIK{cik}.json"
+lake:
+  as_of_date: "2026-04-23"
+  sample_start_year: 2011
+  sample_end_year: 2023
+  domestic_only: true
 
-pcaob:
-  form_ap_zip_url: "https://pcaobus.org/assets/PCAOBFiles/FirmFilings.zip"
-  form_ap_dictionary_url: "https://assets.pcaobus.org/pcaob-dev/docs/default-source/rusdocuments/auditorsearch-form-ap-data-references.pdf"
+sources:
+  sec-bulk:
+    direct_urls:
+      - "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip"
+      - "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip"
+  fsds:
+    page_url: "https://www.sec.gov/data-research/sec-markets-data/financial-statement-data-sets"
+    note: "Historical SEC reprocessing noted in December 2024."
+  notes:
+    page_url: "https://www.sec.gov/data-research/sec-markets-data/financial-statement-notes-data-sets"
+    note: "Quarterly before 2020-11, monthly after 2020-11, with historical corrections."
+  comment-letters:
+    page_url: "https://www.sec.gov/answers/how-to-search-for-edgar-correspondence"
+    note: "Use first public EDGAR date only; public threads correspond to UPLOAD/CORRESP."
+  aaer:
+    page_url: "https://www.sec.gov/enforcement/accounting-auditing-enforcement-releases"
+    note: "Stage 4 severity proxy only, not a complete enforcement universe."
+  insider:
+    page_url: "https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets"
+  13f:
+    page_url: "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"
+  edgar-logs:
+    page_url: "https://www.sec.gov/data-research/sec-markets-data/edgar-log-file-data-sets"
+  market-structure:
+    page_url: "https://www.sec.gov/data-research/sec-markets-data/market-structure-data-security-exchange"
+  form-ap:
+    direct_urls:
+      - "https://pcaobus.org/assets/PCAOBFiles/FirmFilings.zip"
+      - "https://assets.pcaobus.org/pcaob-dev/docs/default-source/rusdocuments/auditorsearch-form-ap-data-references.pdf"
+  pcaob-inspections:
+    page_url: "https://pcaobus.org/oversight/inspections/firm-inspection-reports"
 
-notes:
-  gvkey_cik_link_required_for_sec_index: true
-  gvkey_cik_link_fallback_candidates:
-    - "WRDS SEC Analytics Suite GVKEY-CIK link table"
-    - "Research package / reproducibility archive with dated GVKEY-CIK links"
+availability:
+  xbrl_main_sample: "2011-01-01"
+  notes_monthly: "2020-11-01"
+  form_ap: "2017-01-31"
+  insider: "2006-01-01"
+  13f: "2013-07-01"
+  edgar_logs_gap_start: "2017-07-01"
+  edgar_logs_gap_end: "2020-05-18"
+  market_structure: "2012-01-01"
+  pcaob_inspections_annual: "2018-01-01"
+  pcaob_inspections_triennial: "2019-01-01"
+
+identity_system:
+  issuer_key: "issuer_cik"
+  filing_key: "accession_or_adsh"
+  security_keys: ["ticker", "cusip"]
+  auditor_keys: ["pcaob_firm_id", "engagement_partner_id"]

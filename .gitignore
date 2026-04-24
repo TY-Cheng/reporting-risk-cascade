@@ -1,4 +1,7 @@
 # Project-local raw inputs and generated state
+.DS_Store
+/reporting-risk-cascade-manuscript/
+**/reporting-risk-cascade-manuscript/
 /doc/
 /data/
 /artifacts/

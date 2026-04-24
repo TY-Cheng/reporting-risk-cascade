@@ -1,0 +1,22 @@
+paper:
+  title: "From Restatements to Public Scrutiny"
+  subtitle: "Label Maturation, Strategic Silence, and the Public Reporting-Risk Cascade"
+
+inputs:
+  raw_csv: "data/raw_dataset_misstatement.csv"
+  issuer_origin_panel: "data/public_lake/gold/issuer_origin_panel.csv.gz"
+  gvkey_cik_crosswalk: "data/external/gvkey_cik_year.csv"
+
+outputs:
+  benchmark_subdir: "benchmark"
+  public_cascade_subdir: "public_cascade"
+  bridge_probe_subdir: "bridge_probe"
+
+bridge:
+  overlap_start_year: 2011
+  overlap_end_year: 2019
+  require_crosswalk: false
+
+notes:
+  estimand: "pre-disclosure public reporting-risk state"
+  active_scope: "benchmark + public cascade study workflow only"
