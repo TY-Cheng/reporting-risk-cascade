@@ -7,7 +7,9 @@ written in a credible accounting-journal voice.
 ## Prompt
 
 ```text
-You are auditing a manuscript for a corporate misstatement prediction paper.
+You are auditing a manuscript for the reporting-risk-cascade paper: a
+public-data-first workflow that estimates a pre-disclosure reporting-risk state,
+not a generic corporate misstatement prediction task.
 
 Role:
 You are a senior accounting researcher, empirical-finance referee, and academic

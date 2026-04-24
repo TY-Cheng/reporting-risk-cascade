@@ -232,6 +232,8 @@ def test_development_audit_prompt_targets_code_against_paper_plan() -> None:
     prompt = _read("docs/development_audit_prompt.md")
     required_phrases = [
         "Development Audit Prompt",
+        "reporting-risk-cascade paper",
+        "pre-disclosure reporting-risk state",
         "docs/paper_plan.md as the binding research and implementation contract",
         "src/benchmark.py",
         "src/public_lake.py",
@@ -245,6 +247,7 @@ def test_development_audit_prompt_targets_code_against_paper_plan() -> None:
     ]
     for phrase in required_phrases:
         assert phrase in prompt
+    assert "corporate misstatement prediction paper" not in prompt
 
 
 def test_development_audit_prompt_is_public_data_first() -> None:
@@ -271,6 +274,7 @@ def test_development_audit_prompt_is_public_data_first() -> None:
 def test_manuscript_audit_prompt_targets_manuscript_quality_and_terms() -> None:
     prompt = _read("docs/manuscript_audit_prompt.md")
     required_phrases = [
+        "reporting-risk-cascade paper",
         "reporting-risk-cascade-manuscript",
         "pre-disclosure reporting-risk state",
         "public comment-letter scrutiny",
@@ -284,6 +288,7 @@ def test_manuscript_audit_prompt_targets_manuscript_quality_and_terms() -> None:
     ]
     for phrase in required_phrases:
         assert phrase in prompt
+    assert "corporate misstatement prediction paper" not in prompt
 
 
 def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -> None:
