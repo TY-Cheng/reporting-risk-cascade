@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import csv
 import random
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import SEED_DEFAULT
+from .table_io import read_table, write_table
 
 
 @dataclass(frozen=True)
@@ -27,38 +27,23 @@ def materialize_sample_dataset(
     if n_firms <= 0:
         raise ValueError("n_firms must be positive")
 
-    with raw_csv.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        fieldnames = reader.fieldnames
-        if fieldnames is None or firm_col not in fieldnames:
-            raise ValueError(f"Expected '{firm_col}' in {raw_csv}")
+    raw = read_table(raw_csv, low_memory=False)
+    if firm_col not in raw.columns:
+        raise ValueError(f"Expected '{firm_col}' in {raw_csv}")
 
-        unique_firms = sorted({row[firm_col] for row in reader})
+    unique_firms = sorted(raw[firm_col].dropna().astype(str).unique().tolist())
 
     if n_firms > len(unique_firms):
         raise ValueError(f"Requested {n_firms} firms, but only found {len(unique_firms)}")
 
     selected_firms = set(random.Random(seed).sample(unique_firms, n_firms))
 
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-    rows_written = 0
-
-    with (
-        raw_csv.open(newline="", encoding="utf-8") as src_handle,
-        out_csv.open("w", newline="", encoding="utf-8") as out_handle,
-    ):
-        reader = csv.DictReader(src_handle)
-        writer = csv.DictWriter(out_handle, fieldnames=reader.fieldnames)
-        writer.writeheader()
-
-        for row in reader:
-            if row[firm_col] in selected_firms:
-                writer.writerow(row)
-                rows_written += 1
+    sample = raw.loc[raw[firm_col].astype(str).isin(selected_firms)].copy()
+    write_table(sample, out_csv)
 
     return SampleDatasetSummary(
         out_csv=out_csv,
         n_firms=n_firms,
-        rows_written=rows_written,
+        rows_written=int(len(sample)),
         seed=seed,
     )

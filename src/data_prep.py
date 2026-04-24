@@ -2,7 +2,7 @@
 Config-driven data loading, preprocessing, splitting, and CV utilities for firm-year misstatement classification.
 
 Key features
-- Reads YAML config (see sample at bottom comment) and a raw CSV.
+- Reads YAML config (see sample at bottom comment) and a raw table.
 - Enforces MultiIndex (firm, year) and keeps identifiers out of features.
 - Time-aware **out-of-time test** split (last N years / fraction / cutoff).
 - Multiple CV options in training years, selectable via YAML:
@@ -42,8 +42,12 @@ except Exception as e:
 
 try:
     from . import SEED_DEFAULT
+    from .table_io import read_table
 except Exception:
     SEED_DEFAULT = 2025
+
+    def read_table(path: Path, **kwargs):
+        return pd.read_csv(path, low_memory=kwargs.get("low_memory", False))
 
 
 # =============================================================================
@@ -72,7 +76,7 @@ class RareCategoryGrouper(BaseEstimator, TransformerMixin):
     ):
         self.min_count = int(min_count)
         self.rare_token = rare_token
-        self.cols = list(cols) if cols is not None else None
+        self.cols = cols
         self.keep_: Dict[str, set] = {}
 
     def fit(self, X: pd.DataFrame, y=None):  # type: ignore
@@ -177,7 +181,7 @@ class YearBlockedCV:
 def load_dataset(
     csv_path: Path, target: str, firm_col: Optional[str], year_col: Optional[str]
 ) -> pd.DataFrame:
-    df = pd.read_csv(csv_path)
+    df = read_table(csv_path, low_memory=False)
     if firm_col is None:
         firm_col = _autodetect(df, ["gvkey", "Firm", "firm", "tic", "permno"]) or "gvkey"
     if year_col is None:
@@ -589,11 +593,15 @@ def main(config_path: Path, raw_csv: Path, out_dir: Path):
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Misstatement data prep & CV runner")
     p.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    p.add_argument("--raw_csv", type=str, required=True, help="Path to raw CSV file")
+    p.add_argument("--raw_data", type=str, required=False, help="Path to raw table file")
+    p.add_argument("--raw_csv", type=str, required=False, help="Deprecated alias for --raw_data")
     p.add_argument("--out_dir", type=str, required=True, help="Directory to write artifacts")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(config_path=Path(args.config), raw_csv=Path(args.raw_csv), out_dir=Path(args.out_dir))
+    raw_data = args.raw_data or args.raw_csv
+    if raw_data is None:
+        raise SystemExit("--raw_data is required")
+    main(config_path=Path(args.config), raw_csv=Path(raw_data), out_dir=Path(args.out_dir))

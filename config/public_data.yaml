@@ -3,6 +3,18 @@ lake:
   sample_start_year: 2011
   sample_end_year: 2023
   domestic_only: true
+  engine: "duckdb"
+  fetch_workers: 2
+  duckdb_threads: 4
+  duckdb_memory_limit: "10GB"
+  # Empty means build-lake resolves this to <silver_dir>/._duckdb_tmp,
+  # keeping DuckDB spill files beside the public lake instead of OS temp.
+  duckdb_temp_directory: ""
+  duckdb_max_temp_directory_size: "50GB"
+  storage_format: "parquet"
+  notes_mode: "summary"
+  fsds_batch_size: 4
+  notes_batch_size: 2
 
 sources:
   sec-bulk:

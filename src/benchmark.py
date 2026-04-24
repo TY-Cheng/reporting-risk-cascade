@@ -12,14 +12,18 @@ This module implements the near-term empirical spine:
 
 from __future__ import annotations
 
+import gc
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     average_precision_score,
@@ -30,10 +34,10 @@ from sklearn.metrics import (
 )
 from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import KFold
-from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from xgboost import XGBClassifier
 
 from . import SEED_DEFAULT
+from .table_io import read_table, write_table
 
 try:
     import yaml
@@ -90,6 +94,12 @@ class RollingResult:
     metrics: pd.DataFrame
     feature_importance: pd.DataFrame
     predictions: pd.DataFrame
+
+
+def stable_task_seed(base_seed: int, *parts: object) -> int:
+    key = "|".join([str(int(base_seed)), *(str(part) for part in parts)])
+    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=4).digest()
+    return 1 + int.from_bytes(digest, byteorder="big") % (2**31 - 2)
 
 
 def load_config(config_path: Path) -> Dict[str, Any]:
@@ -340,7 +350,7 @@ def load_master_panel(
     detection_year_col: str,
     filing_date_col: Optional[str],
 ) -> pd.DataFrame:
-    df = pd.read_csv(raw_csv)
+    df = read_table(raw_csv, low_memory=False)
     df[firm_col] = df[firm_col].astype(str)
     df[year_col] = pd.to_numeric(df[year_col], errors="coerce").astype("Int64")
     df[target_col] = pd.to_numeric(df[target_col], errors="coerce").fillna(0).astype(int)
@@ -578,6 +588,139 @@ def compute_metrics(
     return metrics
 
 
+def _run_rolling_task(
+    *,
+    panel: pd.DataFrame,
+    task_order: int,
+    train_window: Optional[int],
+    test_year: int,
+    label_mode: str,
+    firm_col: str,
+    year_col: str,
+    target_col: str,
+    feature_cols: Sequence[str],
+    min_train_years: int,
+    top_k: Sequence[int],
+    unknown_positive_strategy: str,
+    model_cfg: Dict[str, Any],
+    seed: int,
+    seed_policy: str,
+) -> Optional[Dict[str, object]]:
+    window_label = "expanding" if train_window is None else f"rolling_{int(train_window)}y"
+    year_values = panel[year_col].astype(int)
+    if train_window is None:
+        train_mask = year_values < int(test_year)
+    else:
+        start_year = int(test_year) - int(train_window)
+        train_mask = year_values.between(start_year, int(test_year) - 1)
+    test_mask = year_values.eq(int(test_year))
+
+    train_df = panel.loc[train_mask].copy()
+    test_df = panel.loc[test_mask].copy()
+    if train_df[year_col].nunique() < min_train_years or test_df.empty:
+        return None
+
+    X_train, y_train, X_test, y_test = _prepare_xy(
+        train_df,
+        test_df,
+        feature_cols=feature_cols,
+        target_col=target_col,
+        train_origin_year=int(test_year) - 1,
+        label_mode=label_mode,
+        unknown_positive_strategy=unknown_positive_strategy,
+    )
+    if len(np.unique(y_train)) < 2 or X_train.empty:
+        return None
+
+    if seed_policy == "task_isolated":
+        task_seed = stable_task_seed(seed, "benchmark", window_label, test_year, label_mode)
+    elif seed_policy == "legacy":
+        task_seed = int(seed) + int(test_year)
+    else:
+        raise ValueError("seed_policy must be 'task_isolated' or 'legacy'")
+
+    model = fit_xgb_classifier(X_train, y_train, seed=task_seed, model_cfg=model_cfg)
+    y_prob = model.predict_proba(X_test)[:, 1]
+
+    metric_row = {
+        "_task_order": int(task_order),
+        "window": window_label,
+        "label_mode": label_mode,
+        "test_year": int(test_year),
+        "train_start_year": int(train_df[year_col].min()),
+        "train_end_year": int(train_df[year_col].max()),
+        "n_train": int(len(X_train)),
+        "n_test": int(len(X_test)),
+        "train_positive_rate": float(np.mean(y_train)),
+    }
+    metric_row.update(compute_metrics(y_test, y_prob, top_k=top_k))
+
+    importance_rows: List[Dict[str, Any]] = []
+    importance = model.feature_importances_
+    imp_total = float(np.sum(importance)) or 1.0
+    for col, imp in zip(X_train.columns, importance, strict=False):
+        importance_rows.append(
+            {
+                "_task_order": int(task_order),
+                "window": window_label,
+                "label_mode": label_mode,
+                "test_year": int(test_year),
+                "feature": col,
+                "importance": float(imp),
+                "importance_share": float(imp / imp_total),
+                "family": infer_feature_family(col),
+            }
+        )
+
+    pred_df = test_df[[firm_col, year_col, target_col, "detection_year_proxy"]].copy()
+    pred_df["_task_order"] = int(task_order)
+    pred_df["_row_order"] = pred_df.index.to_numpy()
+    pred_df["window"] = window_label
+    pred_df["label_mode"] = label_mode
+    pred_df["pred_prob"] = y_prob
+
+    del model, X_train, X_test, y_train, y_test, y_prob, train_df, test_df
+    gc.collect()
+    return {"metric": metric_row, "importance": importance_rows, "predictions": pred_df}
+
+
+def _run_rolling_task_batch(
+    *,
+    panel: pd.DataFrame,
+    tasks: Sequence[Tuple[int, Optional[int], int, str]],
+    firm_col: str,
+    year_col: str,
+    target_col: str,
+    feature_cols: Sequence[str],
+    min_train_years: int,
+    top_k: Sequence[int],
+    unknown_positive_strategy: str,
+    model_cfg: Dict[str, Any],
+    seed: int,
+    seed_policy: str,
+) -> List[Optional[Dict[str, object]]]:
+    return [
+        _run_rolling_task(
+            panel=panel,
+            task_order=order,
+            train_window=train_window,
+            test_year=test_year,
+            label_mode=label_mode,
+            firm_col=firm_col,
+            year_col=year_col,
+            target_col=target_col,
+            feature_cols=feature_cols,
+            min_train_years=min_train_years,
+            top_k=top_k,
+            unknown_positive_strategy=unknown_positive_strategy,
+            model_cfg=model_cfg,
+            seed=seed,
+            seed_policy=seed_policy,
+        )
+        for order, train_window, test_year, label_mode in tasks
+    ]
+
+
 def run_rolling_backtest(
     panel: pd.DataFrame,
     *,
@@ -592,97 +735,107 @@ def run_rolling_backtest(
     unknown_positive_strategy: str,
     model_cfg: Dict[str, Any],
     seed: int,
+    parallel_jobs: int = 1,
+    seed_policy: str = "legacy",
 ) -> RollingResult:
     metrics_rows: List[Dict[str, Any]] = []
     importance_rows: List[Dict[str, Any]] = []
-    prediction_rows: List[Dict[str, Any]] = []
+    prediction_rows: List[pd.DataFrame] = []
 
     years = sorted(pd.to_numeric(panel[year_col], errors="coerce").dropna().astype(int).unique())
     if len(years) <= min_train_years:
         raise ValueError("Not enough years to run rolling backtests.")
 
+    if seed_policy not in {"task_isolated", "legacy"}:
+        raise ValueError("seed_policy must be 'task_isolated' or 'legacy'")
+
+    tasks: List[Tuple[int, Optional[int], int, str]] = []
+    task_order = 0
     for train_window in candidate_windows:
-        window_label = "expanding" if train_window is None else f"rolling_{int(train_window)}y"
         for test_year in years[min_train_years:]:
-            if train_window is None:
-                train_mask = panel[year_col].astype(int) < test_year
-            else:
-                start_year = test_year - int(train_window)
-                train_mask = panel[year_col].astype(int).between(start_year, test_year - 1)
-            test_mask = panel[year_col].astype(int).eq(test_year)
-
-            train_df = panel.loc[train_mask].copy()
-            test_df = panel.loc[test_mask].copy()
-            if train_df[year_col].nunique() < min_train_years or test_df.empty:
-                continue
-
             for label_mode in label_modes:
-                X_train, y_train, X_test, y_test = _prepare_xy(
-                    train_df,
-                    test_df,
-                    feature_cols=feature_cols,
-                    target_col=target_col,
-                    train_origin_year=test_year - 1,
-                    label_mode=label_mode,
-                    unknown_positive_strategy=unknown_positive_strategy,
-                )
-                if len(np.unique(y_train)) < 2 or X_train.empty:
-                    continue
+                tasks.append((task_order, train_window, int(test_year), str(label_mode)))
+                task_order += 1
 
-                model = fit_xgb_classifier(
-                    X_train, y_train, seed=seed + test_year, model_cfg=model_cfg
-                )
-                y_prob = model.predict_proba(X_test)[:, 1]
+    parallel_jobs = max(1, int(parallel_jobs))
+    task_batches: List[List[Tuple[int, Optional[int], int, str]]] = []
+    for train_window in candidate_windows:
+        for test_year in years[min_train_years:]:
+            task_batches.append(
+                [
+                    task
+                    for task in tasks
+                    if task[1] == train_window and task[2] == int(test_year)
+                ]
+            )
 
-                row = {
-                    "window": window_label,
-                    "label_mode": label_mode,
-                    "test_year": int(test_year),
-                    "train_start_year": int(train_df[year_col].min()),
-                    "train_end_year": int(train_df[year_col].max()),
-                    "n_train": int(len(X_train)),
-                    "n_test": int(len(X_test)),
-                    "train_positive_rate": float(np.mean(y_train)),
-                }
-                row.update(compute_metrics(y_test, y_prob, top_k=top_k))
-                metrics_rows.append(row)
+    if parallel_jobs == 1:
+        batched_results = [
+            _run_rolling_task_batch(
+                panel=panel,
+                tasks=batch,
+                firm_col=firm_col,
+                year_col=year_col,
+                target_col=target_col,
+                feature_cols=feature_cols,
+                min_train_years=min_train_years,
+                top_k=top_k,
+                unknown_positive_strategy=unknown_positive_strategy,
+                model_cfg=model_cfg,
+                seed=seed,
+                seed_policy=seed_policy,
+            )
+            for batch in task_batches
+        ]
+    else:
+        batched_results = Parallel(n_jobs=parallel_jobs, prefer="processes")(
+            delayed(_run_rolling_task_batch)(
+                panel=panel,
+                tasks=batch,
+                firm_col=firm_col,
+                year_col=year_col,
+                target_col=target_col,
+                feature_cols=feature_cols,
+                min_train_years=min_train_years,
+                top_k=top_k,
+                unknown_positive_strategy=unknown_positive_strategy,
+                model_cfg=model_cfg,
+                seed=seed,
+                seed_policy=seed_policy,
+            )
+            for batch in task_batches
+        )
+    results = [result for batch in batched_results for result in batch]
 
-                importance = model.feature_importances_
-                imp_total = float(np.sum(importance)) or 1.0
-                for col, imp in zip(X_train.columns, importance, strict=False):
-                    importance_rows.append(
-                        {
-                            "window": window_label,
-                            "label_mode": label_mode,
-                            "test_year": int(test_year),
-                            "feature": col,
-                            "importance": float(imp),
-                            "importance_share": float(imp / imp_total),
-                            "family": infer_feature_family(col),
-                        }
-                    )
-
-                pred_df = test_df[[firm_col, year_col, target_col, "detection_year_proxy"]].copy()
-                pred_df["window"] = window_label
-                pred_df["label_mode"] = label_mode
-                pred_df["pred_prob"] = y_prob
-                prediction_rows.append(pred_df)
+    for result in results:
+        if result is None:
+            continue
+        metrics_rows.append(result["metric"])
+        importance_rows.extend(result["importance"])
+        prediction_rows.append(result["predictions"])
 
     metrics_df = pd.DataFrame(metrics_rows)
+    if not metrics_df.empty and "_task_order" in metrics_df.columns:
+        metrics_df = metrics_df.sort_values("_task_order").drop(columns=["_task_order"])
     importance_df = pd.DataFrame(importance_rows)
     if importance_df.empty:
         family_importance = importance_df
     else:
         family_importance = (
-            importance_df.groupby(["window", "label_mode", "test_year", "family"], as_index=False)[
-                "importance_share"
-            ]
+            importance_df.groupby(
+                ["_task_order", "window", "label_mode", "test_year", "family"], as_index=False
+            )["importance_share"]
             .sum()
-            .sort_values(["window", "label_mode", "test_year", "family"])
+            .sort_values(["_task_order", "family"])
+            .drop(columns=["_task_order"])
         )
     predictions_df = (
         pd.concat(prediction_rows, ignore_index=True) if prediction_rows else pd.DataFrame()
     )
+    if not predictions_df.empty:
+        predictions_df = predictions_df.sort_values(["_task_order", "_row_order"]).drop(
+            columns=["_task_order", "_row_order"]
+        )
     return RollingResult(
         metrics=metrics_df,
         feature_importance=family_importance,
@@ -801,7 +954,9 @@ def fit_missing_profile_model(
     density = pd.to_numeric(panel_with_cluster["missing_profile_rate"], errors="coerce")
     density_std = float(density.std(ddof=0))
     if density_std > 0:
-        panel_with_cluster["missingness_density_score"] = (density - float(density.mean())) / density_std
+        panel_with_cluster["missingness_density_score"] = (
+            density - float(density.mean())
+        ) / density_std
     else:
         panel_with_cluster["missingness_density_score"] = 0.0
 
@@ -828,7 +983,8 @@ def fit_dml_adjustment(
         for col in feature_cols
         if not col.startswith("missing_")
         and not col.startswith("raw_missing_")
-        and col not in {
+        and col
+        not in {
             "missing_profile_width",
             "missing_profile_rate",
             "missingness_density_score",
@@ -986,6 +1142,9 @@ def run_benchmark(
     raw_csv: Path,
     out_dir: Path,
     timing_csv: Optional[Path] = None,
+    parallel_jobs: Optional[int] = None,
+    model_threads: Optional[int] = None,
+    seed_policy: Optional[str] = None,
 ) -> Dict[str, Any]:
     cfg = load_config(config_path)
     columns = cfg.get("columns", {})
@@ -1024,6 +1183,9 @@ def run_benchmark(
         target_col=target_col,
         leakage_cols=leakage_cols,
     )
+    model_cfg = dict(analysis.get("xgb", {}))
+    if model_threads is not None:
+        model_cfg["n_jobs"] = int(model_threads)
 
     rolling = run_rolling_backtest(
         panel,
@@ -1036,8 +1198,10 @@ def run_benchmark(
         min_train_years=int(analysis.get("min_train_years", 5)),
         top_k=analysis.get("top_k", [50, 100, 200, 500]),
         unknown_positive_strategy=analysis.get("unknown_positive_strategy", "drop"),
-        model_cfg=analysis.get("xgb", {}),
+        model_cfg=model_cfg,
         seed=int(analysis.get("seed", SEED_DEFAULT)),
+        parallel_jobs=int(parallel_jobs or analysis.get("parallel_jobs", 1)),
+        seed_policy=str(seed_policy or analysis.get("seed_policy", "legacy")),
     )
     window_summary = compute_window_summary(rolling.metrics)
     structural_breaks = compute_structural_breaks(
@@ -1064,15 +1228,13 @@ def run_benchmark(
         focus_label_mode=analysis.get("recommendation_label_mode", "proxy_sensitivity"),
     )
 
-    panel_path = out_dir / "master_panel.csv.gz"
-    panel_with_cluster.to_csv(panel_path, index=False, compression="gzip")
+    panel_path = out_dir / "master_panel.parquet"
+    write_table(panel_with_cluster, panel_path)
     year_summary.to_csv(out_dir / "year_summary.csv", index=False)
     timing_coverage.to_csv(out_dir / "timing_coverage.csv", index=False)
     rolling.metrics.to_csv(out_dir / "rolling_metrics.csv", index=False)
     rolling.feature_importance.to_csv(out_dir / "feature_family_importance.csv", index=False)
-    rolling.predictions.to_csv(
-        out_dir / "rolling_predictions.csv.gz", index=False, compression="gzip"
-    )
+    write_table(rolling.predictions, out_dir / "rolling_predictions.parquet")
     window_summary.to_csv(out_dir / "window_summary.csv", index=False)
     structural_breaks.to_csv(out_dir / "structural_breaks.csv", index=False)
     cluster_summary.to_csv(out_dir / "missing_profile_clusters.csv", index=False)

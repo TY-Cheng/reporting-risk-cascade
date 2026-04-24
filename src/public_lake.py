@@ -15,27 +15,38 @@ and filing-native keys:
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import re
 import shutil
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urljoin, urlparse
 
 import numpy as np
 import pandas as pd
 import requests
 
+from .table_io import (
+    DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+    DEFAULT_DUCKDB_MEMORY_LIMIT,
+    parquet_scan_sql,
+    read_table,
+    remove_table_path,
+    write_table,
+)
+
 DEFAULT_USER_AGENT = "Tuoyuan Cheng tuoyuan.cheng@nus.edu.sg"
 PARSER_VERSION = "public-lake-v1"
 SCHEMA_VERSION = "public-lake-v1"
 SEC_REQUEST_INTERVAL_SECONDS = 0.15
 CSV_CHUNKSIZE = 250_000
+DEFAULT_FSDS_BATCH_SIZE = 4
+DEFAULT_NOTES_BATCH_SIZE = 2
 
 SEC_TICKER_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_BULK_SUBMISSIONS_URL = (
@@ -109,11 +120,18 @@ _LAST_REQUEST_AT = 0.0
 XBRL_CORE_TAGS: Dict[str, Sequence[str]] = {
     "assets": ("Assets",),
     "liabilities": ("Liabilities", "LiabilitiesAndStockholdersEquity"),
-    "revenues": ("Revenues", "SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax"),
+    "revenues": (
+        "Revenues",
+        "SalesRevenueNet",
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+    ),
     "net_income": ("NetIncomeLoss", "ProfitLoss"),
     "current_assets": ("AssetsCurrent",),
     "current_liabilities": ("LiabilitiesCurrent",),
-    "cash": ("CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"),
+    "cash": (
+        "CashAndCashEquivalentsAtCarryingValue",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+    ),
     "receivables": ("AccountsReceivableNetCurrent", "ReceivablesNetCurrent"),
     "inventory": ("InventoryNet", "InventoryFinishedGoodsNetOfReserves"),
     "debt": ("LongTermDebtAndFinanceLeaseObligations", "LongTermDebt"),
@@ -123,6 +141,11 @@ XBRL_CORE_TAGS: Dict[str, Sequence[str]] = {
 }
 
 
+def _xbrl_core_tag_sql() -> str:
+    core_tags = sorted({tag.lower() for tags in XBRL_CORE_TAGS.values() for tag in tags})
+    return ", ".join("'" + tag.replace("'", "''") + "'" for tag in core_tags)
+
+
 @dataclass(frozen=True)
 class SourceSpec:
     name: str
@@ -130,6 +153,58 @@ class SourceSpec:
     page_url: Optional[str] = None
     direct_urls: Sequence[str] = ()
     note: str = ""
+
+
+@dataclass(frozen=True)
+class DagTask:
+    name: str
+    deps: Sequence[str]
+    action: Callable[[], Dict[str, Path]]
+
+
+class SimpleDagRunner:
+    def __init__(self, *, state_dir: Path, resume: bool) -> None:
+        self.state_dir = state_dir
+        self.resume = bool(resume)
+        self.completed: set[str] = set()
+        self.outputs: Dict[str, Path] = {}
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+
+    def _marker_path(self, name: str) -> Path:
+        return self.state_dir / f"{name}.done.json"
+
+    def _load_marker(self, name: str) -> Dict[str, Path]:
+        payload = json.loads(self._marker_path(name).read_text(encoding="utf-8"))
+        return {key: Path(value) for key, value in payload.get("outputs", {}).items()}
+
+    def _write_marker(self, name: str, outputs: Dict[str, Path]) -> None:
+        self._marker_path(name).write_text(
+            json.dumps(
+                {
+                    "task": name,
+                    "completed_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "outputs": {key: str(value) for key, value in outputs.items()},
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+    def run(self, tasks: Sequence[DagTask]) -> Dict[str, Path]:
+        for task in tasks:
+            missing = [dep for dep in task.deps if dep not in self.completed]
+            if missing:
+                raise RuntimeError(f"Task {task.name} cannot run before dependencies {missing}")
+            marker = self._marker_path(task.name)
+            if self.resume and marker.exists():
+                task_outputs = self._load_marker(task.name)
+            else:
+                task_outputs = task.action()
+                self._write_marker(task.name, task_outputs)
+            self.outputs.update(task_outputs)
+            self.completed.add(task.name)
+        return self.outputs
 
 
 SOURCE_SPECS: Dict[str, SourceSpec] = {
@@ -563,15 +638,294 @@ def _read_table_auto(path: Path) -> pd.DataFrame:
 
 
 def _extract_zip_member_table(zip_path: Path, member: str) -> pd.DataFrame:
-    with zipfile.ZipFile(zip_path) as zf:
-        with zf.open(member) as handle:
-            raw = handle.read()
-    sample = raw.decode("utf-8", errors="ignore").splitlines()[:20]
+    with tempfile.TemporaryDirectory(prefix="public-lake-zip-") as tmp:
+        tmp_path = Path(tmp) / Path(member).name
+        with zipfile.ZipFile(zip_path) as zf:
+            with zf.open(member) as source, tmp_path.open("wb") as dest:
+                shutil.copyfileobj(source, dest)
+        return _read_delimited_table(tmp_path)
+
+
+def _read_table_sample(path: Path) -> List[str]:
+    return path.read_text(encoding="utf-8", errors="ignore").splitlines()[:20]
+
+
+def _read_delimited_table(path: Path) -> pd.DataFrame:
+    sample = _read_table_sample(path)
     if any("\t" in line for line in sample):
-        return pd.read_csv(io.BytesIO(raw), sep="\t", low_memory=False)
+        return pd.read_csv(path, sep="\t", low_memory=False)
     if any("|" in line for line in sample):
-        return pd.read_csv(io.BytesIO(raw), sep="|", low_memory=False)
-    return pd.read_csv(io.BytesIO(raw), low_memory=False)
+        return pd.read_csv(path, sep="|", low_memory=False)
+    return pd.read_csv(path, low_memory=False)
+
+
+def _extract_zip_member_to_path(zf: zipfile.ZipFile, member: str, dest_dir: Path) -> Path:
+    dest = dest_dir / Path(member).name
+    with zf.open(member) as source, dest.open("wb") as handle:
+        shutil.copyfileobj(source, handle)
+    return dest
+
+
+def _require_duckdb() -> Any:
+    try:
+        import duckdb
+    except ImportError as exc:  # pragma: no cover - dependency guard
+        raise RuntimeError("DuckDB engine requested but duckdb is not installed.") from exc
+    return duckdb
+
+
+def _duckdb_path(path: Path) -> str:
+    return str(path).replace("'", "''")
+
+
+def _duckdb_literal(value: str | Path) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _duckdb_path_list(paths: Sequence[Path]) -> str:
+    return "[" + ", ".join(f"'{_duckdb_path(path)}'" for path in paths) + "]"
+
+
+def _duckdb_identifier(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _duckdb_sec_date_string_expr(sql_expr: str) -> str:
+    cleaned = f"regexp_replace(trim(CAST({sql_expr} AS VARCHAR)), '[.]0$', '')"
+    return f"CASE WHEN regexp_full_match({cleaned}, '[0-9]{{8}}') THEN {cleaned} ELSE NULL END"
+
+
+def _duckdb_sec_date_expr(sql_expr: str) -> str:
+    return f"try_strptime({_duckdb_sec_date_string_expr(sql_expr)}, '%Y%m%d')"
+
+
+def _duckdb_sec_year_expr(sql_expr: str) -> str:
+    return f"try_cast(substr({_duckdb_sec_date_string_expr(sql_expr)}, 1, 4) AS INTEGER)"
+
+
+def _duckdb_timestamp_expr(sql_expr: str) -> str:
+    return f"try_cast({sql_expr} AS TIMESTAMP)"
+
+
+def _duckdb_cik_expr(sql_expr: str) -> str:
+    digits = f"regexp_replace(CAST({sql_expr} AS VARCHAR), '[^0-9]', '', 'g')"
+    return (
+        "CASE "
+        f"WHEN nullif({digits}, '') IS NULL THEN NULL "
+        f"WHEN try_cast({digits} AS BIGINT) IS NULL THEN NULL "
+        f"WHEN try_cast({digits} AS BIGINT) <= 0 THEN NULL "
+        f"ELSE lpad(CAST(try_cast({digits} AS BIGINT) AS VARCHAR), 10, '0') "
+        "END"
+    )
+
+
+def _duckdb_string_expr(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _duckdb_columns(con: Any, source_sql: str) -> List[str]:
+    return [str(row[0]) for row in con.execute(f"DESCRIBE SELECT * FROM {source_sql}").fetchall()]
+
+
+def _duckdb_connect(
+    *,
+    threads: int,
+    memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    temp_directory: Path | str | None = None,
+    max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> Any:
+    duckdb = _require_duckdb()
+    con = duckdb.connect(database=":memory:")
+    con.execute(f"PRAGMA threads={max(1, int(threads))}")
+    if memory_limit:
+        con.execute(f"SET memory_limit = {_duckdb_literal(memory_limit)}")
+    if temp_directory:
+        Path(temp_directory).mkdir(parents=True, exist_ok=True)
+        con.execute(f"SET temp_directory = {_duckdb_literal(temp_directory)}")
+    if max_temp_directory_size:
+        con.execute(f"SET max_temp_directory_size = {_duckdb_literal(max_temp_directory_size)}")
+    return con
+
+
+def _duckdb_read_csv(
+    path: Path,
+    *,
+    threads: int,
+    columns: Optional[Sequence[str]] = None,
+    memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    temp_directory: Path | str | None = None,
+    max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> pd.DataFrame:
+    select_expr = "*"
+    if columns is not None:
+        select_expr = ", ".join(_duckdb_identifier(col) for col in columns)
+    con = _duckdb_connect(
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
+    )
+    try:
+        return con.execute(
+            f"""
+            SELECT {select_expr}
+            FROM read_csv_auto('{_duckdb_path(path)}', union_by_name=true, sample_size=-1)
+            """
+        ).fetchdf()
+    finally:
+        con.close()
+
+
+def _duckdb_copy_query_to_csv(
+    *,
+    query: str,
+    dest: Path,
+    threads: int,
+    memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    temp_directory: Path | str | None = None,
+    max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    con = _duckdb_connect(
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
+    )
+    try:
+        con.execute(
+            f"""
+            COPY ({query})
+            TO '{_duckdb_path(dest)}'
+            (HEADER, DELIMITER ',', COMPRESSION GZIP)
+            """
+        )
+    finally:
+        con.close()
+
+
+def _duckdb_csv_source(paths: Sequence[Path] | Path) -> str:
+    if isinstance(paths, Path):
+        source_path = f"'{_duckdb_path(paths)}'"
+    else:
+        paths = list(paths)
+        if not paths:
+            raise ValueError("DuckDB CSV source requires at least one path")
+        source_path = _duckdb_path_list(paths)
+    return f"read_csv_auto({source_path}, union_by_name=true, sample_size=-1)"
+
+
+def _duckdb_table_source(path: Path) -> str:
+    if path.suffix.lower() == ".parquet" or path.is_dir():
+        return parquet_scan_sql(path)
+    return f"read_csv_auto('{_duckdb_path(path)}', union_by_name=true, sample_size=-1)"
+
+
+def _preferred_table_path(directory: Path, stem: str) -> Path:
+    parquet_path = directory / f"{stem}.parquet"
+    legacy_csv_gz_path = directory / f"{stem}.csv.gz"
+    if parquet_path.exists() or not legacy_csv_gz_path.exists():
+        return parquet_path
+    return legacy_csv_gz_path
+
+
+def _duckdb_copy_query_to_parquet(
+    *,
+    query: str,
+    dest: Path,
+    threads: int,
+    partition_by: Sequence[str] = (),
+    overwrite: bool = True,
+    memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    temp_directory: Path | str | None = None,
+    max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> None:
+    if overwrite:
+        remove_table_path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    options = ["FORMAT PARQUET", "COMPRESSION ZSTD"]
+    if partition_by:
+        options.append("PARTITION_BY (" + ", ".join(partition_by) + ")")
+    con = _duckdb_connect(
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
+    )
+    try:
+        con.execute(
+            f"""
+            COPY ({query})
+            TO '{_duckdb_path(dest)}'
+            ({", ".join(options)})
+            """
+        )
+    finally:
+        con.close()
+
+
+def _read_header_columns(path: Path) -> List[str]:
+    first_line = path.read_text(encoding="utf-8", errors="ignore").splitlines()[0]
+    if "\t" in first_line:
+        return first_line.split("\t")
+    if "|" in first_line:
+        return first_line.split("|")
+    return first_line.split(",")
+
+
+def _parse_sec_date_series(series: pd.Series) -> pd.Series:
+    as_string = series.astype(str).str.replace(r"\.0$", "", regex=True)
+    parsed = pd.to_datetime(as_string, format="%Y%m%d", errors="coerce")
+    fallback = pd.to_datetime(series, errors="coerce", format="mixed")
+    return parsed.fillna(fallback)
+
+
+def _read_csv_with_engine(
+    path: Path,
+    *,
+    date_cols: Sequence[str] = (),
+    engine: str = "pandas",
+    duckdb_threads: int = 4,
+    duckdb_memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    duckdb_temp_directory: Path | str | None = None,
+    duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+    usecols: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    if path.suffix.lower() == ".parquet" or path.is_dir():
+        return read_table(
+            path,
+            columns=usecols,
+            date_cols=date_cols,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+            low_memory=False,
+        )
+    if engine == "duckdb":
+        try:
+            frame = _duckdb_read_csv(
+                path,
+                threads=duckdb_threads,
+                columns=usecols,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+        except Exception:
+            read_kwargs: Dict[str, Any] = {"low_memory": False}
+            if usecols is not None:
+                read_kwargs["usecols"] = list(usecols)
+            frame = pd.read_csv(path, **read_kwargs)
+    else:
+        read_kwargs: Dict[str, Any] = {"low_memory": False}
+        if usecols is not None:
+            read_kwargs["usecols"] = list(usecols)
+        frame = pd.read_csv(path, **read_kwargs)
+    for col in date_cols:
+        if col in frame.columns:
+            frame[col] = pd.to_datetime(frame[col], errors="coerce", format="mixed")
+    return frame
 
 
 def _pick_members(zf: zipfile.ZipFile, stem: str) -> List[str]:
@@ -734,14 +1088,27 @@ def normalize_submissions_bulk(
     filing_dim = filing_dim.drop_duplicates(subset=["issuer_cik", "accession"])
 
     silver_dir.mkdir(parents=True, exist_ok=True)
-    issuer_path = silver_dir / "issuer_dim.csv.gz"
-    filing_path = silver_dir / "filing_dim.csv.gz"
-    issuer_dim.to_csv(issuer_path, index=False, compression="gzip")
-    filing_dim.to_csv(filing_path, index=False, compression="gzip")
+    issuer_path = silver_dir / "issuer_dim.parquet"
+    filing_path = silver_dir / "filing_dim.parquet"
+    write_table(issuer_dim, issuer_path)
+    write_table(filing_dim, filing_path)
     return {"issuer_dim": issuer_path, "filing_dim": filing_path}
 
 
-def normalize_fsds_archive(*, archive_path: Path, silver_dir: Path) -> Dict[str, Path]:
+def normalize_fsds_archive(
+    *,
+    archive_path: Path,
+    silver_dir: Path,
+    engine: str = "pandas",
+    duckdb_threads: int = 4,
+) -> Dict[str, Path]:
+    if engine == "duckdb":
+        return _normalize_fsds_archive_duckdb(
+            archive_path=archive_path,
+            silver_dir=silver_dir,
+            duckdb_threads=duckdb_threads,
+        )
+
     with zipfile.ZipFile(archive_path) as zf:
         sub_members = _pick_members(zf, "sub")
         num_members = _pick_members(zf, "num")
@@ -786,18 +1153,97 @@ def normalize_fsds_archive(*, archive_path: Path, silver_dir: Path) -> Dict[str,
         }
     )
     if "fact_date" in xbrl_fact.columns:
-        xbrl_fact["fact_date"] = pd.to_datetime(
-            xbrl_fact["fact_date"].astype(str), errors="coerce"
-        )
+        xbrl_fact["fact_date"] = _parse_sec_date_series(xbrl_fact["fact_date"])
     silver_dir.mkdir(parents=True, exist_ok=True)
-    filing_path = silver_dir / "filing_xbrl_dim.csv.gz"
-    fact_path = silver_dir / "xbrl_fact.csv.gz"
-    filing_xbrl.to_csv(filing_path, index=False, compression="gzip")
-    xbrl_fact.to_csv(fact_path, index=False, compression="gzip")
+    filing_path = silver_dir / "filing_xbrl_dim.parquet"
+    fact_path = silver_dir / "xbrl_fact.parquet"
+    write_table(filing_xbrl, filing_path)
+    write_table(xbrl_fact, fact_path)
     return {"filing_xbrl_dim": filing_path, "xbrl_fact": fact_path}
 
 
-def normalize_notes_archive(*, archive_path: Path, silver_dir: Path) -> Dict[str, Path]:
+def _normalize_fsds_archive_duckdb(
+    *,
+    archive_path: Path,
+    silver_dir: Path,
+    duckdb_threads: int,
+) -> Dict[str, Path]:
+    with tempfile.TemporaryDirectory(prefix="public-lake-fsds-") as tmp:
+        tmp_dir = Path(tmp)
+        with zipfile.ZipFile(archive_path) as zf:
+            sub_members = _pick_members(zf, "sub")
+            num_members = _pick_members(zf, "num")
+            if not sub_members or not num_members:
+                raise ValueError(f"Could not find sub/num tables in {archive_path}")
+            sub_path_tmp = _extract_zip_member_to_path(zf, sub_members[0], tmp_dir)
+            num_path_tmp = _extract_zip_member_to_path(zf, num_members[0], tmp_dir)
+
+        sub_df = _read_delimited_table(sub_path_tmp)
+        filing_xbrl = sub_df.rename(
+            columns={
+                "adsh": "adsh",
+                "cik": "issuer_cik",
+                "name": "entity_name",
+                "sic": "sic",
+                "countryba": "country_business",
+                "stprba": "state_business",
+                "form": "form",
+                "period": "fiscal_period_end",
+                "filed": "filing_date",
+                "accepted": "acceptance_datetime",
+                "fy": "fiscal_year",
+                "fp": "fiscal_period",
+            }
+        )
+        if "issuer_cik" in filing_xbrl.columns:
+            filing_xbrl["issuer_cik"] = _normalize_cik_series(filing_xbrl["issuer_cik"])
+        for col in ["fiscal_period_end", "filing_date"]:
+            if col in filing_xbrl.columns:
+                filing_xbrl[col] = _parse_sec_date_series(filing_xbrl[col])
+        if "acceptance_datetime" in filing_xbrl.columns:
+            filing_xbrl["acceptance_datetime"] = pd.to_datetime(
+                filing_xbrl["acceptance_datetime"], errors="coerce", format="mixed"
+            )
+
+        silver_dir.mkdir(parents=True, exist_ok=True)
+        filing_path = silver_dir / "filing_xbrl_dim.parquet"
+        fact_path = silver_dir / "xbrl_fact.parquet"
+        write_table(filing_xbrl, filing_path)
+
+        source = (
+            f"read_csv_auto('{_duckdb_path(num_path_tmp)}', union_by_name=true, sample_size=-1)"
+        )
+        fact_query = f"""
+            SELECT
+                adsh,
+                tag,
+                version AS taxonomy_version,
+                {_duckdb_sec_date_expr("ddate")} AS fact_date,
+                qtrs AS quarters,
+                uom AS unit,
+                try_cast(value AS DOUBLE) AS value,
+                coreg,
+                footnote
+            FROM {source}
+        """
+        _duckdb_copy_query_to_parquet(query=fact_query, dest=fact_path, threads=duckdb_threads)
+    return {"filing_xbrl_dim": filing_path, "xbrl_fact": fact_path}
+
+
+def normalize_notes_archive(
+    *,
+    archive_path: Path,
+    silver_dir: Path,
+    engine: str = "pandas",
+    duckdb_threads: int = 4,
+) -> Dict[str, Path]:
+    if engine == "duckdb":
+        return _normalize_notes_archive_duckdb(
+            archive_path=archive_path,
+            silver_dir=silver_dir,
+            duckdb_threads=duckdb_threads,
+        )
+
     with zipfile.ZipFile(archive_path) as zf:
         txt_members = [name for name in zf.namelist() if Path(name).name.lower().startswith("txt")]
         sub_members = _pick_members(zf, "sub")
@@ -805,10 +1251,11 @@ def normalize_notes_archive(*, archive_path: Path, silver_dir: Path) -> Dict[str
             raise ValueError(f"Could not find txt table in {archive_path}")
         note_df = _extract_zip_member_table(archive_path, txt_members[0])
         outputs: Dict[str, Path] = {}
+        silver_dir.mkdir(parents=True, exist_ok=True)
         if sub_members:
             sub_df = _extract_zip_member_table(archive_path, sub_members[0])
-            sub_path = silver_dir / "notes_filing_dim.csv.gz"
-            sub_df.to_csv(sub_path, index=False, compression="gzip")
+            sub_path = silver_dir / "notes_filing_dim.parquet"
+            write_table(sub_df, sub_path)
             outputs["notes_filing_dim"] = sub_path
     note_text = note_df.rename(
         columns={
@@ -822,11 +1269,60 @@ def normalize_notes_archive(*, archive_path: Path, silver_dir: Path) -> Dict[str
         }
     )
     if "fact_date" in note_text.columns:
-        note_text["fact_date"] = pd.to_datetime(note_text["fact_date"], errors="coerce")
-    silver_dir.mkdir(parents=True, exist_ok=True)
-    note_path = silver_dir / "note_text.csv.gz"
-    note_text.to_csv(note_path, index=False, compression="gzip")
+        note_text["fact_date"] = _parse_sec_date_series(note_text["fact_date"])
+    note_path = silver_dir / "note_text.parquet"
+    write_table(note_text, note_path)
     outputs["note_text"] = note_path
+    return outputs
+
+
+def _normalize_notes_archive_duckdb(
+    *,
+    archive_path: Path,
+    silver_dir: Path,
+    duckdb_threads: int,
+) -> Dict[str, Path]:
+    outputs: Dict[str, Path] = {}
+    with tempfile.TemporaryDirectory(prefix="public-lake-notes-") as tmp:
+        tmp_dir = Path(tmp)
+        with zipfile.ZipFile(archive_path) as zf:
+            txt_members = [
+                name for name in zf.namelist() if Path(name).name.lower().startswith("txt")
+            ]
+            sub_members = _pick_members(zf, "sub")
+            if not txt_members:
+                raise ValueError(f"Could not find txt table in {archive_path}")
+            txt_path_tmp = _extract_zip_member_to_path(zf, txt_members[0], tmp_dir)
+            sub_path_tmp = (
+                _extract_zip_member_to_path(zf, sub_members[0], tmp_dir) if sub_members else None
+            )
+
+        silver_dir.mkdir(parents=True, exist_ok=True)
+        if sub_path_tmp is not None:
+            sub_df = _read_delimited_table(sub_path_tmp)
+            sub_path = silver_dir / "notes_filing_dim.parquet"
+            write_table(sub_df, sub_path)
+            outputs["notes_filing_dim"] = sub_path
+
+        columns = set(_read_header_columns(txt_path_tmp))
+        text_col = "txt" if "txt" in columns else "text" if "text" in columns else None
+        note_expr = _duckdb_identifier(text_col) if text_col else "NULL"
+        source = (
+            f"read_csv_auto('{_duckdb_path(txt_path_tmp)}', union_by_name=true, sample_size=-1)"
+        )
+        note_query = f"""
+            SELECT
+                adsh,
+                tag,
+                version AS taxonomy_version,
+                {_duckdb_sec_date_expr("ddate")} AS fact_date,
+                qtrs AS quarters,
+                {note_expr} AS note_text
+            FROM {source}
+        """
+        note_path = silver_dir / "note_text.parquet"
+        _duckdb_copy_query_to_parquet(query=note_query, dest=note_path, threads=duckdb_threads)
+        outputs["note_text"] = note_path
     return outputs
 
 
@@ -853,8 +1349,8 @@ def normalize_form_ap_csv(*, form_ap_csv: Path, silver_dir: Path) -> Path:
         if col in work.columns:
             work[col] = pd.to_datetime(work[col], errors="coerce", format="mixed")
     silver_dir.mkdir(parents=True, exist_ok=True)
-    out_path = silver_dir / "form_ap_event.csv.gz"
-    work.to_csv(out_path, index=False, compression="gzip")
+    out_path = silver_dir / "form_ap_event.parquet"
+    write_table(work, out_path)
     return out_path
 
 
@@ -915,6 +1411,8 @@ def _normalize_manifest_archives(
     manifest_csv: Path,
     silver_dir: Path,
     normalizer_name: str,
+    engine: str = "pandas",
+    duckdb_threads: int = 4,
 ) -> Dict[str, Path]:
     normalizers = {
         "fsds": normalize_fsds_archive,
@@ -923,6 +1421,7 @@ def _normalize_manifest_archives(
     normalizer = normalizers[normalizer_name]
     manifest = pd.read_csv(manifest_csv)
     outputs: Dict[str, Path] = {}
+    parquet_parts: Dict[str, List[Path]] = {}
     temporary_root = silver_dir / f"._tmp_{normalizer_name}"
     if temporary_root.exists():
         shutil.rmtree(temporary_root)
@@ -934,21 +1433,643 @@ def _normalize_manifest_archives(
         _verify_metadata_hash(archive_path)
         tmp_dir = temporary_root / str(idx)
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        archive_outputs = normalizer(archive_path=archive_path, silver_dir=tmp_dir)
+        archive_outputs = normalizer(
+            archive_path=archive_path,
+            silver_dir=tmp_dir,
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+        )
         for key, tmp_path in archive_outputs.items():
             dest_path = silver_dir / Path(tmp_path).name
-            if key not in outputs and dest_path.exists():
-                dest_path.unlink()
-            _append_csv_gzip(Path(tmp_path), dest_path)
+            tmp_path = Path(tmp_path)
+            if tmp_path.suffix.lower() == ".parquet" or tmp_path.is_dir():
+                parquet_parts.setdefault(key, []).append(tmp_path)
+            else:
+                if key not in outputs and dest_path.exists():
+                    dest_path.unlink()
+                _append_csv_gzip(tmp_path, dest_path)
             outputs[key] = dest_path
+
+    for key, parts in parquet_parts.items():
+        dest_path = outputs[key]
+        _duckdb_copy_query_to_parquet(
+            query=f"SELECT * FROM {_parquet_source_from_files(parts)}",
+            dest=dest_path,
+            threads=duckdb_threads,
+        )
 
     if temporary_root.exists():
         shutil.rmtree(temporary_root)
     return outputs
 
 
+def _extract_manifest_members(
+    *,
+    manifest_csv: Path,
+    staging_dir: Path,
+    required_stem: str,
+    optional_stems: Sequence[str] = (),
+) -> Dict[str, List[Path]]:
+    manifest = pd.read_csv(manifest_csv)
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    extracted: Dict[str, List[Path]] = {required_stem: []}
+    for stem in optional_stems:
+        extracted[stem] = []
+
+    for idx, row in manifest.iterrows():
+        archive_path = Path(row["local_path"])
+        if not archive_path.exists() or archive_path.suffix.lower() != ".zip":
+            continue
+        _verify_metadata_hash(archive_path)
+        archive_dir = staging_dir / f"archive_{idx}"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive_path) as zf:
+            required_members = _pick_members(zf, required_stem)
+            if not required_members:
+                raise ValueError(f"Could not find {required_stem} table in {archive_path}")
+            extracted[required_stem].append(
+                _extract_zip_member_to_path(zf, required_members[0], archive_dir)
+            )
+            for stem in optional_stems:
+                members = _pick_members(zf, stem)
+                if members:
+                    extracted[stem].append(
+                        _extract_zip_member_to_path(zf, members[0], archive_dir)
+                    )
+    return extracted
+
+
+def _manifest_archive_paths(manifest_csv: Path) -> List[Path]:
+    manifest = pd.read_csv(manifest_csv)
+    paths: List[Path] = []
+    if "local_path" not in manifest.columns:
+        return paths
+    for raw_path in manifest["local_path"].dropna():
+        archive_path = Path(str(raw_path))
+        if archive_path.exists() and archive_path.suffix.lower() == ".zip":
+            paths.append(archive_path)
+    return paths
+
+
+def _batch_name(batch_index: int) -> str:
+    return f"batch_{batch_index:04d}"
+
+
+def _batched_paths(paths: Sequence[Path], batch_size: int) -> Iterable[Tuple[str, List[Path]]]:
+    size = max(1, int(batch_size))
+    for batch_index, start in enumerate(range(0, len(paths), size)):
+        yield _batch_name(batch_index), list(paths[start : start + size])
+
+
+def _extract_archive_members_batch(
+    *,
+    archive_paths: Sequence[Path],
+    staging_dir: Path,
+    required_stem: str,
+    optional_stems: Sequence[str] = (),
+) -> Dict[str, List[Path]]:
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    extracted: Dict[str, List[Path]] = {required_stem: []}
+    for stem in optional_stems:
+        extracted[stem] = []
+
+    for idx, archive_path in enumerate(archive_paths):
+        _verify_metadata_hash(archive_path)
+        archive_dir = staging_dir / f"archive_{idx:04d}"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive_path) as zf:
+            required_members = _pick_members(zf, required_stem)
+            if not required_members:
+                raise ValueError(f"Could not find {required_stem} table in {archive_path}")
+            extracted[required_stem].append(
+                _extract_zip_member_to_path(zf, required_members[0], archive_dir)
+            )
+            for stem in optional_stems:
+                members = _pick_members(zf, stem)
+                if members:
+                    extracted[stem].append(
+                        _extract_zip_member_to_path(zf, members[0], archive_dir)
+                    )
+    return extracted
+
+
+def _batch_marker_path(state_dir: Path, batch_name: str) -> Path:
+    return state_dir / f"{batch_name}.done.json"
+
+
+def _batch_marker_outputs_exist(marker_path: Path) -> bool:
+    if not marker_path.exists():
+        return False
+    try:
+        payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    for value in payload.get("outputs", {}).values():
+        if not Path(value).exists():
+            return False
+    return True
+
+
+def _write_batch_marker(
+    *,
+    state_dir: Path,
+    batch_name: str,
+    archive_paths: Sequence[Path],
+    outputs: Dict[str, Path],
+) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _batch_marker_path(state_dir, batch_name).write_text(
+        json.dumps(
+            {
+                "batch": batch_name,
+                "completed_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "inputs": [str(path) for path in archive_paths],
+                "outputs": {key: str(path) for key, path in outputs.items()},
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _parquet_files(path: Path) -> List[Path]:
+    if not path.exists():
+        return []
+    if path.is_dir():
+        return sorted(path.rglob("*.parquet"))
+    if path.suffix.lower() == ".parquet":
+        return [path]
+    return []
+
+
+def _parquet_source_from_files(files: Sequence[Path]) -> str:
+    paths = list(files)
+    if not paths:
+        raise ValueError("Parquet source requires at least one file")
+    return f"read_parquet({_duckdb_path_list(paths)}, hive_partitioning=true)"
+
+
+def _copy_parquet_query_from_parts(
+    *,
+    parts_dir: Path,
+    dest: Path,
+    query: str,
+    threads: int,
+    memory_limit: str | None,
+    temp_directory: Path | str | None,
+    max_temp_directory_size: str | None,
+) -> bool:
+    files = _parquet_files(parts_dir)
+    if not files:
+        return False
+    source = _parquet_source_from_files(files)
+    _duckdb_copy_query_to_parquet(
+        query=query.format(source=source),
+        dest=dest,
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
+    )
+    return True
+
+
+def _assert_no_duplicate_parquet_key(
+    *,
+    parts_dir: Path,
+    key: str,
+    label: str,
+    threads: int,
+    memory_limit: str | None,
+    temp_directory: Path | str | None,
+    max_temp_directory_size: str | None,
+) -> None:
+    files = _parquet_files(parts_dir)
+    if not files:
+        return
+    source = _parquet_source_from_files(files)
+    con = _duckdb_connect(
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
+    )
+    try:
+        duplicate_rows = con.execute(
+            f"""
+            SELECT count(*)::BIGINT
+            FROM (
+                SELECT {_duckdb_identifier(key)}
+                FROM {source}
+                GROUP BY {_duckdb_identifier(key)}
+                HAVING count(*) > 1
+            )
+            """
+        ).fetchone()[0]
+    finally:
+        con.close()
+    if int(duplicate_rows) > 0:
+        raise ValueError(
+            f"{label} has {duplicate_rows} duplicate {key} keys across archive batches; "
+            "cannot finalize exact Parquet summary from batch-level aggregates."
+        )
+
+
+def _normalize_fsds_manifest_parquet(
+    *,
+    manifest_csv: Path,
+    silver_dir: Path,
+    duckdb_threads: int,
+    duckdb_memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    duckdb_temp_directory: Path | str | None = None,
+    duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+    batch_size: int = DEFAULT_FSDS_BATCH_SIZE,
+    resume: bool = False,
+) -> Dict[str, Path]:
+    outputs: Dict[str, Path] = {}
+    archive_paths = _manifest_archive_paths(manifest_csv)
+    if not archive_paths:
+        return outputs
+    silver_dir.mkdir(parents=True, exist_ok=True)
+    staging_root = silver_dir / "._staging_fsds"
+    batch_state_dir = silver_dir / ".public_lake_dag" / "normalize_fsds_batches"
+    parts_root = silver_dir / "._fsds_parquet_parts"
+    filing_parts = parts_root / "filing_xbrl_dim"
+    summary_parts = parts_root / "xbrl_fact_summary"
+    core_path = silver_dir / "xbrl_core_fact"
+
+    if not resume:
+        remove_table_path(parts_root)
+        remove_table_path(core_path)
+        remove_table_path(silver_dir / "filing_xbrl_dim.parquet")
+        remove_table_path(silver_dir / "xbrl_fact_summary.parquet")
+        remove_table_path(batch_state_dir)
+
+    for batch_name, batch_paths in _batched_paths(archive_paths, batch_size):
+        marker = _batch_marker_path(batch_state_dir, batch_name)
+        if resume and _batch_marker_outputs_exist(marker):
+            continue
+        batch_staging = staging_root / batch_name
+        batch_outputs: Dict[str, Path] = {}
+        try:
+            extracted = _extract_archive_members_batch(
+                archive_paths=batch_paths,
+                staging_dir=batch_staging,
+                required_stem="num",
+                optional_stems=("sub",),
+            )
+            num_paths = extracted["num"]
+            sub_paths = extracted.get("sub", [])
+            if not num_paths:
+                _write_batch_marker(
+                    state_dir=batch_state_dir,
+                    batch_name=batch_name,
+                    archive_paths=batch_paths,
+                    outputs=batch_outputs,
+                )
+                continue
+
+            if sub_paths:
+                filing_part = filing_parts / f"part_batch={batch_name}" / "data.parquet"
+                sub_source = _duckdb_csv_source(sub_paths)
+                filing_query = f"""
+                    SELECT
+                        adsh,
+                        CASE
+                            WHEN try_cast(cik AS BIGINT) IS NULL THEN NULL
+                            ELSE lpad(CAST(try_cast(cik AS BIGINT) AS VARCHAR), 10, '0')
+                        END AS issuer_cik,
+                        name AS entity_name,
+                        sic,
+                        countryba AS country_business,
+                        stprba AS state_business,
+                        form,
+                        try_strptime(CAST(period AS VARCHAR), '%Y%m%d') AS fiscal_period_end,
+                        try_strptime(CAST(filed AS VARCHAR), '%Y%m%d') AS filing_date,
+                        try_cast(accepted AS TIMESTAMP) AS acceptance_datetime,
+                        fy AS fiscal_year,
+                        fp AS fiscal_period
+                    FROM {sub_source}
+                """
+                _duckdb_copy_query_to_parquet(
+                    query=filing_query,
+                    dest=filing_part,
+                    threads=duckdb_threads,
+                    memory_limit=duckdb_memory_limit,
+                    temp_directory=duckdb_temp_directory,
+                    max_temp_directory_size=duckdb_max_temp_directory_size,
+                )
+                batch_outputs["filing_xbrl_dim_part"] = filing_part
+
+            num_source = _duckdb_csv_source(num_paths)
+            summary_part = summary_parts / f"part_batch={batch_name}" / "data.parquet"
+            summary_query = f"""
+                SELECT
+                    adsh,
+                    count(tag)::BIGINT AS xbrl_fact_count,
+                    count(DISTINCT tag)::BIGINT AS xbrl_unique_tags,
+                    count(DISTINCT uom)::BIGINT AS xbrl_unique_units
+                FROM {num_source}
+                GROUP BY adsh
+            """
+            _duckdb_copy_query_to_parquet(
+                query=summary_query,
+                dest=summary_part,
+                threads=duckdb_threads,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+            batch_outputs["xbrl_fact_summary_part"] = summary_part
+
+            core_part = core_path / f"part_batch={batch_name}" / "data.parquet"
+            core_query = f"""
+                SELECT
+                    adsh,
+                    tag,
+                    uom AS unit,
+                    try_cast(value AS DOUBLE) AS value,
+                    try_cast(qtrs AS DOUBLE) AS quarters,
+                    {_duckdb_sec_date_expr("ddate")} AS fact_date,
+                    {_duckdb_sec_year_expr("ddate")} AS source_year
+                FROM {num_source}
+                WHERE lower(CAST(tag AS VARCHAR)) IN ({_xbrl_core_tag_sql()})
+                  AND try_cast(value AS DOUBLE) IS NOT NULL
+                  AND (
+                        uom IS NULL
+                        OR upper(CAST(uom AS VARCHAR)) IN ('', 'USD')
+                      )
+            """
+            _duckdb_copy_query_to_parquet(
+                query=core_query,
+                dest=core_part,
+                threads=duckdb_threads,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+            batch_outputs["xbrl_core_fact_part"] = core_part
+            _write_batch_marker(
+                state_dir=batch_state_dir,
+                batch_name=batch_name,
+                archive_paths=batch_paths,
+                outputs=batch_outputs,
+            )
+        finally:
+            if batch_staging.exists():
+                shutil.rmtree(batch_staging)
+
+    if staging_root.exists():
+        shutil.rmtree(staging_root)
+
+    filing_path = silver_dir / "filing_xbrl_dim.parquet"
+    _assert_no_duplicate_parquet_key(
+        parts_dir=filing_parts,
+        key="adsh",
+        label="filing_xbrl_dim",
+        threads=duckdb_threads,
+        memory_limit=duckdb_memory_limit,
+        temp_directory=duckdb_temp_directory,
+        max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
+    if _copy_parquet_query_from_parts(
+        parts_dir=filing_parts,
+        dest=filing_path,
+        query="""
+            SELECT
+                adsh,
+                issuer_cik,
+                entity_name,
+                sic,
+                country_business,
+                state_business,
+                form,
+                fiscal_period_end,
+                filing_date,
+                acceptance_datetime,
+                fiscal_year,
+                fiscal_period
+            FROM {source}
+            ORDER BY adsh
+        """,
+        threads=duckdb_threads,
+        memory_limit=duckdb_memory_limit,
+        temp_directory=duckdb_temp_directory,
+        max_temp_directory_size=duckdb_max_temp_directory_size,
+    ):
+        outputs["filing_xbrl_dim"] = filing_path
+
+    summary_path = silver_dir / "xbrl_fact_summary.parquet"
+    _assert_no_duplicate_parquet_key(
+        parts_dir=summary_parts,
+        key="adsh",
+        label="xbrl_fact_summary",
+        threads=duckdb_threads,
+        memory_limit=duckdb_memory_limit,
+        temp_directory=duckdb_temp_directory,
+        max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
+    if _copy_parquet_query_from_parts(
+        parts_dir=summary_parts,
+        dest=summary_path,
+        query="""
+            SELECT
+                adsh,
+                sum(xbrl_fact_count)::BIGINT AS xbrl_fact_count,
+                sum(xbrl_unique_tags)::BIGINT AS xbrl_unique_tags,
+                sum(xbrl_unique_units)::BIGINT AS xbrl_unique_units
+            FROM {source}
+            GROUP BY adsh
+            ORDER BY adsh
+        """,
+        threads=duckdb_threads,
+        memory_limit=duckdb_memory_limit,
+        temp_directory=duckdb_temp_directory,
+        max_temp_directory_size=duckdb_max_temp_directory_size,
+    ):
+        outputs["xbrl_fact_summary"] = summary_path
+
+    if _parquet_files(core_path):
+        outputs["xbrl_core_fact"] = core_path
+    return outputs
+
+
+def _normalize_notes_manifest_parquet(
+    *,
+    manifest_csv: Path,
+    silver_dir: Path,
+    duckdb_threads: int,
+    notes_mode: str,
+    duckdb_memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    duckdb_temp_directory: Path | str | None = None,
+    duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+    batch_size: int = DEFAULT_NOTES_BATCH_SIZE,
+    resume: bool = False,
+) -> Dict[str, Path]:
+    if notes_mode not in {"summary", "raw", "skip"}:
+        raise ValueError("notes_mode must be 'summary', 'raw', or 'skip'")
+    if notes_mode == "skip":
+        return {}
+    outputs: Dict[str, Path] = {}
+    archive_paths = _manifest_archive_paths(manifest_csv)
+    if not archive_paths:
+        return outputs
+    silver_dir.mkdir(parents=True, exist_ok=True)
+
+    staging_root = silver_dir / "._staging_notes"
+    batch_state_dir = silver_dir / ".public_lake_dag" / "normalize_notes_batches"
+    parts_root = silver_dir / "._notes_parquet_parts"
+    filing_parts = parts_root / "notes_filing_dim"
+    summary_parts = parts_root / "note_summary"
+    note_text_path = silver_dir / "note_text"
+
+    if not resume:
+        remove_table_path(parts_root)
+        remove_table_path(note_text_path)
+        remove_table_path(silver_dir / "notes_filing_dim.parquet")
+        remove_table_path(silver_dir / "note_summary.parquet")
+        remove_table_path(batch_state_dir)
+
+    for batch_name, batch_paths in _batched_paths(archive_paths, batch_size):
+        marker = _batch_marker_path(batch_state_dir, batch_name)
+        if resume and _batch_marker_outputs_exist(marker):
+            continue
+        batch_staging = staging_root / batch_name
+        batch_outputs: Dict[str, Path] = {}
+        try:
+            extracted = _extract_archive_members_batch(
+                archive_paths=batch_paths,
+                staging_dir=batch_staging,
+                required_stem="txt",
+                optional_stems=("sub",),
+            )
+            txt_paths = extracted["txt"]
+            sub_paths = extracted.get("sub", [])
+            if not txt_paths:
+                _write_batch_marker(
+                    state_dir=batch_state_dir,
+                    batch_name=batch_name,
+                    archive_paths=batch_paths,
+                    outputs=batch_outputs,
+                )
+                continue
+
+            if sub_paths:
+                notes_filing_part = filing_parts / f"part_batch={batch_name}" / "data.parquet"
+                _duckdb_copy_query_to_parquet(
+                    query=f"SELECT * FROM {_duckdb_csv_source(sub_paths)}",
+                    dest=notes_filing_part,
+                    threads=duckdb_threads,
+                    memory_limit=duckdb_memory_limit,
+                    temp_directory=duckdb_temp_directory,
+                    max_temp_directory_size=duckdb_max_temp_directory_size,
+                )
+                batch_outputs["notes_filing_dim_part"] = notes_filing_part
+
+            columns = set(_read_header_columns(txt_paths[0]))
+            text_col = "txt" if "txt" in columns else "text" if "text" in columns else None
+            note_expr = _duckdb_identifier(text_col) if text_col else "NULL"
+            txt_source = _duckdb_csv_source(txt_paths)
+            summary_part = summary_parts / f"part_batch={batch_name}" / "data.parquet"
+            summary_query = f"""
+                SELECT
+                    adsh,
+                    count(tag)::BIGINT AS note_text_count,
+                    sum(length(coalesce(CAST({note_expr} AS VARCHAR), '')))::BIGINT
+                        AS note_text_char_count
+                FROM {txt_source}
+                GROUP BY adsh
+            """
+            _duckdb_copy_query_to_parquet(
+                query=summary_query,
+                dest=summary_part,
+                threads=duckdb_threads,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+            batch_outputs["note_summary_part"] = summary_part
+
+            if notes_mode == "raw":
+                note_part = note_text_path / f"part_batch={batch_name}" / "data.parquet"
+                note_query = f"""
+                    SELECT
+                        adsh,
+                        tag,
+                        version AS taxonomy_version,
+                        {_duckdb_sec_date_expr("ddate")} AS fact_date,
+                        qtrs AS quarters,
+                        {note_expr} AS note_text,
+                        {_duckdb_sec_year_expr("ddate")} AS source_year
+                    FROM {txt_source}
+                """
+                _duckdb_copy_query_to_parquet(
+                    query=note_query,
+                    dest=note_part,
+                    threads=duckdb_threads,
+                    memory_limit=duckdb_memory_limit,
+                    temp_directory=duckdb_temp_directory,
+                    max_temp_directory_size=duckdb_max_temp_directory_size,
+                )
+                batch_outputs["note_text_part"] = note_part
+
+            _write_batch_marker(
+                state_dir=batch_state_dir,
+                batch_name=batch_name,
+                archive_paths=batch_paths,
+                outputs=batch_outputs,
+            )
+        finally:
+            if batch_staging.exists():
+                shutil.rmtree(batch_staging)
+
+    if staging_root.exists():
+        shutil.rmtree(staging_root)
+
+    notes_filing_path = silver_dir / "notes_filing_dim.parquet"
+    if _copy_parquet_query_from_parts(
+        parts_dir=filing_parts,
+        dest=notes_filing_path,
+        query="SELECT * FROM {source} ORDER BY adsh",
+        threads=duckdb_threads,
+        memory_limit=duckdb_memory_limit,
+        temp_directory=duckdb_temp_directory,
+        max_temp_directory_size=duckdb_max_temp_directory_size,
+    ):
+        outputs["notes_filing_dim"] = notes_filing_path
+
+    summary_path = silver_dir / "note_summary.parquet"
+    if _copy_parquet_query_from_parts(
+        parts_dir=summary_parts,
+        dest=summary_path,
+        query="""
+            SELECT
+                adsh,
+                sum(note_text_count)::BIGINT AS note_text_count,
+                sum(note_text_char_count)::BIGINT AS note_text_char_count
+            FROM {source}
+            GROUP BY adsh
+            ORDER BY adsh
+        """,
+        threads=duckdb_threads,
+        memory_limit=duckdb_memory_limit,
+        temp_directory=duckdb_temp_directory,
+        max_temp_directory_size=duckdb_max_temp_directory_size,
+    ):
+        outputs["note_summary"] = summary_path
+
+    if notes_mode == "raw" and _parquet_files(note_text_path):
+        outputs["note_text"] = note_text_path
+    return outputs
+
+
 def build_comment_threads(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
-    filing_dim = pd.read_csv(filing_dim_csv, parse_dates=["filing_date", "report_date"])
+    filing_dim = read_table(filing_dim_csv, date_cols=["filing_date", "report_date"])
     comment = filing_dim.loc[filing_dim["form"].isin(["UPLOAD", "CORRESP"])].copy()
     if comment.empty:
         out_path = silver_dir / "comment_thread.csv.gz"
@@ -990,7 +2111,7 @@ def build_comment_threads(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
 
 
 def build_correction_events(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
-    filing_dim = pd.read_csv(filing_dim_csv, parse_dates=["filing_date", "report_date"])
+    filing_dim = read_table(filing_dim_csv, date_cols=["filing_date", "report_date"])
     filing_dim["items"] = filing_dim.get("items", "").fillna("").astype(str)
     filing_dim["primary_doc_description"] = (
         filing_dim.get("primary_doc_description", "").fillna("").astype(str)
@@ -1065,13 +2186,18 @@ def normalize_aaer_events(
     *,
     aaer_bronze_dir: Path,
     silver_dir: Path,
+    issuer_dim_path: Optional[Path] = None,
     issuer_dim_csv: Optional[Path] = None,
 ) -> Path:
+    if issuer_dim_path is not None and issuer_dim_csv is not None:
+        if Path(issuer_dim_path) != Path(issuer_dim_csv):
+            raise ValueError("Pass only one of issuer_dim_path or deprecated issuer_dim_csv.")
+    issuer_dim_path = issuer_dim_path or issuer_dim_csv
     listing_html = aaer_bronze_dir / "aaer_listing.html"
     rows: List[Dict[str, Any]] = []
     issuer_dim = None
-    if issuer_dim_csv is not None and issuer_dim_csv.exists():
-        issuer_dim = pd.read_csv(issuer_dim_csv, usecols=["issuer_cik", "entity_name"])
+    if issuer_dim_path is not None and issuer_dim_path.exists():
+        issuer_dim = read_table(issuer_dim_path, columns=["issuer_cik", "entity_name"])
         issuer_dim["issuer_cik"] = _normalize_cik_series(issuer_dim["issuer_cik"])
         issuer_dim["entity_tokens"] = issuer_dim["entity_name"].map(_name_tokens)
         issuer_dim = issuer_dim.loc[issuer_dim["entity_tokens"].map(len).ge(2)].copy()
@@ -1208,9 +2334,7 @@ def build_xbrl_core_features(xbrl_fact: pd.DataFrame) -> pd.DataFrame:
     wide["xbrl_ratio_inventory_to_assets"] = _ratio(wide["inventory"], assets)
     wide["xbrl_ratio_cash_to_assets"] = _ratio(wide["cash"], assets)
     wide["xbrl_ratio_debt_to_assets"] = _ratio(wide["debt"], assets)
-    wide["xbrl_ratio_operating_cash_flow_to_assets"] = _ratio(
-        wide["operating_cash_flow"], assets
-    )
+    wide["xbrl_ratio_operating_cash_flow_to_assets"] = _ratio(wide["operating_cash_flow"], assets)
 
     value_cols = {concept: f"xbrl_value_{concept}" for concept in XBRL_CORE_TAGS}
     wide = wide.rename(columns=value_cols)
@@ -1290,63 +2414,968 @@ def _event_within_horizon(
     return flags
 
 
+def _duckdb_xbrl_summary(
+    path: Path,
+    *,
+    threads: int,
+    memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    temp_directory: Path | str | None = None,
+    max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> pd.DataFrame:
+    con = _duckdb_connect(
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
+    )
+    try:
+        return con.execute(
+            f"""
+            SELECT
+                adsh,
+                count(tag)::BIGINT AS xbrl_fact_count,
+                count(DISTINCT tag)::BIGINT AS xbrl_unique_tags,
+                count(DISTINCT unit)::BIGINT AS xbrl_unique_units
+            FROM {_duckdb_table_source(path)}
+            GROUP BY adsh
+            """
+        ).fetchdf()
+    finally:
+        con.close()
+
+
+def _duckdb_xbrl_core_facts(
+    path: Path,
+    *,
+    threads: int,
+    memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    temp_directory: Path | str | None = None,
+    max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> pd.DataFrame:
+    con = _duckdb_connect(
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
+    )
+    try:
+        frame = con.execute(
+            f"""
+            SELECT
+                adsh,
+                tag,
+                unit,
+                try_cast(value AS DOUBLE) AS value,
+                try_cast(quarters AS DOUBLE) AS quarters,
+                fact_date
+            FROM {_duckdb_table_source(path)}
+            WHERE lower(CAST(tag AS VARCHAR)) IN ({_xbrl_core_tag_sql()})
+              AND try_cast(value AS DOUBLE) IS NOT NULL
+              AND (
+                    unit IS NULL
+                    OR upper(CAST(unit AS VARCHAR)) IN ('', 'USD')
+                  )
+            """
+        ).fetchdf()
+    finally:
+        con.close()
+    if "fact_date" in frame.columns:
+        frame["fact_date"] = pd.to_datetime(frame["fact_date"], errors="coerce", format="mixed")
+    return frame
+
+
+def _duckdb_note_summary(
+    path: Path,
+    *,
+    threads: int,
+    memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    temp_directory: Path | str | None = None,
+    max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> pd.DataFrame:
+    con = _duckdb_connect(
+        threads=threads,
+        memory_limit=memory_limit,
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
+    )
+    try:
+        return con.execute(
+            f"""
+            SELECT
+                adsh,
+                count(tag)::BIGINT AS note_text_count,
+                sum(length(coalesce(CAST(note_text AS VARCHAR), '')))::BIGINT
+                    AS note_text_char_count
+            FROM {_duckdb_table_source(path)}
+            GROUP BY adsh
+            """
+        ).fetchdf()
+    finally:
+        con.close()
+
+
+def _duckdb_source_or_empty(
+    *,
+    con: Any,
+    view_name: str,
+    path: Path,
+    empty_columns: Sequence[Tuple[str, str]],
+) -> None:
+    if path.exists():
+        con.execute(f"CREATE OR REPLACE TEMP VIEW {view_name} AS SELECT * FROM {_duckdb_table_source(path)}")
+        return
+    empty_select = ", ".join(
+        f"CAST(NULL AS {sql_type}) AS {_duckdb_identifier(col)}"
+        for col, sql_type in empty_columns
+    )
+    con.execute(f"CREATE OR REPLACE TEMP VIEW {view_name} AS SELECT {empty_select} WHERE false")
+
+
+def _duckdb_copy_query_to_parquet_on_connection(con: Any, *, query: str, dest: Path) -> None:
+    dest = Path(dest)
+    remove_table_path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    con.execute(
+        f"""
+        COPY ({query})
+        TO '{_duckdb_path(dest)}'
+        (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
+
+
+def _duckdb_xbrl_core_features_query(path: Path) -> str:
+    values = []
+    for concept, tags in XBRL_CORE_TAGS.items():
+        for priority, tag in enumerate(tags):
+            values.append(
+                "("
+                f"{_duckdb_string_expr(concept)}, "
+                f"{_duckdb_string_expr(tag.lower())}, "
+                f"{int(priority)}"
+                ")"
+            )
+    tag_map = ",\n                ".join(values)
+    raw_cols = [
+        f"max(CASE WHEN concept = {_duckdb_string_expr(concept)} THEN value END) AS raw_{concept}"
+        for concept in XBRL_CORE_TAGS
+    ]
+    value_cols = []
+    coverage_cols = []
+    for concept in XBRL_CORE_TAGS:
+        if concept == "working_capital":
+            value_expr = "calc_working_capital"
+            coverage_expr = "CASE WHEN calc_working_capital IS NOT NULL THEN 1 ELSE 0 END"
+        elif concept == "debt":
+            value_expr = "calc_debt"
+            coverage_expr = "CASE WHEN debt_available THEN 1 ELSE 0 END"
+        else:
+            value_expr = f"raw_{concept}"
+            coverage_expr = f"CASE WHEN raw_{concept} IS NOT NULL THEN 1 ELSE 0 END"
+        value_cols.append(f"{value_expr} AS xbrl_value_{concept}")
+        coverage_cols.append(f"{coverage_expr} AS xbrl_coverage_{concept}")
+
+    ratio = lambda num, denom: (  # noqa: E731
+        f"CASE WHEN {denom} IS NOT NULL AND {denom} <> 0 THEN {num} / {denom} END"
+    )
+    return f"""
+        WITH tag_map(concept, tag_key, tag_priority) AS (
+            VALUES
+                {tag_map}
+        ),
+        filtered AS (
+            SELECT
+                CAST(adsh AS VARCHAR) AS adsh,
+                tag_map.concept,
+                tag_map.tag_priority,
+                try_cast(value AS DOUBLE) AS value,
+                try_cast(quarters AS DOUBLE) AS quarters,
+                try_cast(fact_date AS TIMESTAMP) AS fact_date
+            FROM {_duckdb_table_source(path)} facts
+            INNER JOIN tag_map
+                ON lower(CAST(facts.tag AS VARCHAR)) = tag_map.tag_key
+            WHERE try_cast(value AS DOUBLE) IS NOT NULL
+              AND (
+                    facts.unit IS NULL
+                    OR upper(CAST(facts.unit AS VARCHAR)) IN ('', 'USD')
+                  )
+        ),
+        ranked AS (
+            SELECT
+                *,
+                row_number() OVER (
+                    PARTITION BY adsh, concept
+                    ORDER BY tag_priority ASC, quarters DESC NULLS LAST, fact_date DESC NULLS LAST
+                ) AS rn
+            FROM filtered
+        ),
+        wide AS (
+            SELECT
+                adsh AS accession,
+                {", ".join(raw_cols)}
+            FROM ranked
+            WHERE rn = 1
+            GROUP BY adsh
+        ),
+        calculated AS (
+            SELECT
+                *,
+                COALESCE(raw_working_capital, raw_current_assets - raw_current_liabilities)
+                    AS calc_working_capital,
+                raw_debt IS NOT NULL OR raw_debt_current IS NOT NULL AS debt_available,
+                CASE
+                    WHEN raw_debt IS NOT NULL OR raw_debt_current IS NOT NULL
+                    THEN COALESCE(raw_debt, 0) + COALESCE(raw_debt_current, 0)
+                    ELSE NULL
+                END AS calc_debt
+            FROM wide
+        )
+        SELECT
+            accession,
+            {", ".join(value_cols)},
+            {", ".join(coverage_cols)},
+            CASE WHEN raw_assets > 0 THEN ln(1 + raw_assets) END AS xbrl_ratio_log_assets,
+            {ratio("raw_liabilities", "raw_assets")} AS xbrl_ratio_leverage,
+            {ratio("raw_net_income", "raw_assets")} AS xbrl_ratio_profitability,
+            {ratio("calc_working_capital", "raw_assets")} AS xbrl_ratio_working_capital_to_assets,
+            {ratio("raw_receivables", "raw_revenues")} AS xbrl_ratio_receivables_to_revenue,
+            {ratio("raw_inventory", "raw_assets")} AS xbrl_ratio_inventory_to_assets,
+            {ratio("raw_cash", "raw_assets")} AS xbrl_ratio_cash_to_assets,
+            {ratio("calc_debt", "raw_assets")} AS xbrl_ratio_debt_to_assets,
+            {ratio("raw_operating_cash_flow", "raw_assets")}
+                AS xbrl_ratio_operating_cash_flow_to_assets
+        FROM calculated
+    """
+
+
+def _create_duckdb_xbrl_summary_view(con: Any, *, silver_dir: Path) -> bool:
+    summary_path = silver_dir / "xbrl_fact_summary.parquet"
+    legacy_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
+    if summary_path.exists():
+        source = parquet_scan_sql(summary_path)
+        cols = set(_duckdb_columns(con, source))
+        accession_expr = _duckdb_identifier("accession") if "accession" in cols else "adsh"
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW xbrl_summary_gold AS
+            SELECT
+                CAST({accession_expr} AS VARCHAR) AS accession,
+                xbrl_fact_count,
+                xbrl_unique_tags,
+                xbrl_unique_units
+            FROM {source}
+            """
+        )
+        return True
+    if legacy_xbrl_path.exists():
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW xbrl_summary_gold AS
+            SELECT
+                CAST(adsh AS VARCHAR) AS accession,
+                count(tag)::BIGINT AS xbrl_fact_count,
+                count(DISTINCT tag)::BIGINT AS xbrl_unique_tags,
+                count(DISTINCT unit)::BIGINT AS xbrl_unique_units
+            FROM {_duckdb_table_source(legacy_xbrl_path)}
+            GROUP BY adsh
+            """
+        )
+        return True
+    return False
+
+
+def _create_duckdb_xbrl_core_features_view(con: Any, *, silver_dir: Path) -> bool:
+    xbrl_core_path = silver_dir / "xbrl_core_fact"
+    xbrl_core_file_path = silver_dir / "xbrl_core_fact.parquet"
+    legacy_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
+    if xbrl_core_path.exists():
+        source_path = xbrl_core_path
+    elif xbrl_core_file_path.exists():
+        source_path = xbrl_core_file_path
+    elif legacy_xbrl_path.exists():
+        source_path = legacy_xbrl_path
+    else:
+        return False
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW xbrl_core_features_gold AS
+        {_duckdb_xbrl_core_features_query(source_path)}
+        """
+    )
+    return True
+
+
+def _create_duckdb_note_summary_view(con: Any, *, silver_dir: Path) -> bool:
+    note_summary_path = silver_dir / "note_summary.parquet"
+    legacy_note_path = _preferred_table_path(silver_dir, "note_text")
+    note_text_dir = silver_dir / "note_text"
+    if note_summary_path.exists():
+        source = parquet_scan_sql(note_summary_path)
+        cols = set(_duckdb_columns(con, source))
+        accession_expr = _duckdb_identifier("accession") if "accession" in cols else "adsh"
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW note_summary_gold AS
+            SELECT
+                CAST({accession_expr} AS VARCHAR) AS accession,
+                note_text_count,
+                note_text_char_count
+            FROM {source}
+            """
+        )
+        return True
+    if legacy_note_path.exists() or note_text_dir.exists():
+        source_path = note_text_dir if note_text_dir.exists() else legacy_note_path
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW note_summary_gold AS
+            SELECT
+                CAST(adsh AS VARCHAR) AS accession,
+                count(tag)::BIGINT AS note_text_count,
+                sum(length(coalesce(CAST(note_text AS VARCHAR), '')))::BIGINT
+                    AS note_text_char_count
+            FROM {_duckdb_table_source(source_path)}
+            GROUP BY adsh
+            """
+        )
+        return True
+    return False
+
+
+def _build_gold_panels_duckdb(
+    *,
+    silver_dir: Path,
+    gold_dir: Path,
+    as_of_date: str,
+    duckdb_threads: int = 4,
+    duckdb_memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    duckdb_temp_directory: Path | str | None = None,
+    duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> Dict[str, Path]:
+    con = _duckdb_connect(
+        threads=duckdb_threads,
+        memory_limit=duckdb_memory_limit,
+        temp_directory=duckdb_temp_directory,
+        max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
+    try:
+        issuer_source = _duckdb_table_source(_preferred_table_path(silver_dir, "issuer_dim"))
+        filing_source = _duckdb_table_source(_preferred_table_path(silver_dir, "filing_dim"))
+        issuer_cols = _duckdb_columns(con, issuer_source)
+        filing_cols = _duckdb_columns(con, filing_source)
+
+        issuer_selects = []
+        for col in issuer_cols:
+            if col == "issuer_cik":
+                issuer_selects.append(f"{_duckdb_cik_expr(_duckdb_identifier(col))} AS issuer_cik")
+            else:
+                issuer_selects.append(_duckdb_identifier(col))
+        filing_selects = []
+        for col in filing_cols:
+            ident = _duckdb_identifier(col)
+            if col == "issuer_cik":
+                filing_selects.append(f"{_duckdb_cik_expr(ident)} AS issuer_cik")
+            elif col in {"filing_date", "report_date", "acceptance_datetime"}:
+                filing_selects.append(f"{_duckdb_timestamp_expr(ident)} AS {ident}")
+            else:
+                filing_selects.append(ident)
+
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW issuer_dim_gold AS
+            SELECT {", ".join(issuer_selects)}
+            FROM {issuer_source}
+            """
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW filing_dim_gold AS
+            SELECT {", ".join(filing_selects)}
+            FROM {filing_source}
+            """
+        )
+
+        period_forms = ", ".join(_duckdb_string_expr(form) for form in sorted(PERIOD_FORMS))
+        annual_forms = ", ".join(_duckdb_string_expr(form) for form in sorted(ANNUAL_FORMS))
+        fpi_forms = ", ".join(_duckdb_string_expr(form) for form in sorted(FPI_FORMS))
+        as_of_timestamp = f"try_cast({_duckdb_string_expr(as_of_date)} AS TIMESTAMP)"
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW filing_base_gold AS
+            SELECT
+                *,
+                report_date AS event_report_date,
+                CASE WHEN form IN ({period_forms}) THEN report_date ELSE NULL::TIMESTAMP END
+                    AS fiscal_period_end,
+                try_cast(date_part(
+                    'year',
+                    CASE WHEN form IN ({period_forms}) THEN report_date ELSE NULL::TIMESTAMP END
+                ) AS INTEGER) AS fiscal_year,
+                filing_date AS origin_date,
+                {as_of_timestamp} AS as_of_date,
+                CASE WHEN date_part('year', filing_date) >= 2011 THEN 1 ELSE 0 END
+                    AS source_available_xbrl,
+                CASE WHEN filing_date >= TIMESTAMP '2020-11-01' THEN 1 ELSE 0 END
+                    AS source_available_notes,
+                CASE WHEN filing_date >= TIMESTAMP '2017-01-31' THEN 1 ELSE 0 END
+                    AS source_available_form_ap,
+                CASE WHEN date_part('year', filing_date) >= 2018 THEN 1 ELSE 0 END
+                    AS source_available_pcaob_inspections,
+                CASE WHEN date_part('year', filing_date) >= 2006 THEN 1 ELSE 0 END
+                    AS source_available_insider,
+                CASE WHEN filing_date >= TIMESTAMP '2013-07-01' THEN 1 ELSE 0 END
+                    AS source_available_13f,
+                CASE
+                    WHEN date_part('year', filing_date) >= 2003
+                     AND NOT (
+                        filing_date BETWEEN TIMESTAMP '2017-07-01' AND TIMESTAMP '2020-05-18'
+                     )
+                    THEN 1 ELSE 0
+                END AS source_available_edgar_logs,
+                CASE WHEN date_part('year', filing_date) >= 2012 THEN 1 ELSE 0 END
+                    AS source_available_market_structure,
+                TIMESTAMP '2017-01-31' AS public_date_form_ap,
+                TIMESTAMP '2020-11-01' AS public_date_notes,
+                TIMESTAMP '2013-07-01' AS public_date_13f,
+                TIMESTAMP '2012-01-01' AS public_date_market_structure,
+                '2011+' AS vintage_xbrl_main_sample,
+                '2020-11+' AS vintage_notes,
+                '2017-01-31+' AS vintage_form_ap
+            FROM filing_dim_gold
+            """
+        )
+        con.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW filing_windowed_gold AS
+            SELECT
+                *,
+                date_diff(
+                    'day',
+                    lag(origin_date) OVER (
+                        PARTITION BY issuer_cik
+                        ORDER BY origin_date, accession
+                    ),
+                    origin_date
+                ) AS days_since_previous_filing,
+                row_number() OVER (
+                    PARTITION BY issuer_cik
+                    ORDER BY origin_date, accession
+                ) - 1 AS prior_filing_count
+            FROM filing_base_gold
+            """
+        )
+
+        _duckdb_source_or_empty(
+            con=con,
+            view_name="comment_thread_gold",
+            path=silver_dir / "comment_thread.csv.gz",
+            empty_columns=(
+                ("issuer_cik", "VARCHAR"),
+                ("first_public_date", "TIMESTAMP"),
+                ("last_public_date", "TIMESTAMP"),
+            ),
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW comment_thread_norm_gold AS
+            SELECT
+                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
+                {_duckdb_timestamp_expr("first_public_date")} AS first_public_date
+            FROM comment_thread_gold
+            """
+        )
+        _duckdb_source_or_empty(
+            con=con,
+            view_name="correction_event_gold",
+            path=silver_dir / "correction_event.csv.gz",
+            empty_columns=(
+                ("issuer_cik", "VARCHAR"),
+                ("public_date", "TIMESTAMP"),
+                ("correction_type", "VARCHAR"),
+            ),
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW correction_event_norm_gold AS
+            SELECT
+                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
+                {_duckdb_timestamp_expr("public_date")} AS public_date,
+                CAST(correction_type AS VARCHAR) AS correction_type
+            FROM correction_event_gold
+            """
+        )
+        _duckdb_source_or_empty(
+            con=con,
+            view_name="aaer_event_gold",
+            path=silver_dir / "aaer_event.csv.gz",
+            empty_columns=(
+                ("issuer_cik", "VARCHAR"),
+                ("event_date", "TIMESTAMP"),
+                ("release_url", "VARCHAR"),
+            ),
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW aaer_event_norm_gold AS
+            SELECT
+                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
+                {_duckdb_timestamp_expr("event_date")} AS event_date
+            FROM aaer_event_gold
+            """
+        )
+        _duckdb_source_or_empty(
+            con=con,
+            view_name="form_ap_event_gold",
+            path=_preferred_table_path(silver_dir, "form_ap_event"),
+            empty_columns=(
+                ("issuer_cik", "VARCHAR"),
+                ("fiscal_period_end", "TIMESTAMP"),
+                ("form_filing_id", "VARCHAR"),
+                ("engagement_partner_id", "VARCHAR"),
+                ("number_of_participants", "DOUBLE"),
+            ),
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW form_ap_summary_gold AS
+            SELECT
+                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
+                try_cast(date_part('year', {_duckdb_timestamp_expr("fiscal_period_end")})
+                    AS INTEGER) AS fiscal_year,
+                count(DISTINCT form_filing_id)::BIGINT AS form_ap_filing_count,
+                count(DISTINCT engagement_partner_id)::BIGINT AS form_ap_unique_partners,
+                avg(try_cast(number_of_participants AS DOUBLE)) AS form_ap_avg_participants
+            FROM form_ap_event_gold
+            GROUP BY 1, 2
+            """
+        )
+
+        has_xbrl_summary = _create_duckdb_xbrl_summary_view(con, silver_dir=silver_dir)
+        has_xbrl_features = _create_duckdb_xbrl_core_features_view(con, silver_dir=silver_dir)
+        has_note_summary = _create_duckdb_note_summary_view(con, silver_dir=silver_dir)
+
+        filing_from = "filing_windowed_gold f"
+        joins = ["LEFT JOIN form_ap_summary_gold form_ap USING (issuer_cik, fiscal_year)"]
+        if has_xbrl_summary:
+            joins.append("LEFT JOIN xbrl_summary_gold xbrl_summary USING (accession)")
+        if has_xbrl_features:
+            joins.append("LEFT JOIN xbrl_core_features_gold xbrl_core USING (accession)")
+        if has_note_summary:
+            joins.append("LEFT JOIN note_summary_gold note_summary USING (accession)")
+        joined_sql = "\n                ".join(joins)
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW filing_joined_gold AS
+            SELECT
+                f.*,
+                form_ap.form_ap_filing_count,
+                form_ap.form_ap_unique_partners,
+                form_ap.form_ap_avg_participants
+                {", xbrl_summary.* EXCLUDE (accession)" if has_xbrl_summary else ""}
+                {", xbrl_core.* EXCLUDE (accession)" if has_xbrl_features else ""}
+                {", note_summary.* EXCLUDE (accession)" if has_note_summary else ""}
+            FROM {filing_from}
+                {joined_sql}
+            """
+        )
+        if has_xbrl_features:
+            con.execute(
+                """
+                CREATE OR REPLACE TEMP VIEW filing_featured_gold AS
+                SELECT
+                    * EXCLUDE (prev_xbrl_value_revenues, prev_xbrl_value_assets),
+                    CASE
+                        WHEN prev_xbrl_value_revenues IS NOT NULL
+                         AND prev_xbrl_value_revenues <> 0
+                        THEN (xbrl_value_revenues - prev_xbrl_value_revenues)
+                             / abs(prev_xbrl_value_revenues)
+                    END AS xbrl_ratio_revenue_yoy_change,
+                    CASE
+                        WHEN xbrl_value_revenues IS NOT NULL
+                         AND prev_xbrl_value_revenues IS NOT NULL
+                         AND prev_xbrl_value_revenues <> 0
+                        THEN 1 ELSE 0
+                    END AS xbrl_coverage_revenues_yoy,
+                    CASE
+                        WHEN prev_xbrl_value_assets IS NOT NULL
+                         AND prev_xbrl_value_assets <> 0
+                        THEN (xbrl_value_assets - prev_xbrl_value_assets)
+                             / abs(prev_xbrl_value_assets)
+                    END AS xbrl_ratio_assets_yoy_change,
+                    CASE
+                        WHEN xbrl_value_assets IS NOT NULL
+                         AND prev_xbrl_value_assets IS NOT NULL
+                         AND prev_xbrl_value_assets <> 0
+                        THEN 1 ELSE 0
+                    END AS xbrl_coverage_assets_yoy
+                FROM (
+                    SELECT
+                        *,
+                        lag(xbrl_value_revenues) OVER (
+                            PARTITION BY issuer_cik
+                            ORDER BY fiscal_year, origin_date, accession
+                        ) AS prev_xbrl_value_revenues,
+                        lag(xbrl_value_assets) OVER (
+                            PARTITION BY issuer_cik
+                            ORDER BY fiscal_year, origin_date, accession
+                        ) AS prev_xbrl_value_assets
+                    FROM filing_joined_gold
+                )
+                """
+            )
+        else:
+            con.execute(
+                """
+                CREATE OR REPLACE TEMP VIEW filing_featured_gold AS
+                SELECT * FROM filing_joined_gold
+                """
+            )
+        con.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW filing_labeled_gold AS
+            SELECT
+                *,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM comment_thread_norm_gold event
+                    WHERE event.issuer_cik = filing_featured_gold.issuer_cik
+                      AND event.first_public_date > filing_featured_gold.origin_date
+                      AND event.first_public_date
+                            <= filing_featured_gold.origin_date + INTERVAL 365 DAY
+                ) THEN 1 ELSE 0 END AS label_comment_thread_365,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM correction_event_norm_gold event
+                    WHERE event.issuer_cik = filing_featured_gold.issuer_cik
+                      AND event.correction_type = 'amendment_10x_a'
+                      AND event.public_date > filing_featured_gold.origin_date
+                      AND event.public_date <= filing_featured_gold.origin_date + INTERVAL 365 DAY
+                ) THEN 1 ELSE 0 END AS label_amendment_365,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM correction_event_norm_gold event
+                    WHERE event.issuer_cik = filing_featured_gold.issuer_cik
+                      AND event.correction_type = 'nonreliance_8k_402'
+                      AND event.public_date > filing_featured_gold.origin_date
+                      AND event.public_date <= filing_featured_gold.origin_date + INTERVAL 365 DAY
+                ) THEN 1 ELSE 0 END AS label_8k_402_365,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM aaer_event_norm_gold event
+                    WHERE event.issuer_cik = filing_featured_gold.issuer_cik
+                      AND event.event_date > filing_featured_gold.origin_date
+                      AND event.event_date <= filing_featured_gold.origin_date + INTERVAL 730 DAY
+                ) THEN 1 ELSE 0 END AS label_aaer_proxy_730,
+                CASE
+                    WHEN origin_date + INTERVAL 365 DAY > as_of_date THEN 1 ELSE 0
+                END AS censored_365,
+                CASE
+                    WHEN origin_date + INTERVAL 730 DAY > as_of_date THEN 1 ELSE 0
+                END AS censored_730
+            FROM filing_featured_gold
+            """
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW issuer_annual_candidates_gold AS
+            SELECT
+                *,
+                CASE WHEN form = '10-K' THEN 0 WHEN form = '10-K/A' THEN 1 ELSE 99 END
+                    AS annual_form_priority,
+                row_number() OVER (
+                    PARTITION BY issuer_cik, fiscal_year
+                    ORDER BY
+                        CASE WHEN form = '10-K' THEN 0 WHEN form = '10-K/A' THEN 1 ELSE 99 END,
+                        origin_date,
+                        form
+                ) AS annual_row_number
+            FROM filing_labeled_gold
+            WHERE form IN ({annual_forms})
+            """
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW foreign_forms_gold AS
+            SELECT DISTINCT
+                issuer_cik,
+                COALESCE(fiscal_year, try_cast(date_part('year', event_report_date) AS INTEGER))
+                    AS fpi_year
+            FROM filing_labeled_gold
+            WHERE form IN ({fpi_forms})
+              AND COALESCE(fiscal_year, try_cast(date_part('year', event_report_date) AS INTEGER))
+                    IS NOT NULL
+            """
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW issuer_origin_gold AS
+            SELECT
+                annual.* EXCLUDE (annual_form_priority, annual_row_number),
+                CASE WHEN foreign_forms.fpi_year IS NULL THEN 0 ELSE 1 END
+                    AS issuer_has_fpi_form_year,
+                CASE
+                    WHEN foreign_forms.fpi_year IS NULL AND annual.form IN ({annual_forms})
+                    THEN 1 ELSE 0
+                END AS is_domestic_us_gaap_proxy,
+                issuer.entity_name,
+                issuer.sic,
+                issuer.sic_description,
+                issuer.entity_type
+            FROM issuer_annual_candidates_gold annual
+            LEFT JOIN foreign_forms_gold foreign_forms
+                ON annual.issuer_cik = foreign_forms.issuer_cik
+               AND annual.fiscal_year = foreign_forms.fpi_year
+            LEFT JOIN issuer_dim_gold issuer
+                ON annual.issuer_cik = issuer.issuer_cik
+            WHERE annual.annual_row_number = 1
+            """
+        )
+
+        gold_dir.mkdir(parents=True, exist_ok=True)
+        filing_path = gold_dir / "filing_origin_panel.parquet"
+        issuer_path = gold_dir / "issuer_origin_panel.parquet"
+        _duckdb_copy_query_to_parquet_on_connection(
+            con,
+            query="SELECT * FROM filing_labeled_gold ORDER BY issuer_cik, origin_date, accession",
+            dest=filing_path,
+        )
+        _duckdb_copy_query_to_parquet_on_connection(
+            con,
+            query="SELECT * FROM issuer_origin_gold ORDER BY issuer_cik, fiscal_year, accession",
+            dest=issuer_path,
+        )
+        filing_rows = int(con.execute("SELECT count(*) FROM filing_labeled_gold").fetchone()[0])
+        issuer_rows = int(con.execute("SELECT count(*) FROM issuer_origin_gold").fetchone()[0])
+    finally:
+        con.close()
+
+    metadata_path = gold_dir / "gold_metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "as_of_date": str(pd.Timestamp(as_of_date).date()),
+                "parser_version": PARSER_VERSION,
+                "schema_version": SCHEMA_VERSION,
+                "engine": "duckdb",
+                "duckdb_threads": int(duckdb_threads),
+                "xbrl_core_tag_scope": "controlled_core_tags",
+                "filing_rows": filing_rows,
+                "issuer_origin_rows": issuer_rows,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "filing_origin_panel": filing_path,
+        "issuer_origin_panel": issuer_path,
+        "gold_metadata": metadata_path,
+    }
+
+
 def build_gold_panels(
     *,
     silver_dir: Path,
     gold_dir: Path,
     as_of_date: str,
+    engine: str = "pandas",
+    duckdb_threads: int = 4,
+    duckdb_memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    duckdb_temp_directory: Path | str | None = None,
+    duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
 ) -> Dict[str, Path]:
-    issuer_dim = pd.read_csv(silver_dir / "issuer_dim.csv.gz")
+    if engine not in {"pandas", "duckdb"}:
+        raise ValueError("engine must be 'pandas' or 'duckdb'")
+    if engine == "duckdb":
+        return _build_gold_panels_duckdb(
+            silver_dir=silver_dir,
+            gold_dir=gold_dir,
+            as_of_date=as_of_date,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+        )
+    issuer_dim = _read_csv_with_engine(
+        _preferred_table_path(silver_dir, "issuer_dim"),
+        engine=engine,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
     issuer_dim["issuer_cik"] = _normalize_cik_series(issuer_dim["issuer_cik"])
-    filing_dim = pd.read_csv(
-        silver_dir / "filing_dim.csv.gz",
-        parse_dates=["filing_date", "report_date", "acceptance_datetime"],
+    filing_dim = _read_csv_with_engine(
+        _preferred_table_path(silver_dir, "filing_dim"),
+        date_cols=["filing_date", "report_date", "acceptance_datetime"],
+        engine=engine,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
     )
     comment_thread = (
-        pd.read_csv(
+        _read_csv_with_engine(
             silver_dir / "comment_thread.csv.gz",
-            parse_dates=["first_public_date", "last_public_date"],
+            date_cols=["first_public_date", "last_public_date"],
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
         if (silver_dir / "comment_thread.csv.gz").exists()
         else pd.DataFrame()
     )
     correction_event = (
-        _read_csv_with_optional_dates(
+        _read_csv_with_engine(
             silver_dir / "correction_event.csv.gz",
-            ["public_date", "report_date"],
+            date_cols=["public_date", "report_date"],
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
         if (silver_dir / "correction_event.csv.gz").exists()
         else pd.DataFrame()
     )
     form_ap_event = (
-        _read_csv_with_optional_dates(
-            silver_dir / "form_ap_event.csv.gz",
-            ["fiscal_period_end", "report_date", "filing_date"],
+        _read_csv_with_engine(
+            _preferred_table_path(silver_dir, "form_ap_event"),
+            date_cols=["fiscal_period_end", "report_date", "filing_date"],
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
-        if (silver_dir / "form_ap_event.csv.gz").exists()
+        if _preferred_table_path(silver_dir, "form_ap_event").exists()
         else pd.DataFrame()
     )
     aaer_event = (
-        _read_csv_with_optional_dates(silver_dir / "aaer_event.csv.gz", ["event_date"])
+        _read_csv_with_engine(
+            silver_dir / "aaer_event.csv.gz",
+            date_cols=["event_date"],
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+        )
         if (silver_dir / "aaer_event.csv.gz").exists()
         else pd.DataFrame()
     )
-    xbrl_fact = (
-        pd.read_csv(
-            silver_dir / "xbrl_fact.csv.gz",
-            usecols=lambda c: c in {"adsh", "tag", "unit", "value", "quarters", "fact_date"},
-            low_memory=False,
+    xbrl_summary = pd.DataFrame()
+    xbrl_core_fact = pd.DataFrame()
+    xbrl_summary_path = silver_dir / "xbrl_fact_summary.parquet"
+    xbrl_core_path = silver_dir / "xbrl_core_fact"
+    xbrl_core_file_path = silver_dir / "xbrl_core_fact.parquet"
+    legacy_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
+    if xbrl_summary_path.exists():
+        xbrl_summary = read_table(
+            xbrl_summary_path,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
-        if (silver_dir / "xbrl_fact.csv.gz").exists()
-        else pd.DataFrame()
-    )
-    note_text = (
-        pd.read_csv(
-            silver_dir / "note_text.csv.gz", usecols=lambda c: c in {"adsh", "note_text", "tag"}
+        if xbrl_core_path.exists():
+            xbrl_core_fact = _duckdb_xbrl_core_facts(
+                xbrl_core_path,
+                threads=duckdb_threads,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+        elif xbrl_core_file_path.exists():
+            xbrl_core_fact = _duckdb_xbrl_core_facts(
+                xbrl_core_file_path,
+                threads=duckdb_threads,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+    elif legacy_xbrl_path.exists():
+        if (
+            engine == "duckdb"
+            or legacy_xbrl_path.suffix.lower() == ".parquet"
+            or legacy_xbrl_path.is_dir()
+        ):
+            xbrl_summary = _duckdb_xbrl_summary(
+                legacy_xbrl_path,
+                threads=duckdb_threads,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+            xbrl_core_fact = _duckdb_xbrl_core_facts(
+                legacy_xbrl_path,
+                threads=duckdb_threads,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+        else:
+            xbrl_fact = pd.read_csv(
+                legacy_xbrl_path,
+                usecols=lambda c: c in {"adsh", "tag", "unit", "value", "quarters", "fact_date"},
+                low_memory=False,
+            )
+            xbrl_summary = (
+                xbrl_fact.groupby("adsh", as_index=False)
+                .agg(
+                    xbrl_fact_count=("tag", "size"),
+                    xbrl_unique_tags=("tag", "nunique"),
+                    xbrl_unique_units=("unit", "nunique"),
+                )
+                .rename(columns={"adsh": "accession"})
+            )
+            xbrl_core_fact = xbrl_fact
+    if not xbrl_summary.empty and "adsh" in xbrl_summary.columns:
+        xbrl_summary = xbrl_summary.rename(columns={"adsh": "accession"})
+    note_summary = pd.DataFrame()
+    note_summary_path = silver_dir / "note_summary.parquet"
+    legacy_note_path = _preferred_table_path(silver_dir, "note_text")
+    if note_summary_path.exists():
+        note_summary = read_table(
+            note_summary_path,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
-        if (silver_dir / "note_text.csv.gz").exists()
-        else pd.DataFrame()
-    )
+    elif legacy_note_path.exists():
+        if (
+            engine == "duckdb"
+            or legacy_note_path.suffix.lower() == ".parquet"
+            or legacy_note_path.is_dir()
+        ):
+            note_summary = _duckdb_note_summary(
+                legacy_note_path,
+                threads=duckdb_threads,
+                memory_limit=duckdb_memory_limit,
+                temp_directory=duckdb_temp_directory,
+                max_temp_directory_size=duckdb_max_temp_directory_size,
+            )
+        else:
+            note_text = pd.read_csv(
+                legacy_note_path, usecols=lambda c: c in {"adsh", "note_text", "tag"}
+            )
+            note_summary = (
+                note_text.groupby("adsh", as_index=False)
+                .agg(
+                    note_text_count=("tag", "size"),
+                    note_text_char_count=(
+                        "note_text",
+                        lambda s: int(s.fillna("").astype(str).str.len().sum()),
+                    ),
+                )
+                .rename(columns={"adsh": "accession"})
+            )
+    if not note_summary.empty and "adsh" in note_summary.columns:
+        note_summary = note_summary.rename(columns={"adsh": "accession"})
 
     filing = filing_dim.copy()
     filing["issuer_cik"] = _normalize_cik_series(filing["issuer_cik"])
@@ -1401,34 +3430,14 @@ def build_gold_panels(
     )
     filing["prior_filing_count"] = filing.groupby("issuer_cik").cumcount()
 
-    if not xbrl_fact.empty:
-        xbrl_summary = (
-            xbrl_fact.groupby("adsh", as_index=False)
-            .agg(
-                xbrl_fact_count=("tag", "size"),
-                xbrl_unique_tags=("tag", "nunique"),
-                xbrl_unique_units=("unit", "nunique"),
-            )
-            .rename(columns={"adsh": "accession"})
-        )
+    if not xbrl_summary.empty:
         filing = filing.merge(xbrl_summary, on="accession", how="left")
-        xbrl_core_features = build_xbrl_core_features(xbrl_fact)
+        xbrl_core_features = build_xbrl_core_features(xbrl_core_fact)
         if not xbrl_core_features.empty:
             filing = filing.merge(xbrl_core_features, on="accession", how="left")
             filing = add_xbrl_yoy_ratio_features(filing)
 
-    if not note_text.empty:
-        note_summary = (
-            note_text.groupby("adsh", as_index=False)
-            .agg(
-                note_text_count=("tag", "size"),
-                note_text_char_count=(
-                    "note_text",
-                    lambda s: int(s.fillna("").astype(str).str.len().sum()),
-                ),
-            )
-            .rename(columns={"adsh": "accession"})
-        )
+    if not note_summary.empty:
         filing = filing.merge(note_summary, on="accession", how="left")
 
     if not form_ap_event.empty:
@@ -1521,10 +3530,10 @@ def build_gold_panels(
     )
 
     gold_dir.mkdir(parents=True, exist_ok=True)
-    filing_path = gold_dir / "filing_origin_panel.csv.gz"
-    issuer_path = gold_dir / "issuer_origin_panel.csv.gz"
-    filing.to_csv(filing_path, index=False, compression="gzip")
-    issuer_panel.to_csv(issuer_path, index=False, compression="gzip")
+    filing_path = gold_dir / "filing_origin_panel.parquet"
+    issuer_path = gold_dir / "issuer_origin_panel.parquet"
+    write_table(filing, filing_path)
+    write_table(issuer_panel, issuer_path)
     metadata_path = gold_dir / "gold_metadata.json"
     metadata_path.write_text(
         json.dumps(
@@ -1532,6 +3541,9 @@ def build_gold_panels(
                 "as_of_date": str(pd.Timestamp(as_of_date).date()),
                 "parser_version": PARSER_VERSION,
                 "schema_version": SCHEMA_VERSION,
+                "engine": engine,
+                "duckdb_threads": int(duckdb_threads) if engine == "duckdb" else None,
+                "xbrl_core_tag_scope": "controlled_core_tags",
                 "filing_rows": int(len(filing)),
                 "issuer_origin_rows": int(len(issuer_panel)),
             },
@@ -1554,41 +3566,71 @@ def build_public_lake(
     gold_dir: Path,
     as_of_date: str,
     submissions_max_ciks: Optional[int] = None,
+    engine: str = "duckdb",
+    duckdb_threads: int = 4,
+    duckdb_memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    duckdb_temp_directory: Path | str | None = None,
+    duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+    storage_format: str = "parquet",
+    notes_mode: str = "summary",
+    fsds_batch_size: int = DEFAULT_FSDS_BATCH_SIZE,
+    notes_batch_size: int = DEFAULT_NOTES_BATCH_SIZE,
+    fresh_build: bool = False,
+    resume: bool = False,
 ) -> Dict[str, Path]:
-    outputs: Dict[str, Path] = {}
+    if engine not in {"pandas", "duckdb"}:
+        raise ValueError("engine must be 'pandas' or 'duckdb'")
+    if storage_format not in {"parquet", "csv-gz"}:
+        raise ValueError("storage_format must be 'parquet' or 'csv-gz'")
+    if notes_mode not in {"summary", "raw", "skip"}:
+        raise ValueError("notes_mode must be 'summary', 'raw', or 'skip'")
+    if storage_format == "parquet" and engine != "duckdb":
+        raise ValueError("storage_format='parquet' requires engine='duckdb'")
+    if fsds_batch_size < 1 or notes_batch_size < 1:
+        raise ValueError("fsds_batch_size and notes_batch_size must be positive")
+
+    resolved_duckdb_temp_directory = duckdb_temp_directory
+    if engine == "duckdb" and resolved_duckdb_temp_directory is None:
+        resolved_duckdb_temp_directory = silver_dir / "._duckdb_tmp"
+
+    if fresh_build:
+        remove_table_path(silver_dir)
+        remove_table_path(gold_dir)
     silver_dir.mkdir(parents=True, exist_ok=True)
 
-    submissions_zip = bronze_dir / "sec-bulk" / "submissions.zip"
-    if submissions_zip.exists():
-        _verify_metadata_hash(submissions_zip)
-        outputs.update(
-            normalize_submissions_bulk(
-                submissions_zip=submissions_zip,
-                silver_dir=silver_dir,
-                max_ciks=submissions_max_ciks,
+    def normalize_submissions_task() -> Dict[str, Path]:
+        submissions_zip = bronze_dir / "sec-bulk" / "submissions.zip"
+        if not submissions_zip.exists():
+            raise FileNotFoundError(
+                "Expected bronze/sec-bulk/submissions.zip before building the public lake."
             )
-        )
-    else:
-        raise FileNotFoundError(
-            "Expected bronze/sec-bulk/submissions.zip before building the public lake."
+        _verify_metadata_hash(submissions_zip)
+        return normalize_submissions_bulk(
+            submissions_zip=submissions_zip,
+            silver_dir=silver_dir,
+            max_ciks=submissions_max_ciks,
         )
 
-    form_ap_csv = bronze_dir / "form-ap" / "FirmFilings.csv"
-    if not form_ap_csv.exists():
-        extracted = bronze_dir / "form-ap" / "FirmFilings.zip"
-        if extracted.exists():
-            _verify_metadata_hash(extracted)
-            with zipfile.ZipFile(extracted) as zf:
-                if "FirmFilings.csv" in zf.namelist():
-                    zf.extract("FirmFilings.csv", path=bronze_dir / "form-ap")
-    if form_ap_csv.exists():
+    def normalize_form_ap_task() -> Dict[str, Path]:
+        form_ap_csv = bronze_dir / "form-ap" / "FirmFilings.csv"
+        if not form_ap_csv.exists():
+            extracted = bronze_dir / "form-ap" / "FirmFilings.zip"
+            if extracted.exists():
+                _verify_metadata_hash(extracted)
+                with zipfile.ZipFile(extracted) as zf:
+                    if "FirmFilings.csv" in zf.namelist():
+                        zf.extract("FirmFilings.csv", path=bronze_dir / "form-ap")
+        if not form_ap_csv.exists():
+            return {}
         _verify_metadata_hash(form_ap_csv)
-        outputs["form_ap_event"] = normalize_form_ap_csv(
-            form_ap_csv=form_ap_csv, silver_dir=silver_dir
-        )
+        return {
+            "form_ap_event": normalize_form_ap_csv(form_ap_csv=form_ap_csv, silver_dir=silver_dir)
+        }
 
-    inspection_manifest = bronze_dir / "pcaob-inspections" / "manifest.csv"
-    if inspection_manifest.exists():
+    def normalize_inspections_task() -> Dict[str, Path]:
+        inspection_manifest = bronze_dir / "pcaob-inspections" / "manifest.csv"
+        if not inspection_manifest.exists():
+            return {}
         manifest = pd.read_csv(inspection_manifest)
         for _, row in manifest.iterrows():
             path = Path(row["local_path"])
@@ -1596,55 +3638,153 @@ def build_public_lake(
                 continue
             if path.suffix.lower() in {".csv", ".json", ".xml", ".xlsx"}:
                 _verify_metadata_hash(path)
-                outputs["pcaob_inspection_event"] = normalize_pcaob_inspection_file(
-                    inspection_path=path,
-                    silver_dir=silver_dir,
-                )
-                break
+                return {
+                    "pcaob_inspection_event": normalize_pcaob_inspection_file(
+                        inspection_path=path,
+                        silver_dir=silver_dir,
+                    )
+                }
+        return {}
 
-    fsds_manifest = bronze_dir / "fsds" / "manifest.csv"
-    if fsds_manifest.exists():
-        outputs.update(
-            _normalize_manifest_archives(
+    def normalize_fsds_task() -> Dict[str, Path]:
+        fsds_manifest = bronze_dir / "fsds" / "manifest.csv"
+        if not fsds_manifest.exists():
+            return {}
+        if storage_format == "parquet":
+            return _normalize_fsds_manifest_parquet(
                 manifest_csv=fsds_manifest,
                 silver_dir=silver_dir,
-                normalizer_name="fsds",
+                duckdb_threads=duckdb_threads,
+                duckdb_memory_limit=duckdb_memory_limit,
+                duckdb_temp_directory=resolved_duckdb_temp_directory,
+                duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+                batch_size=fsds_batch_size,
+                resume=resume,
             )
+        return _normalize_manifest_archives(
+            manifest_csv=fsds_manifest,
+            silver_dir=silver_dir,
+            normalizer_name="fsds",
+            engine=engine,
+            duckdb_threads=duckdb_threads,
         )
 
-    notes_manifest = bronze_dir / "notes" / "manifest.csv"
-    if notes_manifest.exists():
-        outputs.update(
-            _normalize_manifest_archives(
+    def normalize_notes_task() -> Dict[str, Path]:
+        notes_manifest = bronze_dir / "notes" / "manifest.csv"
+        if not notes_manifest.exists():
+            return {}
+        if storage_format == "parquet":
+            return _normalize_notes_manifest_parquet(
                 manifest_csv=notes_manifest,
                 silver_dir=silver_dir,
-                normalizer_name="notes",
+                duckdb_threads=duckdb_threads,
+                notes_mode=notes_mode,
+                duckdb_memory_limit=duckdb_memory_limit,
+                duckdb_temp_directory=resolved_duckdb_temp_directory,
+                duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+                batch_size=notes_batch_size,
+                resume=resume,
             )
+        return _normalize_manifest_archives(
+            manifest_csv=notes_manifest,
+            silver_dir=silver_dir,
+            normalizer_name="notes",
+            engine=engine,
+            duckdb_threads=duckdb_threads,
         )
 
-    outputs["comment_thread"] = build_comment_threads(
-        filing_dim_csv=silver_dir / "filing_dim.csv.gz",
-        silver_dir=silver_dir,
-    )
-    outputs["correction_event"] = build_correction_events(
-        filing_dim_csv=silver_dir / "filing_dim.csv.gz",
-        silver_dir=silver_dir,
-    )
-    outputs["aaer_event"] = normalize_aaer_events(
-        aaer_bronze_dir=bronze_dir / "aaer",
-        silver_dir=silver_dir,
-        issuer_dim_csv=silver_dir / "issuer_dim.csv.gz",
-    )
-    for filename, cols in EMPTY_TABLE_SCHEMAS.items():
-        path = silver_dir / filename
-        if not path.exists():
-            pd.DataFrame(columns=list(cols)).to_csv(path, index=False, compression="gzip")
-        outputs[path.stem.replace(".csv", "")] = path
-    outputs.update(
-        build_gold_panels(
+    def derived_tables_task() -> Dict[str, Path]:
+        return {
+            "comment_thread": build_comment_threads(
+                filing_dim_csv=_preferred_table_path(silver_dir, "filing_dim"),
+                silver_dir=silver_dir,
+            ),
+            "correction_event": build_correction_events(
+                filing_dim_csv=_preferred_table_path(silver_dir, "filing_dim"),
+                silver_dir=silver_dir,
+            ),
+            "aaer_event": normalize_aaer_events(
+                aaer_bronze_dir=bronze_dir / "aaer",
+                silver_dir=silver_dir,
+                issuer_dim_path=_preferred_table_path(silver_dir, "issuer_dim"),
+            ),
+        }
+
+    def empty_tables_task() -> Dict[str, Path]:
+        task_outputs: Dict[str, Path] = {}
+        for filename, cols in EMPTY_TABLE_SCHEMAS.items():
+            path = silver_dir / filename
+            if not path.exists():
+                pd.DataFrame(columns=list(cols)).to_csv(path, index=False, compression="gzip")
+            task_outputs[path.stem.replace(".csv", "")] = path
+        return task_outputs
+
+    def gold_task() -> Dict[str, Path]:
+        return build_gold_panels(
             silver_dir=silver_dir,
             gold_dir=gold_dir,
             as_of_date=as_of_date,
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=resolved_duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
-    )
-    return outputs
+
+    def metadata_task() -> Dict[str, Path]:
+        run_metadata = silver_dir / "public_lake_run_metadata.json"
+        run_metadata.write_text(
+            json.dumps(
+                {
+                    "as_of_date": str(pd.Timestamp(as_of_date).date()),
+                    "engine": engine,
+                    "duckdb_threads": int(duckdb_threads) if engine == "duckdb" else None,
+                    "duckdb_memory_limit": duckdb_memory_limit if engine == "duckdb" else None,
+                    "duckdb_temp_directory": str(resolved_duckdb_temp_directory)
+                    if engine == "duckdb"
+                    else None,
+                    "duckdb_max_temp_directory_size": duckdb_max_temp_directory_size
+                    if engine == "duckdb"
+                    else None,
+                    "parser_version": PARSER_VERSION,
+                    "schema_version": SCHEMA_VERSION,
+                    "storage_format": storage_format,
+                    "notes_mode": notes_mode,
+                    "fsds_batch_size": int(fsds_batch_size),
+                    "notes_batch_size": int(notes_batch_size),
+                    "fresh_build": bool(fresh_build),
+                    "resume": bool(resume),
+                    "xbrl_core_tag_scope": "controlled_core_tags",
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return {"public_lake_run_metadata": run_metadata}
+
+    tasks = [
+        DagTask("normalize_submissions", (), normalize_submissions_task),
+        DagTask("normalize_form_ap", (), normalize_form_ap_task),
+        DagTask("normalize_inspections", (), normalize_inspections_task),
+        DagTask("normalize_fsds", (), normalize_fsds_task),
+        DagTask("normalize_notes", (), normalize_notes_task),
+        DagTask("derived_tables", ("normalize_submissions",), derived_tables_task),
+        DagTask("empty_tables", ("derived_tables",), empty_tables_task),
+        DagTask(
+            "build_gold",
+            (
+                "normalize_submissions",
+                "normalize_form_ap",
+                "normalize_inspections",
+                "normalize_fsds",
+                "normalize_notes",
+                "derived_tables",
+                "empty_tables",
+            ),
+            gold_task,
+        ),
+        DagTask("write_metadata", ("build_gold",), metadata_task),
+    ]
+    runner = SimpleDagRunner(state_dir=silver_dir / ".public_lake_dag", resume=resume)
+    return runner.run(tasks)

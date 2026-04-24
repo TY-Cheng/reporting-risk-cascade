@@ -46,12 +46,12 @@ DEFAULT_CONFIG_PATH = (
     .resolve()
 )
 RAW_DATASET_PATH = (
-    Path(os.getenv("RAW_DATASET_PATH") or DATA_DIR / "raw_dataset_misstatement.csv")
+    Path(os.getenv("RAW_DATASET_PATH") or DATA_DIR / "raw_dataset_misstatement.parquet")
     .expanduser()
     .resolve()
 )
 SAMPLE_DATASET_PATH = (
-    Path(os.getenv("SAMPLE_DATASET_PATH") or ARTIFACTS_DIR / "sample_dataset_misstatement.csv")
+    Path(os.getenv("SAMPLE_DATASET_PATH") or ARTIFACTS_DIR / "sample_dataset_misstatement.parquet")
     .expanduser()
     .resolve()
 )

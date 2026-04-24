@@ -70,6 +70,27 @@ def _count_csv_rows(path: Path) -> int:
     return int(total)
 
 
+def _count_parquet_rows(path: Path) -> int:
+    if not path.exists():
+        return 0
+    _bootstrap_repo_root()
+    from src.table_io import parquet_scan_sql
+
+    import duckdb
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        return int(con.execute(f"SELECT count(*) FROM {parquet_scan_sql(path)}").fetchone()[0])
+    finally:
+        con.close()
+
+
+def _count_table_rows(path: Path) -> int:
+    if path.suffix.lower() == ".parquet" or path.is_dir():
+        return _count_parquet_rows(path)
+    return _count_csv_rows(path)
+
+
 def _manifest_rows(bronze_dir: Path) -> Dict[str, int]:
     rows: Dict[str, int] = {}
     if not bronze_dir.exists():
@@ -126,15 +147,20 @@ def _rss_kib(pid: int) -> int:
 
 def _row_count_report(silver_dir: Path, gold_dir: Path) -> Dict[str, int]:
     targets = {
-        "issuer_dim": silver_dir / "issuer_dim.csv.gz",
-        "filing_dim": silver_dir / "filing_dim.csv.gz",
+        "issuer_dim": silver_dir / "issuer_dim.parquet",
+        "filing_dim": silver_dir / "filing_dim.parquet",
+        "filing_xbrl_dim": silver_dir / "filing_xbrl_dim.parquet",
+        "xbrl_fact_summary": silver_dir / "xbrl_fact_summary.parquet",
+        "xbrl_core_fact": silver_dir / "xbrl_core_fact",
+        "notes_filing_dim": silver_dir / "notes_filing_dim.parquet",
+        "note_summary": silver_dir / "note_summary.parquet",
         "comment_thread": silver_dir / "comment_thread.csv.gz",
         "correction_event": silver_dir / "correction_event.csv.gz",
         "aaer_event": silver_dir / "aaer_event.csv.gz",
-        "issuer_origin_panel": gold_dir / "issuer_origin_panel.csv.gz",
-        "filing_origin_panel": gold_dir / "filing_origin_panel.csv.gz",
+        "issuer_origin_panel": gold_dir / "issuer_origin_panel.parquet",
+        "filing_origin_panel": gold_dir / "filing_origin_panel.parquet",
     }
-    return {name: _count_csv_rows(path) for name, path in targets.items() if path.exists()}
+    return {name: _count_table_rows(path) for name, path in targets.items() if path.exists()}
 
 
 def _snapshot(args: argparse.Namespace, *, include_row_counts: bool = False) -> Dict[str, object]:

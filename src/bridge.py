@@ -16,6 +16,8 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 import pandas as pd
 
+from .table_io import read_table
+
 
 RAW_CIK_COLS = ("issuer_cik", "cik", "CIK")
 RAW_TICKER_COLS = ("ticker", "tic", "TICKER", "TIC")
@@ -94,10 +96,23 @@ def _parse_tickers(value: object) -> List[str]:
     return [ticker for ticker in tickers if ticker]
 
 
-def _read_csv_if_exists(path: Optional[Path]) -> pd.DataFrame:
+def _read_table_if_exists(path: Optional[Path]) -> pd.DataFrame:
     if path is None or not path.exists():
         return pd.DataFrame()
-    return pd.read_csv(path, low_memory=False)
+    return read_table(path, low_memory=False)
+
+
+def _resolve_optional_path_arg(
+    *,
+    preferred_name: str,
+    preferred_value: Optional[Path],
+    legacy_name: str,
+    legacy_value: Optional[Path],
+) -> Optional[Path]:
+    if preferred_value is not None and legacy_value is not None:
+        if Path(preferred_value) != Path(legacy_value):
+            raise ValueError(f"Pass only one of {preferred_name} or deprecated {legacy_name}.")
+    return preferred_value if preferred_value is not None else legacy_value
 
 
 def _raw_identifier_columns(raw: pd.DataFrame) -> Dict[str, Optional[str]]:
@@ -368,8 +383,11 @@ def _write_blocker_outputs(
 
 def run_bridge_probe(
     *,
-    raw_csv: Path,
+    raw_data_path: Optional[Path] = None,
     out_dir: Path,
+    issuer_dim_path: Optional[Path] = None,
+    issuer_origin_panel_path: Optional[Path] = None,
+    raw_csv: Optional[Path] = None,
     issuer_dim_csv: Optional[Path] = None,
     issuer_origin_panel_csv: Optional[Path] = None,
     firm_col: str = "gvkey",
@@ -379,14 +397,35 @@ def run_bridge_probe(
     """Run a public-only bridge feasibility audit and write required reports."""
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    raw = pd.read_csv(raw_csv, low_memory=False)
+    raw_data_path = _resolve_optional_path_arg(
+        preferred_name="raw_data_path",
+        preferred_value=raw_data_path,
+        legacy_name="raw_csv",
+        legacy_value=raw_csv,
+    )
+    issuer_dim_path = _resolve_optional_path_arg(
+        preferred_name="issuer_dim_path",
+        preferred_value=issuer_dim_path,
+        legacy_name="issuer_dim_csv",
+        legacy_value=issuer_dim_csv,
+    )
+    issuer_origin_panel_path = _resolve_optional_path_arg(
+        preferred_name="issuer_origin_panel_path",
+        preferred_value=issuer_origin_panel_path,
+        legacy_name="issuer_origin_panel_csv",
+        legacy_value=issuer_origin_panel_csv,
+    )
+    if raw_data_path is None:
+        raise ValueError("raw_data_path is required.")
+
+    raw = read_table(raw_data_path, low_memory=False)
     raw_identifier_cols = _raw_identifier_columns(raw)
     if not any(raw_identifier_cols.values()):
         return _write_blocker_outputs(
             out_dir=out_dir,
             raw=raw,
             status="raw_identifier_blocker",
-            blocker="raw CSV has no CIK, ticker, company-name, or CUSIP columns",
+            blocker="raw table has no CIK, ticker, company-name, or CUSIP columns",
             firm_col=firm_col,
             year_col=year_col,
             target_col=target_col,
@@ -394,9 +433,9 @@ def run_bridge_probe(
             public_rows=0,
         )
 
-    public = _read_csv_if_exists(issuer_dim_csv)
+    public = _read_table_if_exists(issuer_dim_path)
     if public.empty:
-        public = _read_csv_if_exists(issuer_origin_panel_csv)
+        public = _read_table_if_exists(issuer_origin_panel_path)
     public_ids = _public_identifier_frame(public)
     if public_ids.empty:
         return _write_blocker_outputs(

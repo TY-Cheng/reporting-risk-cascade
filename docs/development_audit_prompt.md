@@ -27,7 +27,8 @@ Data Availability Stance:
 This audit is public-data-first. Assume no WRDS, Audit Analytics, CRSP,
 Compustat, FactSet, Refinitiv, RavenPack, or similar institutional database
 access unless the user explicitly says otherwise. The core reproducible spine is
-public SEC/PCAOB/EDGAR data plus the local raw_dataset_misstatement.csv. Do not
+public SEC/PCAOB/EDGAR data plus the local raw_dataset_misstatement.parquet benchmark
+layer, converted from the legacy CSV when needed. Do not
 treat absence of WRDS or Audit Analytics as a code bug. Treat paid APIs only as
 an optional accelerator, validation aid, or enrichment path after current public
 data blockers are identified.
@@ -68,7 +69,7 @@ or license review, treat it as a separate data-acquisition budget review rather
 than part of this repo audit.
 
 Repository context:
-- Main raw benchmark data: data/raw_dataset_misstatement.csv
+- Main raw benchmark data: data/raw_dataset_misstatement.parquet
 - Current paper plan: docs/paper_plan.md
 - Deferred roadmap: docs/future_work.md
 - Main command surface: justfile
@@ -102,14 +103,14 @@ Required first pass:
 2. Read README.md and justfile to understand the public workflow.
 3. Inspect the configs and implementation modules listed above.
 4. Inspect tests to see which invariants are actually locked.
-5. Inspect the raw CSV schema and basic row counts without loading more data than
+5. Inspect the raw benchmark schema and basic row counts without loading more data than
    needed. At minimum report rows, columns, required identifier columns, target
    column, res_an* columns, missing_* flags, and whether any raw-side CIK/ticker/
    company-name/CUSIP/PERMNO fields exist.
-6. If data/public_lake exists, report whether issuer_origin_panel and
-   filing_origin_panel exist and whether public cascade labels have nonzero
-   positives. If the lake is missing, report that as a data-readiness blocker,
-   not a code failure.
+6. If data/public_lake exists, report whether Parquet gold panels
+   issuer_origin_panel.parquet and filing_origin_panel.parquet exist and whether
+   public cascade labels have nonzero positives. If the lake is missing, report
+   that as a data-readiness blocker, not a code failure.
 
 Audit dimensions:
 
@@ -118,7 +119,7 @@ Audit dimensions:
 - Do not invent data availability.
 - Do not recommend paid data as required for the current v1 paper.
 - Distinguish code bugs from data constraints. Example: missing gvkey-CIK bridge
-  inputs in raw_dataset_misstatement.csv are a blocker to integration, not proof
+  inputs in raw_dataset_misstatement.parquet are a blocker to integration, not proof
   that the public lake design is wrong.
 
 1. Paper-plan compliance

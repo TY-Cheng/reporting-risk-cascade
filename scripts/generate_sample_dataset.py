@@ -19,11 +19,13 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import RAW_DATASET_PATH, SAMPLE_DATASET_PATH, SEED_DEFAULT
+    from src import SEED_DEFAULT
 
     parser = argparse.ArgumentParser(description="Generate the runtime sample dataset")
-    parser.add_argument("--raw-csv", type=Path, default=RAW_DATASET_PATH)
-    parser.add_argument("--out-csv", type=Path, default=SAMPLE_DATASET_PATH)
+    parser.add_argument("--raw-data", type=Path, default=None)
+    parser.add_argument("--raw-csv", type=Path, default=None, help="Deprecated alias for --raw-data")
+    parser.add_argument("--out-data", type=Path, default=None)
+    parser.add_argument("--out-csv", type=Path, default=None, help="Deprecated alias for --out-data")
     parser.add_argument("--firm-col", default="gvkey")
     parser.add_argument("--n-firms", type=int, default=500)
     parser.add_argument("--seed", type=int, default=SEED_DEFAULT)
@@ -36,9 +38,23 @@ def main() -> None:
     from src.sample_dataset import materialize_sample_dataset
 
     args = parse_args()
+    raw_data = args.raw_data or args.raw_csv
+    out_data = args.out_data or args.out_csv
+    if raw_data is None:
+        from src import DATA_DIR, RAW_DATASET_PATH
+        from src.table_io import read_table, write_table
+
+        raw_data = RAW_DATASET_PATH
+        legacy_csv = DATA_DIR / "raw_dataset_misstatement.csv"
+        if not raw_data.exists() and raw_data.suffix.lower() == ".parquet" and legacy_csv.exists():
+            write_table(read_table(legacy_csv, low_memory=False), raw_data)
+    if out_data is None:
+        from src import SAMPLE_DATASET_PATH
+
+        out_data = SAMPLE_DATASET_PATH
     summary = materialize_sample_dataset(
-        raw_csv=args.raw_csv,
-        out_csv=args.out_csv,
+        raw_csv=raw_data,
+        out_csv=out_data,
         firm_col=args.firm_col,
         n_firms=args.n_firms,
         seed=args.seed,

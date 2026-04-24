@@ -7,6 +7,8 @@ analysis:
   candidate_train_windows: [null, 5, 7, 10]
   min_train_years: 5
   feature_sets: ["metadata", "xbrl", "auditor", "oversight", "all"]
+  parallel_jobs: 2
+  seed_policy: "task_isolated"
 
 model:
   seed: 42
@@ -18,5 +20,5 @@ model:
     colsample_bytree: 0.8
     min_child_weight: 5.0
     reg_lambda: 1.0
-    n_jobs: -1
+    n_jobs: 4
     tree_method: "hist"

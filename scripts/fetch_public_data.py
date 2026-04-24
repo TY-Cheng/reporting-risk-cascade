@@ -122,18 +122,142 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Optional cap when normalizing submissions.zip into silver/gold",
     )
+    parser.add_argument(
+        "--engine",
+        choices=["pandas", "duckdb"],
+        default=None,
+        help="Public-lake build engine; defaults to config lake.engine",
+    )
+    parser.add_argument(
+        "--duckdb-threads",
+        type=int,
+        default=0,
+        help="DuckDB PRAGMA threads for build-lake; defaults to config lake.duckdb_threads",
+    )
+    parser.add_argument(
+        "--duckdb-memory-limit",
+        type=str,
+        default=None,
+        help="DuckDB memory_limit for build-lake; defaults to config lake.duckdb_memory_limit",
+    )
+    parser.add_argument(
+        "--duckdb-temp-directory",
+        type=Path,
+        default=None,
+        help="DuckDB temp_directory for build-lake; defaults to silver-local temp storage",
+    )
+    parser.add_argument(
+        "--duckdb-max-temp-size",
+        type=str,
+        default=None,
+        help="DuckDB max_temp_directory_size for build-lake; defaults to config",
+    )
+    parser.add_argument(
+        "--storage-format",
+        choices=["parquet", "csv-gz"],
+        default=None,
+        help=(
+            "Heavy-table storage format; parquet is the production default. "
+            "csv-gz is a legacy fallback for small oracle tests."
+        ),
+    )
+    parser.add_argument(
+        "--notes-mode",
+        choices=["summary", "raw", "skip"],
+        default=None,
+        help="Notes extraction mode for Parquet builds; defaults to config lake.notes_mode",
+    )
+    parser.add_argument(
+        "--fresh-build",
+        action="store_true",
+        help="Rebuild silver/gold layers from bronze without re-downloading bronze",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reuse build-lake DAG done markers for completed tasks",
+    )
+    parser.add_argument(
+        "--fsds-batch-size",
+        type=int,
+        default=0,
+        help="FSDS archive batch size for Parquet builds; defaults to config lake.fsds_batch_size",
+    )
+    parser.add_argument(
+        "--notes-batch-size",
+        type=int,
+        default=0,
+        help="Notes archive batch size for Parquet builds; defaults to config lake.notes_batch_size",
+    )
     return parser.parse_args()
+
+
+def _load_lake_config(config_path: Path) -> dict:
+    if config_path.exists():
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        return config.get("lake", {}) or {}
+    return {}
 
 
 def _resolve_as_of_date(config_path: Path, explicit: str | None) -> str:
     if explicit:
         return explicit
-    if config_path.exists():
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        lake_cfg = config.get("lake", {})
-        if lake_cfg.get("as_of_date"):
-            return str(lake_cfg["as_of_date"])
+    lake_cfg = _load_lake_config(config_path)
+    if lake_cfg.get("as_of_date"):
+        return str(lake_cfg["as_of_date"])
     return date.today().isoformat()
+
+
+def _resolve_engine(config_path: Path, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    lake_cfg = _load_lake_config(config_path)
+    return str(lake_cfg.get("engine", "duckdb"))
+
+
+def _resolve_duckdb_threads(config_path: Path, explicit: int) -> int:
+    if explicit > 0:
+        return int(explicit)
+    lake_cfg = _load_lake_config(config_path)
+    return int(lake_cfg.get("duckdb_threads", 4))
+
+
+def _resolve_string_config(config_path: Path, explicit: str | None, key: str, default: str) -> str:
+    if explicit is not None:
+        return explicit
+    lake_cfg = _load_lake_config(config_path)
+    return str(lake_cfg.get(key, default))
+
+
+def _resolve_path_config(config_path: Path, explicit: Path | None, key: str) -> Path | None:
+    if explicit is not None:
+        return explicit
+    lake_cfg = _load_lake_config(config_path)
+    value = lake_cfg.get(key)
+    if value is None or str(value).strip() == "":
+        return None
+    return Path(str(value))
+
+
+def _resolve_storage_format(config_path: Path, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    lake_cfg = _load_lake_config(config_path)
+    return str(lake_cfg.get("storage_format", "parquet"))
+
+
+def _resolve_notes_mode(config_path: Path, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    lake_cfg = _load_lake_config(config_path)
+    return str(lake_cfg.get("notes_mode", "summary"))
+
+
+def _resolve_batch_size(config_path: Path, explicit: int, key: str, default: int) -> int:
+    if explicit > 0:
+        return int(explicit)
+    lake_cfg = _load_lake_config(config_path)
+    return int(lake_cfg.get(key, default))
 
 
 def main() -> None:
@@ -175,6 +299,25 @@ def main() -> None:
 
     if args.mode == "build-lake":
         as_of_date = _resolve_as_of_date(args.config, args.as_of_date)
+        engine = _resolve_engine(args.config, args.engine)
+        duckdb_threads = _resolve_duckdb_threads(args.config, args.duckdb_threads)
+        duckdb_memory_limit = _resolve_string_config(
+            args.config, args.duckdb_memory_limit, "duckdb_memory_limit", "10GB"
+        )
+        duckdb_temp_directory = _resolve_path_config(
+            args.config, args.duckdb_temp_directory, "duckdb_temp_directory"
+        )
+        duckdb_max_temp_size = _resolve_string_config(
+            args.config, args.duckdb_max_temp_size, "duckdb_max_temp_directory_size", "50GB"
+        )
+        storage_format = _resolve_storage_format(args.config, args.storage_format)
+        notes_mode = _resolve_notes_mode(args.config, args.notes_mode)
+        fsds_batch_size = _resolve_batch_size(
+            args.config, args.fsds_batch_size, "fsds_batch_size", 4
+        )
+        notes_batch_size = _resolve_batch_size(
+            args.config, args.notes_batch_size, "notes_batch_size", 2
+        )
         outputs = build_public_lake(
             bronze_dir=args.bronze_dir,
             silver_dir=args.silver_dir,
@@ -183,6 +326,17 @@ def main() -> None:
             submissions_max_ciks=args.submissions_max_ciks
             if args.submissions_max_ciks > 0
             else None,
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_size,
+            storage_format=storage_format,
+            notes_mode=notes_mode,
+            fsds_batch_size=fsds_batch_size,
+            notes_batch_size=notes_batch_size,
+            fresh_build=args.fresh_build,
+            resume=args.resume,
         )
         print(json.dumps({k: str(v) for k, v in outputs.items()}, indent=2))
         return

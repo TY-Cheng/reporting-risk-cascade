@@ -34,6 +34,9 @@
 
     The public paper is gated by gold-panel availability, zero-positive tasks,
     and the eventual `gvkey-CIK-year` bridge. The docs should make those gates obvious.
+    Large public-lake panels are Parquet-first so repeated full runs do not spend
+    most of their time decompressing and rewriting gzip CSV; the DuckDB path now
+    builds the Gold panels directly in SQL before writing Parquet.
 
     [:octicons-arrow-right-24: Jump to readiness](#readiness-snapshot)
 
@@ -71,13 +74,21 @@
     just docs
     ```
 
+=== "Complete path"
+
+    ```bash
+    just full smoke sample artifacts/full_smoke_sample
+    just full full raw artifacts/full
+    just full mode="smoke" dataset="sample" out_dir="artifacts/full_smoke_sample" fetch_workers="2" model_jobs="2" model_threads="4" engine="duckdb" storage_format="parquet" notes_mode="summary" fresh_build="1" duckdb_memory_limit="10GB" duckdb_max_temp_size="50GB" fsds_batch_size="4" notes_batch_size="2"
+    ```
+
 === "Public-lake path"
 
     ```bash
     just fetch sec-bulk
     just fetch form-ap
     just fetch build-lake
-    bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200
+    bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200 --fetch-workers 2 --engine duckdb --duckdb-threads 4 --duckdb-memory-limit 10GB --duckdb-max-temp-size 50GB --fsds-batch-size 4 --notes-batch-size 2 --storage-format parquet --notes-mode summary --fresh-build
     ```
 
 === "Docs path"

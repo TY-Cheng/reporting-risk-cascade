@@ -21,25 +21,31 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import ARTIFACTS_DIR, LAKE_GOLD_DIR, LAKE_SILVER_DIR, RAW_DATASET_PATH
+    from src import ARTIFACTS_DIR, LAKE_GOLD_DIR, LAKE_SILVER_DIR
 
     parser = argparse.ArgumentParser(description="Run public-only gvkey-CIK bridge probe")
     parser.add_argument(
+        "--raw-data",
+        type=Path,
+        default=None,
+        help="Old gvkey firm-year table",
+    )
+    parser.add_argument(
         "--raw-csv",
         type=Path,
-        default=RAW_DATASET_PATH,
-        help="Old gvkey firm-year CSV",
+        default=None,
+        help="Deprecated alias for --raw-data",
     )
     parser.add_argument(
         "--issuer-dim",
         type=Path,
-        default=LAKE_SILVER_DIR / "issuer_dim.csv.gz",
+        default=LAKE_SILVER_DIR / "issuer_dim.parquet",
         help="Public-lake silver issuer dimension",
     )
     parser.add_argument(
         "--issuer-origin-panel",
         type=Path,
-        default=LAKE_GOLD_DIR / "issuer_origin_panel.csv.gz",
+        default=LAKE_GOLD_DIR / "issuer_origin_panel.parquet",
         help="Fallback public-lake gold issuer panel",
     )
     parser.add_argument(
@@ -55,12 +61,14 @@ def main() -> None:
     _bootstrap_repo_root()
 
     from src.bridge import run_bridge_probe
+    from src import RAW_DATASET_PATH
 
     args = parse_args()
+    raw_data = args.raw_data or args.raw_csv or RAW_DATASET_PATH
     summary = run_bridge_probe(
-        raw_csv=args.raw_csv,
-        issuer_dim_csv=args.issuer_dim,
-        issuer_origin_panel_csv=args.issuer_origin_panel,
+        raw_data_path=raw_data,
+        issuer_dim_path=args.issuer_dim,
+        issuer_origin_panel_path=args.issuer_origin_panel,
         out_dir=args.out_dir,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

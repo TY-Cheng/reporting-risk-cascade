@@ -73,7 +73,8 @@ The paper combines two evidence layers:
 - **Public cascade layer:** SEC and PCAOB public data, used to construct a filing-native
   public scrutiny and correction process.
 
-The old CSV is not discarded. It is used as a disciplined benchmark and validation layer.
+The old benchmark panel is not discarded. It is stored as Parquet after local CSV conversion
+and used as a disciplined benchmark and validation layer.
 The public lake is the paper's main measurement innovation.
 
 ## Evidence State And Decision Gate
@@ -82,9 +83,9 @@ The project is deliberately staged into three evidence states.
 
 1. **Benchmark evidence available**
 
-- The raw `gvkey x data_year` CSV supports benchmark prediction, drift diagnostics, and
+- The raw `gvkey x data_year` benchmark panel supports benchmark prediction, drift diagnostics, and
   missingness analysis.
-- Because the raw CSV has no public restatement filing dates and `res_an*` is sparse on
+- Because the raw benchmark panel has no public restatement filing dates and `res_an*` is sparse on
   same-row positives, the benchmark can show timing fragility but cannot claim paper-grade
   label maturation in P0.
 
@@ -232,7 +233,7 @@ Official source constraints used by this plan:
 
 ### Existing Benchmark Data
 
-`data/raw_dataset_misstatement.csv`
+`data/raw_dataset_misstatement.parquet`
 
 - Grain: `gvkey x data_year`
 - Coverage: 2001-2019
@@ -255,8 +256,12 @@ Required columns:
 - Bronze: raw downloaded files plus source URL, download timestamp, SHA256 hash, parser
   version, schema version, and as-of date.
 - Silver: normalized filing, issuer, XBRL, note, comment-thread, correction-event, Form AP,
-  PCAOB inspection, and AAER proxy tables.
-- Gold: model-ready `issuer_origin_panel` and `filing_origin_panel`.
+  PCAOB inspection, and AAER proxy tables. Large Silver tables are Parquet-first
+  to avoid repeated gzip CSV decompression and dtype inference.
+- Gold: model-ready `issuer_origin_panel.parquet` and `filing_origin_panel.parquet`;
+  DuckDB builds the default Gold path in SQL, including XBRL core-tag feature
+  pivoting and label-horizon joins, then writes Parquet directly. Small
+  diagnostics remain CSV/JSON/Markdown.
 
 Required public sources for v1:
 
@@ -294,7 +299,7 @@ Default v1 bridge route:
 
 - Run a public-only bridge probe first; it is a coverage feasibility audit, not an
   authoritative historical crosswalk.
-- With the current raw CSV, the expected first output is `raw_identifier_blocker` because
+- With the current raw benchmark panel, the expected first output is `raw_identifier_blocker` because
   the raw benchmark has no CIK, ticker, company name, CUSIP, or PERMNO columns.
 - If raw-side company identifiers are added later, use public SEC ticker/CIK/company-name
   data to construct a provenance-tagged candidate bridge.
@@ -321,7 +326,7 @@ Default v1 bridge route:
 ### Benchmark Timing-Sensitivity Algorithm
 
 `res_an0` to `res_an3` are not treated as a verified label-maturation system in P0. The raw
-CSV shape shows that most positive firm-years do not have same-row `res_an*` timing flags,
+The raw panel shape shows that most positive firm-years do not have same-row `res_an*` timing flags,
 so this path is a codebook-dependent sensitivity proxy.
 
 ```text
@@ -350,7 +355,7 @@ Benchmark outputs must include `timing_coverage.csv` and a summary field
 `timing_claim_status` with allowed values `external_timing`, `proxy_sensitivity`, or
 `blocked`. The main benchmark claim is therefore: traditional restatement benchmarks are
 timing-fragile under observable timing proxies. It is not that label maturation has been
-fully solved in the raw CSV.
+fully solved in the raw benchmark panel.
 
 ### Public Cascade Labels
 
@@ -467,7 +472,7 @@ Goal:
 
 Design:
 
-- dataset: old CSV
+- dataset: old benchmark panel, stored as Parquet after local CSV conversion
 - models: XGBoost classifier with controlled hyperparameters
 - train windows: expanding, rolling 5-year, rolling 7-year, rolling 10-year
 - test slices: annual out-of-time slices
@@ -621,7 +626,7 @@ Goal:
 Design:
 
 - first run the public-only bridge probe
-- if the raw CSV lacks CIK/ticker/name/CUSIP, emit `raw_identifier_blocker` and stop
+- if the raw benchmark panel lacks CIK/ticker/name/CUSIP, emit `raw_identifier_blocker` and stop
 - if candidate identifiers exist, build a provenance-tagged candidate bridge and report
   coverage and join multiplicity before modeling
 - test whether old positives are followed by public cascade events
@@ -687,7 +692,7 @@ Current combined workflow:
 ```bash
 just status
 just analysis benchmark raw artifacts/benchmark
-bash scripts/run_public_lake_full.sh --mode full
+bash scripts/run_public_lake_full.sh --mode full --duckdb-memory-limit 10GB --duckdb-max-temp-size 50GB --fsds-batch-size 4 --notes-batch-size 2
 just analysis bridge raw artifacts/bridge_probe
 just analysis study raw artifacts/study
 ```
@@ -727,7 +732,7 @@ Data integrity:
 - censoring masks are applied per horizon
 - source availability is recorded as state, not treated as ordinary missingness
 - crosswalk coverage is reported before overlap validation
-- current raw CSV bridge probe reports `raw_identifier_blocker` until raw-side company
+- current raw benchmark bridge probe reports `raw_identifier_blocker` until raw-side company
   identifiers are supplied
 
 Empirical sufficiency:

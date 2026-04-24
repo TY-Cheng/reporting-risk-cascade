@@ -10,7 +10,9 @@ authors = [{ name = "Tuoyuan Cheng", email = "tuoyuan.cheng@nus.edu.sg" }]
 description = "Public reporting-risk cascade and timing-aware misstatement benchmark workflow."
 readme = "README.md"
 dependencies = [
+    "duckdb>=1.2,<2",
     "imbalanced-learn>=0.12,<1",
+    "joblib>=1.4,<2",
     "lightgbm>=4,<5",
     "numpy>=2,<3",
     "pandas>=2.2,<3",
@@ -24,7 +26,13 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ipykernel>=6,<7", "matplotlib>=3.8,<4", "pytest>=8,<9", "ruff>=0.11,<1"]
+dev = [
+    "ipykernel>=6,<7",
+    "matplotlib>=3.8,<4",
+    "pytest>=8,<9",
+    "pytest-cov>=6,<8",
+    "ruff>=0.11,<1",
+]
 docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5,<10", "pymdown-extensions>=10.15,<11"]
 
 [tool.uv]
@@ -44,3 +52,19 @@ docstring-code-line-length = 99
 [tool.ruff.lint.pycodestyle]
 max-doc-length = 99
 max-line-length = 99
+
+[tool.coverage.run]
+source = [
+    "src.benchmark",
+    "src.bridge",
+    "src.data_prep",
+    "src.public_cascade",
+    "src.sample_dataset",
+    "src.table_io",
+]
+
+[tool.coverage.report]
+fail_under = 95
+precision = 2
+show_missing = true
+skip_covered = true

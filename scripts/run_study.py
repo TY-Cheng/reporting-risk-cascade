@@ -46,7 +46,9 @@ def parse_args() -> argparse.Namespace:
 
     from src import ARTIFACTS_DIR, PROJECT_ROOT
 
-    parser = argparse.ArgumentParser(description="Run the benchmark + public cascade study workflow")
+    parser = argparse.ArgumentParser(
+        description="Run the benchmark + public cascade study workflow"
+    )
     parser.add_argument(
         "--config",
         type=Path,
@@ -66,10 +68,16 @@ def parse_args() -> argparse.Namespace:
         help="Path to the public cascade YAML config",
     )
     parser.add_argument(
+        "--raw-data",
+        type=Path,
+        default=None,
+        help="Path to the old gvkey firm-year table",
+    )
+    parser.add_argument(
         "--raw-csv",
         type=Path,
         default=None,
-        help="Path to the old gvkey firm-year CSV",
+        help="Deprecated alias for --raw-data",
     )
     parser.add_argument(
         "--timing-csv",
@@ -108,6 +116,24 @@ def parse_args() -> argparse.Namespace:
         help="Do not rerun public cascade",
     )
     parser.add_argument("--skip-bridge-probe", action="store_true", help="Do not run bridge probe")
+    parser.add_argument(
+        "--parallel-jobs",
+        type=int,
+        default=None,
+        help="Outer model workers for benchmark and public cascade",
+    )
+    parser.add_argument(
+        "--model-threads",
+        type=int,
+        default=None,
+        help="Threads per model fit for benchmark and public cascade",
+    )
+    parser.add_argument(
+        "--seed-policy",
+        choices=["task-isolated", "legacy"],
+        default=None,
+        help="Random seed policy for model tasks",
+    )
     return parser.parse_args()
 
 
@@ -176,26 +202,25 @@ def main() -> None:
     inputs = cfg.get("inputs", {})
     outputs = cfg.get("outputs", {})
 
+    raw_data_arg = args.raw_data or args.raw_csv
     raw_csv = _resolve_project_path(
-        args.raw_csv or inputs.get("raw_csv"),
+        raw_data_arg or inputs.get("raw_data") or inputs.get("raw_csv"),
         default=RAW_DATASET_PATH,
     )
     issuer_origin_panel = _resolve_project_path(
         args.issuer_origin_panel or inputs.get("issuer_origin_panel"),
-        default=LAKE_GOLD_DIR / "issuer_origin_panel.csv.gz",
+        default=LAKE_GOLD_DIR / "issuer_origin_panel.parquet",
     )
     issuer_dim = _resolve_project_path(
         args.issuer_dim or inputs.get("issuer_dim"),
-        default=LAKE_SILVER_DIR / "issuer_dim.csv.gz",
+        default=LAKE_SILVER_DIR / "issuer_dim.parquet",
     )
     crosswalk = _resolve_project_path(
         args.crosswalk or inputs.get("gvkey_cik_crosswalk"),
         default=REPO_ROOT / "data" / "external" / "gvkey_cik_year.csv",
     )
     benchmark_out = args.out_dir / str(outputs.get("benchmark_subdir", "benchmark"))
-    public_cascade_out = args.out_dir / str(
-        outputs.get("public_cascade_subdir", "public_cascade")
-    )
+    public_cascade_out = args.out_dir / str(outputs.get("public_cascade_subdir", "public_cascade"))
     bridge_probe_out = args.out_dir / str(outputs.get("bridge_probe_subdir", "bridge_probe"))
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,21 +233,29 @@ def main() -> None:
             "bridge_probe": {"status": "skipped" if args.skip_bridge_probe else "pending"},
         },
         "inputs": {
-            "raw_csv": str(raw_csv),
+            "raw_data": str(raw_csv),
             "issuer_dim": str(issuer_dim),
             "issuer_origin_panel": str(issuer_origin_panel),
             "crosswalk": str(crosswalk),
+        },
+        "runtime": {
+            "parallel_jobs": args.parallel_jobs,
+            "model_threads": args.model_threads,
+            "seed_policy": args.seed_policy,
         },
     }
 
     if not args.skip_benchmark:
         if not raw_csv.exists():
-            raise FileNotFoundError(f"benchmark raw CSV not found: {raw_csv}")
+            raise FileNotFoundError(f"benchmark raw table not found: {raw_csv}")
         run_benchmark(
             config_path=args.benchmark_config,
             raw_csv=raw_csv,
             out_dir=benchmark_out,
             timing_csv=args.timing_csv,
+            parallel_jobs=args.parallel_jobs,
+            model_threads=args.model_threads,
+            seed_policy=args.seed_policy.replace("-", "_") if args.seed_policy else None,
         )
         manifest["components"]["benchmark"] = {
             "status": "complete",
@@ -237,8 +270,11 @@ def main() -> None:
             )
         run_public_cascade(
             config_path=args.public_cascade_config,
-            issuer_origin_panel_csv=issuer_origin_panel,
+            issuer_origin_panel_path=issuer_origin_panel,
             out_dir=public_cascade_out,
+            parallel_jobs=args.parallel_jobs,
+            model_threads=args.model_threads,
+            seed_policy=args.seed_policy.replace("-", "_") if args.seed_policy else None,
         )
         manifest["components"]["public_cascade"] = {
             "status": "complete",
@@ -247,12 +283,12 @@ def main() -> None:
 
     if not args.skip_bridge_probe:
         if not raw_csv.exists():
-            raise FileNotFoundError(f"bridge raw CSV not found: {raw_csv}")
+            raise FileNotFoundError(f"bridge raw table not found: {raw_csv}")
         bridge_summary = run_bridge_probe(
-            raw_csv=raw_csv,
+            raw_data_path=raw_csv,
             out_dir=bridge_probe_out,
-            issuer_dim_csv=issuer_dim,
-            issuer_origin_panel_csv=issuer_origin_panel,
+            issuer_dim_path=issuer_dim,
+            issuer_origin_panel_path=issuer_origin_panel,
         )
         manifest["components"]["bridge_probe"] = {
             "status": bridge_summary.get("status", "unknown"),

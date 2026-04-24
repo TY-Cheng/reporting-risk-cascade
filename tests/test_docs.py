@@ -9,12 +9,26 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+class _MkDocsYamlLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_python_name(loader: yaml.Loader, suffix: str, node: yaml.Node) -> str:
+    return suffix
+
+
+_MkDocsYamlLoader.add_multi_constructor(
+    "tag:yaml.org,2002:python/name:",
+    _construct_python_name,
+)
+
+
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8")
 
 
 def _read_yaml(path: str) -> dict:
-    return yaml.load(_read(path), Loader=yaml.Loader)
+    return yaml.load(_read(path), Loader=_MkDocsYamlLoader)
 
 
 def _read_toml(path: str) -> dict:
@@ -122,10 +136,13 @@ def test_readme_home_explains_project_and_workflow() -> None:
         "Research Spine",
         "Layout",
         "5-Minute Workflow",
+        "Complete Workflow",
         "Public Lake Run",
         "Main Outputs",
         "Current Priorities",
         "pre-disclosure reporting-risk state",
+        "just full smoke sample artifacts/full_smoke_sample",
+        "just full full raw artifacts/full",
         "just analysis study raw",
     ]
     for phrase in required_phrases:

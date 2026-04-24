@@ -29,7 +29,7 @@ This manuscript audit is public-data-first. Assume the current paper does not
 have WRDS, Audit Analytics, CRSP, Compustat, FactSet, Refinitiv, RavenPack, or
 other institutional data unless the user explicitly provides it. The paper's
 current reproducible evidence must come from public SEC/PCAOB/EDGAR sources and
-the local raw_dataset_misstatement.csv benchmark layer.
+the local raw_dataset_misstatement.parquet benchmark layer.
 Do not make absence of WRDS/Audit Analytics sound like a fatal manuscript flaw.
 Do not recommend paid data as required for the current v1 paper.
 Paid APIs and institutional databases may appear only as optional validation,

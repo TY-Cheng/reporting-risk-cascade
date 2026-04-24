@@ -26,10 +26,11 @@ and market-attention extensions are in `docs/future_work.md`.
 
 The current paper combines two evidence layers.
 
-**Benchmark layer:** `data/raw_dataset_misstatement.csv` is a `gvkey x data_year`
-panel covering 2001-2019. It is used to show why traditional pooled restatement
-prediction is fragile: labels are delayed, positive rates drift, and missingness is
-economically meaningful.
+**Benchmark layer:** `data/raw_dataset_misstatement.parquet` is a `gvkey x data_year`
+panel covering 2001-2019. It is converted from the legacy local
+`data/raw_dataset_misstatement.csv` when needed. It is used to show why traditional
+pooled restatement prediction is fragile: labels are delayed, positive rates drift,
+and missingness is economically meaningful.
 
 **Public cascade layer:** public SEC and PCAOB data are organized around filing-native
 keys: `issuer_cik`, `accession/adsh`, `filing_date`, `report_date`,
@@ -56,6 +57,8 @@ doc/          local reference PDFs
 
 Use `just` as the front door. It loads `.env`, uses the configured external
 `UV_PROJECT_ENVIRONMENT`, and runs `ruff` after mutating or analysis recipes.
+`just check` also runs the pytest coverage gate; the fast unit surface must stay
+at or above 95% coverage.
 
 ```bash
 cp .env.example .env
@@ -63,10 +66,16 @@ just setup
 just status
 ```
 
-The required local raw input is:
+The default local raw input is:
 
 ```text
-data/raw_dataset_misstatement.csv
+data/raw_dataset_misstatement.parquet
+```
+
+If only the legacy CSV exists, convert it once:
+
+```bash
+uv run python scripts/convert_raw_dataset.py
 ```
 
 ## 5-Minute Workflow
@@ -94,6 +103,41 @@ just analysis study raw artifacts/study
 just docs
 ```
 
+## Complete Workflow
+
+`just full` is the restartable end-to-end entrypoint. It runs setup, runs the
+pytest coverage gate, builds the public lake, then runs the combined benchmark,
+public-cascade, and bridge-probe study workflow. Defaults are Mac-conservative:
+two outer model workers, four
+threads per model fit, two public-source fetch workers, DuckDB Parquet for the
+public-lake build, `10GB` DuckDB memory, `50GB` DuckDB temp spill, FSDS batches
+of four archives, and Notes batches of two archives.
+
+For a clean-clone smoke run without the local raw benchmark CSV:
+
+```bash
+cp .env.example .env
+just status
+just full smoke sample artifacts/full_smoke_sample
+```
+
+For the paper-facing run, first place the local benchmark input at
+`data/raw_dataset_misstatement.parquet` or place the legacy CSV at
+`data/raw_dataset_misstatement.csv` and let `just full` convert it, then run:
+
+```bash
+just full full raw artifacts/full
+```
+
+Prefer named overrides when changing performance settings:
+
+```bash
+just full mode="smoke" dataset="sample" out_dir="artifacts/full_smoke_sample" fetch_workers="2" model_jobs="2" model_threads="4" engine="duckdb" storage_format="parquet" notes_mode="summary" fresh_build="1" duckdb_memory_limit="10GB" duckdb_max_temp_size="50GB" fsds_batch_size="4" notes_batch_size="2"
+```
+
+The full public run downloads SEC/PCAOB source files and can take a long time.
+Use the smoke mode first when validating a new machine or GitHub checkout.
+
 ## Public Lake Run
 
 For the full public lake, use the operational script so logs and monitoring are
@@ -101,14 +145,24 @@ captured.
 
 ```bash
 bash scripts/run_public_lake_full.sh --dry-run
-bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200
+bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200 --fetch-workers 2 --engine duckdb --duckdb-threads 4 --duckdb-memory-limit 10GB --duckdb-max-temp-size 50GB --fsds-batch-size 4 --notes-batch-size 2 --storage-format parquet --notes-mode summary --fresh-build
 nohup bash scripts/run_public_lake_full.sh --mode full > artifacts/logs/public_lake_full/nohup.log 2>&1 &
 ```
 
-The first full lake includes SEC bulk submissions, FSDS, Notes, Form AP, PCAOB
-inspections, and AAER proxy events. It intentionally excludes raw filing HTML, 13F,
-insider transactions, EDGAR logs, and market-structure data until the gold panel
-coverage is validated.
+The first full lake includes SEC bulk submissions, FSDS, Notes summaries, Form AP,
+PCAOB inspections, and AAER proxy events. Large Silver and Gold tables use
+Parquet by default: `issuer_dim.parquet`, `filing_dim.parquet`,
+`form_ap_event.parquet`, `xbrl_fact_summary.parquet`, batch-sharded
+`xbrl_core_fact/`, `note_summary.parquet`, `issuer_origin_panel.parquet`, and
+`filing_origin_panel.parquet`. Parquet is the project default for tables that can
+grow past roughly 10MB because it avoids repeated gzip CSV decompression, keeps
+types stable, lets DuckDB project only needed columns, and is much faster to
+resume/read in the modeling workflow. The default DuckDB build also constructs
+the Gold filing/issuer panels in SQL and writes Parquet directly, including the
+XBRL core-tag pivot and label-horizon joins, so the workflow does not round-trip
+large intermediate panels through Pandas. Small diagnostics and human-readable
+summary/status files remain CSV/JSON/Markdown. Notes raw text is skipped unless
+`notes_mode="raw"` is requested.
 
 ## Main Outputs
 
@@ -121,9 +175,10 @@ Benchmark:
 
 Public cascade:
 
-- `data/public_lake/gold/issuer_origin_panel.csv.gz`
-- `data/public_lake/gold/filing_origin_panel.csv.gz`
+- `data/public_lake/gold/issuer_origin_panel.parquet`
+- `data/public_lake/gold/filing_origin_panel.parquet`
 - `artifacts/public_cascade/public_cascade_metrics.csv`
+- `artifacts/public_cascade/public_cascade_predictions.parquet`
 - `artifacts/public_cascade/public_cascade_summary.md`
 
 Bridge probe:

@@ -7,6 +7,20 @@ SUBMISSIONS_MAX_CIKS=""
 DRY_RUN=0
 FORCE=0
 MONITOR_INTERVAL=60
+SKIP_PUBLIC_CASCADE=0
+FETCH_WORKERS=2
+ENGINE="duckdb"
+DUCKDB_THREADS=4
+DUCKDB_MEMORY_LIMIT="10GB"
+DUCKDB_TEMP_DIRECTORY=""
+DUCKDB_MAX_TEMP_SIZE="50GB"
+SKIP_SETUP=0
+STORAGE_FORMAT="parquet"
+NOTES_MODE="summary"
+FSDS_BATCH_SIZE=4
+NOTES_BATCH_SIZE=2
+FRESH_BUILD=0
+RESUME=0
 
 usage() {
     cat <<'EOF'
@@ -19,6 +33,20 @@ Options:
   --dry-run                      Print commands without executing them.
   --force                        Re-download source files even when cached.
   --monitor-interval SECONDS     Background monitor interval. Default: 60.
+  --skip-public-cascade          Build the public lake only; leave modeling to run_study.py.
+  --fetch-workers N              Concurrent source fetch jobs. Default: 2.
+  --engine pandas|duckdb         Public-lake build engine. Default: duckdb.
+  --duckdb-threads N             DuckDB PRAGMA threads for build-lake. Default: 4.
+  --duckdb-memory-limit SIZE     DuckDB memory_limit for build-lake. Default: 10GB.
+  --duckdb-temp-directory PATH   DuckDB temp_directory. Default: silver-local temp dir.
+  --duckdb-max-temp-size SIZE    DuckDB max_temp_directory_size. Default: 50GB.
+  --storage-format parquet|csv-gz Heavy-table storage format. Default: parquet; csv-gz is legacy.
+  --notes-mode summary|raw|skip   Notes extraction mode. Default: summary.
+  --fsds-batch-size N            FSDS archive batch size for Parquet builds. Default: 4.
+  --notes-batch-size N           Notes archive batch size for Parquet builds. Default: 2.
+  --fresh-build                  Rebuild silver/gold from bronze without force-fetching bronze.
+  --resume                       Reuse build-lake DAG done markers.
+  --skip-setup                   Skip just setup; useful when called from just full.
   -h, --help                     Show this help.
 EOF
 }
@@ -45,6 +73,62 @@ while [[ $# -gt 0 ]]; do
             FORCE=1
             shift
             ;;
+        --skip-public-cascade)
+            SKIP_PUBLIC_CASCADE=1
+            shift
+            ;;
+        --fetch-workers)
+            FETCH_WORKERS="$2"
+            shift 2
+            ;;
+        --engine)
+            ENGINE="$2"
+            shift 2
+            ;;
+        --duckdb-threads)
+            DUCKDB_THREADS="$2"
+            shift 2
+            ;;
+        --duckdb-memory-limit)
+            DUCKDB_MEMORY_LIMIT="$2"
+            shift 2
+            ;;
+        --duckdb-temp-directory)
+            DUCKDB_TEMP_DIRECTORY="$2"
+            shift 2
+            ;;
+        --duckdb-max-temp-size)
+            DUCKDB_MAX_TEMP_SIZE="$2"
+            shift 2
+            ;;
+        --storage-format)
+            STORAGE_FORMAT="$2"
+            shift 2
+            ;;
+        --notes-mode)
+            NOTES_MODE="$2"
+            shift 2
+            ;;
+        --fsds-batch-size)
+            FSDS_BATCH_SIZE="$2"
+            shift 2
+            ;;
+        --notes-batch-size)
+            NOTES_BATCH_SIZE="$2"
+            shift 2
+            ;;
+        --fresh-build)
+            FRESH_BUILD=1
+            shift
+            ;;
+        --resume)
+            RESUME=1
+            shift
+            ;;
+        --skip-setup)
+            SKIP_SETUP=1
+            shift
+            ;;
         --monitor-interval)
             MONITOR_INTERVAL="$2"
             shift 2
@@ -63,6 +147,38 @@ done
 
 if [[ "$MODE" != "full" && "$MODE" != "smoke" ]]; then
     echo "--mode must be full or smoke" >&2
+    exit 2
+fi
+if [[ "$ENGINE" != "pandas" && "$ENGINE" != "duckdb" ]]; then
+    echo "--engine must be pandas or duckdb" >&2
+    exit 2
+fi
+if [[ "$STORAGE_FORMAT" != "parquet" && "$STORAGE_FORMAT" != "csv-gz" ]]; then
+    echo "--storage-format must be parquet or csv-gz" >&2
+    exit 2
+fi
+if [[ "$NOTES_MODE" != "summary" && "$NOTES_MODE" != "raw" && "$NOTES_MODE" != "skip" ]]; then
+    echo "--notes-mode must be summary, raw, or skip" >&2
+    exit 2
+fi
+if [[ "$STORAGE_FORMAT" = "parquet" && "$ENGINE" != "duckdb" ]]; then
+    echo "--storage-format parquet requires --engine duckdb" >&2
+    exit 2
+fi
+if ! [[ "$FETCH_WORKERS" =~ ^[0-9]+$ ]] || [[ "$FETCH_WORKERS" -lt 1 ]]; then
+    echo "--fetch-workers must be a positive integer" >&2
+    exit 2
+fi
+if ! [[ "$DUCKDB_THREADS" =~ ^[0-9]+$ ]] || [[ "$DUCKDB_THREADS" -lt 1 ]]; then
+    echo "--duckdb-threads must be a positive integer" >&2
+    exit 2
+fi
+if ! [[ "$FSDS_BATCH_SIZE" =~ ^[0-9]+$ ]] || [[ "$FSDS_BATCH_SIZE" -lt 1 ]]; then
+    echo "--fsds-batch-size must be a positive integer" >&2
+    exit 2
+fi
+if ! [[ "$NOTES_BATCH_SIZE" =~ ^[0-9]+$ ]] || [[ "$NOTES_BATCH_SIZE" -lt 1 ]]; then
+    echo "--notes-batch-size must be a positive integer" >&2
     exit 2
 fi
 
@@ -117,6 +233,9 @@ else
     CASCADE_OUT="artifacts/public_cascade_full"
     SOURCE_LIMIT_EXTRA=""
 fi
+if [[ "$ENGINE" = "duckdb" && -z "$DUCKDB_TEMP_DIRECTORY" ]]; then
+    DUCKDB_TEMP_DIRECTORY="${SILVER_DIR}/._duckdb_tmp"
+fi
 
 BASE_DIR_EXTRA="--bronze-dir ${BRONZE_DIR} --silver-dir ${SILVER_DIR} --gold-dir ${GOLD_DIR}"
 FORCE_EXTRA=""
@@ -136,10 +255,79 @@ run_step() {
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] END ${name}"
 }
 
-run_just_fetch() {
+fetch_command() {
     local source="$1"
     local extra="$2"
-    run_step "fetch:${source}" just fetch "$source" "${BASE_DIR_EXTRA} ${extra} ${FORCE_EXTRA}"
+    # extra is controlled by this script and intentionally split into CLI tokens.
+    # shellcheck disable=SC2086
+    uv run python scripts/fetch_public_data.py \
+        --mode "$source" \
+        --bronze-dir "$BRONZE_DIR" \
+        --silver-dir "$SILVER_DIR" \
+        --gold-dir "$GOLD_DIR" \
+        ${extra} ${FORCE_EXTRA}
+}
+
+active_pids=()
+active_names=()
+active_logs=()
+fetch_failures=0
+
+wait_for_fetch_slot() {
+    if [[ "${#active_pids[@]}" -ge "$FETCH_WORKERS" ]]; then
+        wait_for_all_fetches
+    fi
+}
+
+start_fetch() {
+    local source="$1"
+    local extra="$2"
+    local log="$LOG_DIR/fetch_${source}.log"
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+        wait_for_fetch_slot
+    fi
+    echo
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] START fetch:${source}"
+    echo "+ uv run python scripts/fetch_public_data.py --mode ${source} ${BASE_DIR_EXTRA} ${extra} ${FORCE_EXTRA}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] END fetch:${source}"
+        return
+    fi
+    (
+        set -euo pipefail
+        fetch_command "$source" "$extra"
+    ) >"$log" 2>&1 &
+    active_pids+=("$!")
+    active_names+=("$source")
+    active_logs+=("$log")
+}
+
+wait_for_all_fetches() {
+    local idx pid name log status
+    for idx in "${!active_pids[@]}"; do
+        pid="${active_pids[$idx]}"
+        name="${active_names[$idx]}"
+        log="${active_logs[$idx]}"
+        set +e
+        wait "$pid"
+        status="$?"
+        set -e
+        if [[ "$status" -eq 0 ]]; then
+            echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] END fetch:${name}"
+        else
+            echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] FAIL fetch:${name} status=${status}"
+            echo "--- ${log} ---"
+            tail -n 80 "$log" || true
+            fetch_failures=$((fetch_failures + 1))
+        fi
+    done
+    active_pids=()
+    active_names=()
+    active_logs=()
+    if [[ "$fetch_failures" -gt 0 ]]; then
+        echo "${fetch_failures} fetch source(s) failed; build-lake will not start." >&2
+        exit 1
+    fi
 }
 
 echo "Run ID: ${RUN_ID}"
@@ -150,6 +338,20 @@ echo "Silver: ${SILVER_DIR}"
 echo "Gold: ${GOLD_DIR}"
 echo "Dry run: ${DRY_RUN}"
 echo "Force: ${FORCE}"
+echo "Skip public cascade: ${SKIP_PUBLIC_CASCADE}"
+echo "Fetch workers: ${FETCH_WORKERS}"
+echo "Engine: ${ENGINE}"
+echo "DuckDB threads: ${DUCKDB_THREADS}"
+echo "DuckDB memory limit: ${DUCKDB_MEMORY_LIMIT}"
+echo "DuckDB temp directory: ${DUCKDB_TEMP_DIRECTORY:-<not set>}"
+echo "DuckDB max temp size: ${DUCKDB_MAX_TEMP_SIZE}"
+echo "Storage format: ${STORAGE_FORMAT}"
+echo "Notes mode: ${NOTES_MODE}"
+echo "FSDS batch size: ${FSDS_BATCH_SIZE}"
+echo "Notes batch size: ${NOTES_BATCH_SIZE}"
+echo "Fresh build: ${FRESH_BUILD}"
+echo "Resume: ${RESUME}"
+echo "Skip setup: ${SKIP_SETUP}"
 
 MONITOR_PID=""
 if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -164,23 +366,53 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     trap 'if [[ -n "${MONITOR_PID}" ]]; then kill "${MONITOR_PID}" 2>/dev/null || true; fi' EXIT
 fi
 
-run_step "setup" just setup
-run_step "status" just status
-run_just_fetch "sec-bulk" ""
-run_just_fetch "form-ap" ""
-run_just_fetch "aaer" "${SOURCE_LIMIT_EXTRA}"
-run_just_fetch "pcaob-inspections" "${SOURCE_LIMIT_EXTRA}"
-run_just_fetch "fsds" "--start-year 2011 --end-year 2023 ${SOURCE_LIMIT_EXTRA}"
-run_just_fetch "notes" "--start-year 2020 --end-year 2023 ${SOURCE_LIMIT_EXTRA}"
-
-BUILD_EXTRA="${BASE_DIR_EXTRA} --as-of-date ${AS_OF_DATE}"
-if [[ -n "$SUBMISSIONS_MAX_CIKS" ]]; then
-    BUILD_EXTRA="${BUILD_EXTRA} --submissions-max-ciks ${SUBMISSIONS_MAX_CIKS}"
+if [[ "$SKIP_SETUP" -eq 0 ]]; then
+    run_step "setup" just setup
 fi
-run_step "build-lake" just fetch build-lake "$BUILD_EXTRA"
+run_step "status" just status
+start_fetch "sec-bulk" ""
+start_fetch "form-ap" ""
+start_fetch "aaer" "${SOURCE_LIMIT_EXTRA}"
+start_fetch "pcaob-inspections" "${SOURCE_LIMIT_EXTRA}"
+start_fetch "fsds" "--start-year 2011 --end-year 2023 ${SOURCE_LIMIT_EXTRA}"
+start_fetch "notes" "--start-year 2020 --end-year 2023 ${SOURCE_LIMIT_EXTRA}"
+wait_for_all_fetches
 
-run_step "public-cascade" just analysis cascade raw "$CASCADE_OUT" \
-    "--issuer-origin-panel ${GOLD_DIR}/issuer_origin_panel.csv.gz"
+BUILD_ARGS=(
+    uv run python scripts/fetch_public_data.py
+    --mode build-lake
+    --bronze-dir "$BRONZE_DIR"
+    --silver-dir "$SILVER_DIR"
+    --gold-dir "$GOLD_DIR"
+    --as-of-date "$AS_OF_DATE"
+    --engine "$ENGINE"
+    --duckdb-threads "$DUCKDB_THREADS"
+    --duckdb-memory-limit "$DUCKDB_MEMORY_LIMIT"
+    --duckdb-max-temp-size "$DUCKDB_MAX_TEMP_SIZE"
+    --storage-format "$STORAGE_FORMAT"
+    --notes-mode "$NOTES_MODE"
+    --fsds-batch-size "$FSDS_BATCH_SIZE"
+    --notes-batch-size "$NOTES_BATCH_SIZE"
+)
+if [[ "$ENGINE" = "duckdb" && -n "$DUCKDB_TEMP_DIRECTORY" ]]; then
+    BUILD_ARGS+=(--duckdb-temp-directory "$DUCKDB_TEMP_DIRECTORY")
+fi
+if [[ "$FRESH_BUILD" -eq 1 ]]; then
+    BUILD_ARGS+=(--fresh-build)
+fi
+if [[ "$RESUME" -eq 1 ]]; then
+    BUILD_ARGS+=(--resume)
+fi
+if [[ -n "$SUBMISSIONS_MAX_CIKS" ]]; then
+    BUILD_ARGS+=(--submissions-max-ciks "$SUBMISSIONS_MAX_CIKS")
+fi
+run_step "build-lake" "${BUILD_ARGS[@]}"
+
+if [[ "$SKIP_PUBLIC_CASCADE" -eq 0 ]]; then
+    run_step "public-cascade" uv run python scripts/run_public_cascade.py \
+        --out-dir "$CASCADE_OUT" \
+        --issuer-origin-panel "${GOLD_DIR}/issuer_origin_panel.parquet"
+fi
 
 run_step "final-report" uv run python scripts/monitor_public_lake.py \
     --bronze-dir "$BRONZE_DIR" \
