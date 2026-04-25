@@ -56,12 +56,12 @@ doc/          local reference PDFs
 
 ## Local Setup
 
-Use `just` as the front door. It loads `.env`, uses the configured external
-`UV_PROJECT_ENVIRONMENT`, and runs `ruff` after mutating or analysis recipes.
-The visible command surface is intentionally small: `setup`, `status`, `check`,
-`task`, `full`, and `docs`. Use `task` for one-off prep, analysis, and public
-data subtasks.
-`just check` also runs the pytest gates: core runtime modules must stay at or
+Use `just` as the front door. It loads `.env` and uses the configured external
+`UV_PROJECT_ENVIRONMENT`. The visible command surface is intentionally small:
+`setup`, `status`, `check`, `task`, `full`, and `docs`. Use `task` for one-off
+prep, analysis, and public-data subtasks.
+`just check` is the data-free local quality gate: it runs the pytest coverage
+gates, `ruff`, and the strict docs build. Core runtime modules must stay at or
 above 95% coverage, and the larger public-lake builder has a separate toy-data
 gate at 93% so it is measured with focused public-lake behavior tests without
 pretending the full lake is a fast unit-test surface.
@@ -86,7 +86,7 @@ uv run python scripts/convert_raw_dataset.py
 
 The `sample` dataset used by local recipes is a deterministic firm-level subset
 materialized from the local raw benchmark table. A clean GitHub checkout without
-the benchmark data can run CI unit tests and fixture-based smoke checks, but it
+the benchmark data can run `just check` and fixture-based smoke checks, but it
 cannot run benchmark, study, or full workflows until the raw benchmark Parquet or
 legacy CSV is present.
 
@@ -95,6 +95,7 @@ legacy CSV is present.
 ```bash
 just setup
 just status
+just check
 just task prep sample
 just task benchmark raw
 just task sec-bulk
@@ -118,7 +119,7 @@ just docs
 ## End-to-End Workflow
 
 `just full` is the restartable end-to-end entrypoint. It runs setup, runs the
-pytest coverage gate, builds the public lake, then runs the combined benchmark,
+test and lint gate, builds the public lake, then runs the combined benchmark,
 public-cascade, and bridge-probe study workflow. Defaults are Mac-conservative:
 two outer model workers, four
 threads per model fit, two public-source fetch workers, DuckDB Parquet for the
@@ -217,7 +218,7 @@ External bridge input:
 The repo cannot infer this table from the current benchmark panel because the
 raw benchmark only has `gvkey` and `data_year`, not CIK, ticker, company name,
 CUSIP, or PERMNO. SEC public ticker/CIK files are useful public identifiers, but
-they are not a historical GVKEY source. Prepare this table from an authoritative
+they are not a historical GVKEY source. Prefer an authoritative
 WRDS/Compustat CIK-GVKEY link export or equivalent institutional crosswalk:
 
 ```bash
@@ -230,6 +231,30 @@ uv run python scripts/prepare_gvkey_cik_crosswalk.py \
 
 just task bridge raw
 ```
+
+If WRDS is not yet available, the repo can prepare a provenance-tagged bridge
+candidate from the public R package `farr::gvkey_ciks`:
+
+```bash
+bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
+```
+
+This exports `data/external/farr_gvkey_ciks_raw.csv`, normalizes annual links to
+`data/external/gvkey_cik_year.csv`, and runs the bridge probe. Treat this as a
+candidate bridge whose coverage and multiplicity must be reported, not as a
+silent substitute for a WRDS-verified table.
+
+The same public package also provides useful validation and control inputs:
+
+```bash
+bash scripts/prepare_farr_support_data.sh --install-missing
+```
+
+This exports `farr::aaer_dates`, `farr::aaer_firm_year`, and `farr::state_hq`.
+The AAER files are written as overlap diagnostics under
+`artifacts/farr_support/`; they do not replace the main public-cascade labels.
+`farr::state_hq` is used as a date-bounded, public-origin headquarters-state
+metadata feature when `data/external/farr_state_hq.csv` exists.
 
 Accepted source columns are `gvkey`, `issuer_cik` or `cik`, plus either
 `data_year`/`fiscal_year`/`fyear` or `start_year` and `end_year`. The prepared
@@ -248,8 +273,8 @@ Study:
 ## Current Gates
 
 1. Treat the full public-cascade run as the current `xbrl_ratio_baseline` snapshot.
-2. Prepare `data/external/gvkey_cik_year.csv` from an authoritative WRDS/Compustat-style
-   source to unlock bridge validation.
+2. Use `farr::gvkey_ciks` as the current high-coverage candidate bridge when WRDS
+   is unavailable, while still reporting coverage and multiplicity explicitly.
 3. Treat the bridge gate as mandatory for an integrated old-benchmark/public-cascade
    paper; without it, the paper should remain a public review-and-correction measurement
    paper rather than a validated fraud/restatement overlap paper.

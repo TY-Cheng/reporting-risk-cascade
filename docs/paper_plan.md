@@ -88,13 +88,14 @@ will subsequently enter an observable public review-and-correction cascade.
   fraud-prediction papers, because the estimand differs. Instead, the paper
   provides metric-compatible ranking evidence and transfers peer model families
   into the repo-native benchmark layer first. Transfer to the filing-origin
-  public-cascade task is a staged follow-on analysis. Once the bridge is available,
-  bridge-based overlap validation tests whether the public cascade is related to,
-  but not identical with, legacy detected-misstatement labels.
+  public-cascade task is a staged follow-on analysis. With the farr candidate
+  bridge available, bridge-based overlap validation can now test whether the public cascade is
+  related to, but not identical with, legacy detected-misstatement labels; a WRDS bridge remains
+  preferable for final institutional validation.
 - **Boundary.** The design can support evidence for a public reporting-risk signal.
   It does not by itself establish fraud truth, causal identification, stable AAER
   severity-tail modeling, or completed validation against the legacy benchmark until the
-  `gvkey-CIK-year` bridge is available.
+  `gvkey-CIK-year` bridge is validated and overlap results are rerun.
 
 ```mermaid
 flowchart LR
@@ -108,11 +109,11 @@ flowchart LR
     G --> H
     G --> I["Public-label opacity DML<br/>adjusted association, not causal effect"]
 
-    C --> J["Bridge gate<br/>gvkey-CIK-year crosswalk"]
+    C --> J["Bridge gate<br/>gvkey-CIK-year crosswalk<br/>farr candidate, WRDS preferred"]
     H --> J
     I --> J
     J --> K["Integrated construct validation<br/>related but non-identical labels"]
-    J -. "blocked until crosswalk exists" .-> L["Public-cascade measurement result<br/>reportable without fraud-truth claim"]
+    J -. "if validation remains incomplete" .-> L["Public-cascade measurement result<br/>reportable without fraud-truth claim"]
 ```
 
 ## Research Positioning
@@ -466,14 +467,43 @@ uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --out data/external/gvkey_cik_year.csv
 ```
 
+Public candidate bridge route while WRDS access is pending:
+
+```bash
+bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
+```
+
+This route exports `farr::gvkey_ciks`, records `source=farr_gvkey_ciks`, expands
+the date ranges to annual `gvkey-CIK-year` rows, and then runs the bridge probe.
+It is acceptable as a provenance-tagged candidate bridge for coverage and
+multiplicity analysis, but WRDS remains the preferred institutional source when
+available.
+
+Public support route for AAER overlap and geography controls:
+
+```bash
+bash scripts/prepare_farr_support_data.sh --install-missing
+```
+
+This exports `farr::aaer_dates`, `farr::aaer_firm_year`, and `farr::state_hq`.
+The AAER exports are diagnostic anchors: they test whether legacy benchmark
+positives and public-cascade scores overlap with Bao-style AAER firm-years, but
+they do not redefine the main public labels. `farr::state_hq` is treated as a
+date-bounded headquarters-state metadata control in the public issuer-origin
+panel when the external CSV is available.
+
 Default v1 bridge route:
 
-- Run a public-only bridge probe first; it is a coverage feasibility audit, not an
-  authoritative historical crosswalk.
-- With the current raw benchmark panel, the expected first output is `raw_identifier_blocker` because
-  the raw benchmark has no CIK, ticker, company name, CUSIP, or PERMNO columns.
-- If raw-side company identifiers are added later, use public SEC ticker/CIK/company-name
-  data to construct a provenance-tagged candidate bridge.
+- Run a bridge probe before any overlap validation; it is a coverage and
+  multiplicity audit, not an automatic validation pass.
+- With no external crosswalk, the expected output is `raw_identifier_blocker`
+  because the raw benchmark has no CIK, ticker, company name, CUSIP, or PERMNO
+  columns.
+- With `farr::gvkey_ciks`, the expected output is
+  `external_crosswalk_available`; this is now the working candidate bridge
+  while WRDS access is pending.
+- If stronger raw-side or WRDS identifiers are added later, replace the farr
+  candidate with an institutionally verified provenance-tagged bridge.
 - Do not treat public ticker/CIK files as authoritative; SEC states they are not guaranteed
   for accuracy or scope.
 - Emit `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, and
@@ -1008,7 +1038,8 @@ just status
 just full full raw artifacts/full
 ```
 
-`just full` runs the test gate before the data/model stages. Component recipes such as
+`just check` is the data-free local quality gate. `just full` runs the test and
+lint gate before the data/model stages. Component recipes such as
 `just task benchmark raw artifacts/benchmark`, `just task bridge raw artifacts/bridge_probe`,
 and `just task study raw artifacts/study` are follow-up rerun/debug entries, not the
 paper-facing clean-run default.
@@ -1022,6 +1053,8 @@ Workflow follow-up:
 
 - `just status` is read-only and must not run `uv sync`.
 - `just setup` is the environment-sync entrypoint.
+- `just check` owns tests, lint, and strict docs build; data-producing `task`
+  recipes should not rerun lint implicitly.
 - Public-lake v1.1 should retain bronze manifests, support resume/idempotent rebuilds, and
   use DuckDB or Polars for large FSDS/Notes parsing to avoid full pandas materialization.
 
@@ -1034,7 +1067,7 @@ Workflow follow-up:
 | Experiment 3 opacity | benchmark-side DML remains legacy diagnostic; public-label DML is implemented on the issuer-origin panel | public-label PLR spec for `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` |
 | Experiment 4 public lake | full-run gold snapshot available | source coverage, task positives, censoring, and reproducibility manifest refreshed for manuscript tables |
 | Experiment 5 public cascade | current full-run snapshot is `xbrl_ratio_baseline`; AAER remains sparse | `xbrl_ratio_*` and `xbrl_coverage_*` columns present with tag coverage, non-degenerate core tasks, and AAER framed as feasibility only |
-| Experiment 6 bridge overlap | P0 integrated-paper blocker | authoritative `gvkey-CIK-year` crosswalk, overlap coverage, multiplicity reports, and no silent joins |
+| Experiment 6 bridge overlap | farr `gvkey_ciks` is a high-coverage candidate; integrated validation still needs rerun and quality reporting | overlap coverage, multiplicity reports, no silent joins, and WRDS-preferred crosswalk for final paper claims |
 
 ## Acceptance Criteria
 
@@ -1054,8 +1087,8 @@ Data integrity:
 - censoring masks are applied per horizon
 - source availability is recorded as state, not treated as ordinary missingness
 - crosswalk coverage is reported before overlap validation
-- current raw benchmark bridge probe reports `raw_identifier_blocker` until raw-side company
-  identifiers are supplied
+- missing-crosswalk runs report `raw_identifier_blocker`; farr-candidate runs
+  report `external_crosswalk_available` plus coverage and multiplicity tables
 
 Empirical sufficiency:
 

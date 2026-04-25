@@ -73,7 +73,7 @@ MODEL_EXCLUDED_COLS = {
     "phone",
     "ein",
 }
-CATEGORICAL_FEATURE_COLS = {"sic", "form", "entity_type"}
+CATEGORICAL_FEATURE_COLS = {"sic", "form", "entity_type", "issuer_hq_state"}
 
 
 def stable_task_seed(base_seed: int, *parts: object) -> int:

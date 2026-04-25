@@ -14,6 +14,10 @@
     rerun: they still show the older `proxy_sensitivity` benchmark label and do
     not yet include public opacity DML output. Rerun `just task study raw
     artifacts/full` or `just full full raw artifacts/full` to refresh the snapshot.
+    A later farr support pass prepared `gvkey_ciks`, `aaer_dates`,
+    `aaer_firm_year`, and `state_hq`; those support artifacts are summarized
+    separately below because they were not part of the static `artifacts/full`
+    run.
 
 ## Run Metadata
 
@@ -23,7 +27,7 @@
 | Runtime | `parallel_jobs=2`, `model_threads=4`, `seed_policy=task-isolated` |
 | Benchmark input | `data/raw_dataset_misstatement.parquet` |
 | Public issuer panel | `data/public_lake/gold/issuer_origin_panel.parquet` |
-| Bridge crosswalk | `data/external/gvkey_cik_year.csv` required; not available in this run |
+| Bridge crosswalk | Static full run did not include a crosswalk; a later farr candidate is now available locally |
 
 ## Interpretation Summary
 
@@ -41,7 +45,7 @@ public cascade.
 | Public cascade signal | Supported now: no task is zero-positive, and the repo-generated equal-task ranking selects `all + rolling_10y` with mean PR-AUC `0.2067`. |
 | Benchmark role | Diagnostic only: the old restatement benchmark is useful for label-observability checks, not paper-grade label maturation evidence. |
 | Opacity role | Implemented in code: public-label DML now uses `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365`; the static full snapshot has not yet been rerun with this table. |
-| Bridge role | Integrated-paper blocker: `raw_identifier_blocker` means old-vs-public overlap validation has not run because the raw benchmark lacks public issuer identifiers. |
+| Bridge role | Static full run: `raw_identifier_blocker`; current local state: farr `gvkey_ciks` is a high-coverage candidate bridge that still requires explicit coverage/multiplicity reporting before integrated validation. |
 | Overclaim guardrail | Not supported yet: fraud truth, causal claims, stable AAER severity-tail modeling, or integrated benchmark-to-public validation. |
 
 ## Public Lake Scale
@@ -181,6 +185,29 @@ is prepared, rerun:
 just task bridge raw artifacts/bridge_probe
 just task study raw artifacts/study
 ```
+
+### Farr Candidate Update
+
+After the static full run, `scripts/prepare_farr_gvkey_cik_bridge.sh` prepared a
+public candidate bridge from `farr::gvkey_ciks`. The bridge probe now reports
+`external_crosswalk_available`, with 198,275 annual `gvkey-CIK-year` rows,
+97.96% raw-row coverage, 99.12% raw-firm coverage, and 2,433 of 2,460 legacy
+positive rows matched. This moves the bridge from missing input to
+high-coverage candidate, but not to WRDS-verified ground truth.
+
+The companion support export `scripts/prepare_farr_support_data.sh` adds:
+
+| Support artifact | Current role |
+| --- | --- |
+| `farr::aaer_dates` | External AAER release-date anchor for severity-tail diagnostics. |
+| `farr::aaer_firm_year` | Bao-style AAER firm-year anchor; 992 expanded rows, 422 rows overlapping the old benchmark, and 243 overlapping old benchmark positives. |
+| `farr::state_hq` | Date-bounded headquarters-state metadata feature for the public issuer-origin panel. |
+
+Current AAER diagnostic result: 284 farr AAER CIK-years map into the public
+issuer-origin panel through the candidate bridge, and none are currently hit by
+the repo's weak SEC-title-matched `label_aaer_proxy_730`. That is evidence that
+AAER should remain a severity-tail validation anchor, not a headline prediction
+target in the current v1 pipeline.
 
 ## Artifact Index
 

@@ -59,7 +59,6 @@ _test: _test-core _test-public-lake
 
 setup: _check-env
     uv sync
-    just _ruff
 
 status: _check-env
     @echo "UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT}"
@@ -104,7 +103,6 @@ _run dataset="sample" out_dir="": _check-env
     else \
         uv run python scripts/run_data_prep.py --dataset "{{ dataset }}"; \
     fi
-    just _ruff
 
 _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
     @if [ "{{ stage }}" = "benchmark" ]; then \
@@ -171,11 +169,9 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
         echo "stage must be 'study', 'benchmark', 'cascade', or 'bridge'"; \
         exit 1; \
     fi
-    just _ruff
 
 _fetch source="sec-bulk" extra="": _check-env
     uv run python scripts/fetch_public_data.py --mode "{{ source }}" {{ extra }}
-    just _ruff
 
 full *args: _check-env
     @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="2"; model_threads="4"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="50GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
@@ -254,6 +250,7 @@ full *args: _check-env
     done; \
     just setup; \
     just _test; \
+    just _ruff; \
     if [ ! -f "data/raw_dataset_misstatement.parquet" ] && [ -f "data/raw_dataset_misstatement.csv" ]; then \
         uv run python scripts/convert_raw_dataset.py; \
     fi; \
@@ -309,32 +306,10 @@ full *args: _check-env
         --seed-policy task-isolated; \
     echo "Full workflow outputs: $run_out"
 
-check *args: _check-env
-    @dataset="sample"; pos=1; \
-    for arg in {{ args }}; do \
-        case "$arg" in \
-            dataset=*) dataset="${arg#dataset=}" ;; \
-            *=*) echo "Unknown check option: $arg"; exit 2 ;; \
-            *) \
-                case "$pos" in \
-                    1) dataset="$arg" ;; \
-                    *) echo "Too many check positional arguments: $arg"; exit 2 ;; \
-                esac; \
-                pos=$((pos + 1)); \
-                ;; \
-        esac; \
-    done; \
-    if [ "$dataset" != "sample" ] && [ "$dataset" != "raw" ]; then \
-        echo "dataset must be 'sample' or 'raw'"; \
-        exit 1; \
-    fi; \
-    if [ "$dataset" = "sample" ]; then \
-        uv run python scripts/run_data_prep.py --dataset sample --out-dir artifacts/sample_run; \
-    else \
-        uv run python scripts/run_data_prep.py --dataset raw --out-dir artifacts/raw_run; \
-    fi
+check: _check-env
     just _test
     just _ruff
+    just _docs-build
 
 docs: _docs-build
     @for port in 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010; do \
@@ -349,4 +324,3 @@ docs: _docs-build
 
 _docs-build: _check-env
     uv run --group docs mkdocs build --strict --clean
-    just _ruff

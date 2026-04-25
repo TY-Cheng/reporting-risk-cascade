@@ -136,6 +136,46 @@ def _write_notes_zip(path: Path, adsh: str, tag: str, *, ddate: object = "202112
         zf.writestr("sub.txt", sub.to_csv(sep="\t", index=False))
 
 
+def test_state_hq_features_are_asof_and_date_bounded() -> None:
+    panel = pd.DataFrame(
+        [
+            {"issuer_cik": "1", "origin_date": "2020-01-15"},
+            {"issuer_cik": "1", "origin_date": "2021-02-01"},
+            {"issuer_cik": "2", "origin_date": "2021-03-01"},
+            {"issuer_cik": "3", "origin_date": "2021-03-01"},
+        ]
+    )
+    state_hq = pd.DataFrame(
+        [
+            {
+                "issuer_cik": "0000000001",
+                "ba_state": "CA",
+                "min_date": "2019-01-01",
+                "max_date": "2020-12-31",
+            },
+            {
+                "issuer_cik": "0000000001",
+                "ba_state": "WA",
+                "min_date": "2021-01-01",
+                "max_date": "",
+            },
+            {
+                "issuer_cik": "0000000002",
+                "ba_state": "TX",
+                "min_date": "2021-04-01",
+                "max_date": "",
+            },
+        ]
+    )
+
+    out = public_lake._add_state_hq_features(panel, state_hq)
+
+    assert out["issuer_hq_state"].tolist()[:2] == ["CA", "WA"]
+    assert pd.isna(out["issuer_hq_state"].tolist()[2])
+    assert pd.isna(out["issuer_hq_state"].tolist()[3])
+    assert out["issuer_hq_state_observed"].tolist() == [1, 1, 0, 0]
+
+
 def test_event_within_horizon_strictly_after_origin_and_matches_reference() -> None:
     base = pd.DataFrame(
         {
@@ -1859,6 +1899,17 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         silver / "note_text.csv.gz",
         [{"adsh": "a-annual", "tag": "DebtTextBlock", "note_text": "short note"}],
     )
+    (tmp_path / "external").mkdir()
+    pd.DataFrame(
+        [
+            {
+                "issuer_cik": "0000000001",
+                "ba_state": "CA",
+                "min_date": "2020-01-01",
+                "max_date": "2022-12-31",
+            }
+        ]
+    ).to_csv(tmp_path / "external" / "farr_state_hq.csv", index=False)
 
     build_gold_panels(
         silver_dir=silver,
@@ -1892,6 +1943,8 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         "xbrl_coverage_assets",
         "note_text_count",
         "note_text_char_count",
+        "issuer_hq_state",
+        "issuer_hq_state_observed",
     ]
 
     pd.testing.assert_frame_equal(

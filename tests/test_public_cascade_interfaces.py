@@ -571,9 +571,14 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
     }
     assert script_files == {
         "convert_raw_dataset.py",
+        "export_farr_support_data.R",
+        "export_farr_gvkey_ciks.R",
         "fetch_public_data.py",
         "generate_sample_dataset.py",
         "monitor_public_lake.py",
+        "prepare_farr_support_data.py",
+        "prepare_farr_support_data.sh",
+        "prepare_farr_gvkey_cik_bridge.sh",
         "prepare_gvkey_cik_crosswalk.py",
         "run_bridge_probe.py",
         "run_benchmark.py",

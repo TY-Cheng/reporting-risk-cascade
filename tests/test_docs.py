@@ -151,8 +151,9 @@ def test_docs_file_names_are_paper_facing_not_internal_codenames() -> None:
 def test_ci_workflow_is_clean_checkout_safe() -> None:
     ci = _read(".github/workflows/ci.yml")
     assert 'just check dataset="sample"' not in ci
-    assert "run: just _test" in ci
-    assert "run: just _ruff" in ci
+    assert "run: just check" in ci
+    assert "run: just _test" not in ci
+    assert "run: just _ruff" not in ci
     assert "scripts/run_study.py" in ci
     assert "--peer-comparison-mode light" in ci
     assert "--skip-benchmark" in ci
@@ -162,10 +163,60 @@ def test_ci_workflow_is_clean_checkout_safe() -> None:
     assert "data/raw_dataset_misstatement.parquet" not in ci
 
 
+def test_just_check_is_the_single_data_free_quality_gate() -> None:
+    justfile = _read("justfile")
+    assert "check *args" not in justfile
+    check_recipe = justfile.split("\ncheck: _check-env\n", maxsplit=1)[1].split(
+        "\ndocs: _docs-build", maxsplit=1
+    )[0]
+    assert "run_data_prep.py" not in check_recipe
+    assert "generate_sample_dataset.py" not in check_recipe
+    assert "just _test" in check_recipe
+    assert "just _ruff" in check_recipe
+    assert "just _docs-build" in check_recipe
+
+    docs_recipe = justfile.split("\n_docs-build: _check-env\n", maxsplit=1)[1]
+    assert "mkdocs build --strict --clean" in docs_recipe
+    assert "just _ruff" not in docs_recipe
+
+
 def test_readme_points_to_current_docs_pages() -> None:
     readme = _read("README.md")
     assert "docs/paper_plan.md" in readme
     assert "docs/future_work.md" in readme
+
+
+def test_farr_bridge_scripts_are_documented_and_provenance_tagged() -> None:
+    readme = _read("README.md")
+    plan = _read("docs/paper_plan.md")
+    r_script = _read("scripts/export_farr_gvkey_ciks.R")
+    shell_script = _read("scripts/prepare_farr_gvkey_cik_bridge.sh")
+    support_r_script = _read("scripts/export_farr_support_data.R")
+    support_shell_script = _read("scripts/prepare_farr_support_data.sh")
+    support_py_script = _read("scripts/prepare_farr_support_data.py")
+
+    for text in [readme, plan]:
+        assert "scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing" in text
+        assert "scripts/prepare_farr_support_data.sh --install-missing" in text
+        assert "farr::gvkey_ciks" in text
+        assert "farr::aaer_firm_year" in text
+        assert "farr::state_hq" in text
+        assert "coverage" in text
+        assert "multiplicity" in text
+
+    assert "data(\"gvkey_ciks\", package = \"farr\"" in r_script
+    assert "source = \"farr_gvkey_ciks\"" in r_script
+    assert "match_method = \"farr_gvkey_ciks_date_range\"" in r_script
+    assert "scripts/export_farr_gvkey_ciks.R" in shell_script
+    assert "scripts/prepare_gvkey_cik_crosswalk.py" in shell_script
+    assert "--skip-bridge-probe" in shell_script
+    assert "data(\"aaer_dates\", package = \"farr\"" in support_r_script
+    assert "data(\"aaer_firm_year\", package = \"farr\"" in support_r_script
+    assert "data(\"state_hq\", package = \"farr\"" in support_r_script
+    assert "source = \"farr_state_hq\"" in support_r_script
+    assert "scripts/export_farr_support_data.R" in support_shell_script
+    assert "scripts/prepare_farr_support_data.py" in support_shell_script
+    assert "farr_aaer_public_proxy_overlap.csv" in support_py_script
 
 
 def test_docs_home_keeps_readme_as_source_but_adds_material_landing_shell() -> None:

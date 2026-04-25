@@ -971,6 +971,87 @@ def _normalize_cik_series(series: pd.Series) -> pd.Series:
     return out.map(lambda value: str(value).zfill(10) if pd.notna(value) else pd.NA)
 
 
+def _external_data_path_from_silver(silver_dir: Path, filename: str) -> Path:
+    if silver_dir.parent.name.startswith("public_lake"):
+        return silver_dir.parent.parent / "external" / filename
+    return silver_dir.parent / "external" / filename
+
+
+def _read_farr_state_hq(
+    *,
+    silver_dir: Path,
+    engine: str = "pandas",
+    duckdb_threads: int = 4,
+    duckdb_memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    duckdb_temp_directory: Path | str | None = None,
+    duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> pd.DataFrame:
+    state_hq_path = _external_data_path_from_silver(silver_dir, "farr_state_hq.csv")
+    if not state_hq_path.exists():
+        return pd.DataFrame()
+    return _read_csv_with_engine(
+        state_hq_path,
+        date_cols=["min_date", "max_date"],
+        engine=engine,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
+
+
+def _add_state_hq_features(issuer_panel: pd.DataFrame, state_hq: pd.DataFrame) -> pd.DataFrame:
+    panel = issuer_panel.copy()
+    panel["issuer_hq_state"] = pd.NA
+    panel["issuer_hq_state_observed"] = 0
+    required = {"issuer_cik", "ba_state", "min_date", "max_date"}
+    if panel.empty or state_hq.empty or not required.issubset(state_hq.columns):
+        return panel
+    if "origin_date" not in panel.columns or "issuer_cik" not in panel.columns:
+        return panel
+
+    hq = state_hq[list(required)].copy()
+    hq["issuer_cik"] = _normalize_cik_series(hq["issuer_cik"])
+    hq["ba_state"] = hq["ba_state"].astype("string").str.strip().str.upper()
+    hq["ba_state"] = hq["ba_state"].mask(hq["ba_state"].isin(["", "NA", "NAN", "NONE"]))
+    hq["min_date"] = pd.to_datetime(hq["min_date"], errors="coerce", format="mixed")
+    hq["max_date"] = pd.to_datetime(hq["max_date"], errors="coerce", format="mixed")
+    hq = hq.dropna(subset=["issuer_cik", "ba_state", "min_date"]).copy()
+    if hq.empty:
+        return panel
+    hq["max_date_effective"] = hq["max_date"].fillna(pd.Timestamp("2200-12-31"))
+    hq = hq.sort_values(["issuer_cik", "min_date", "max_date_effective", "ba_state"])
+
+    work_dates = pd.to_datetime(panel["origin_date"], errors="coerce", format="mixed")
+    panel_cik = _normalize_cik_series(panel["issuer_cik"])
+    hq_groups = {str(cik): group for cik, group in hq.groupby("issuer_cik", dropna=True)}
+
+    state_values = pd.Series(pd.NA, index=panel.index, dtype="object")
+    for cik, indexer in panel_cik.groupby(panel_cik).groups.items():
+        group = hq_groups.get(str(cik))
+        if group is None or group.empty:
+            continue
+        valid_indexer = work_dates.loc[indexer].dropna().index
+        if valid_indexer.empty:
+            continue
+        starts = group["min_date"].to_numpy(dtype="datetime64[ns]")
+        ends = group["max_date_effective"].to_numpy(dtype="datetime64[ns]")
+        states = group["ba_state"].astype("object").to_numpy()
+        dates = work_dates.loc[valid_indexer].to_numpy(dtype="datetime64[ns]")
+        positions = np.searchsorted(starts, dates, side="right") - 1
+        valid = positions >= 0
+        if valid.any():
+            valid_positions = positions[valid]
+            valid[valid] = dates[valid] <= ends[valid_positions]
+        if valid.any():
+            state_values.loc[valid_indexer[valid]] = states[positions[valid]]
+
+    observed = state_values.notna()
+    panel.loc[observed, "issuer_hq_state"] = state_values.loc[observed].astype(str)
+    panel["issuer_hq_state_observed"] = observed.astype(int)
+    return panel
+
+
 def _name_tokens(name: str) -> set[str]:
     clean = _clean_name(name)
     return {token for token in clean.split() if len(token) >= 3}
@@ -3517,6 +3598,34 @@ def _create_duckdb_note_summary_view(con: Any, *, silver_dir: Path) -> bool:
     return False
 
 
+def _create_duckdb_state_hq_view(con: Any, *, silver_dir: Path) -> int:
+    state_hq_path = _external_data_path_from_silver(silver_dir, "farr_state_hq.csv")
+    _duckdb_source_or_empty(
+        con=con,
+        view_name="state_hq_gold",
+        path=state_hq_path,
+        empty_columns=(
+            ("issuer_cik", "VARCHAR"),
+            ("ba_state", "VARCHAR"),
+            ("min_date", "TIMESTAMP"),
+            ("max_date", "TIMESTAMP"),
+        ),
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW state_hq_norm_gold AS
+        SELECT
+            {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
+            nullif(upper(trim(CAST(ba_state AS VARCHAR))), '') AS issuer_hq_state,
+            {_duckdb_timestamp_expr("min_date")} AS min_date,
+            {_duckdb_timestamp_expr("max_date")} AS max_date
+        FROM state_hq_gold
+        WHERE nullif(upper(trim(CAST(ba_state AS VARCHAR))), '') IS NOT NULL
+        """
+    )
+    return int(con.execute("SELECT count(*) FROM state_hq_norm_gold").fetchone()[0])
+
+
 def _build_gold_panels_duckdb(
     *,
     silver_dir: Path,
@@ -3932,6 +4041,7 @@ def _build_gold_panels_duckdb(
         has_xbrl_summary = _create_duckdb_xbrl_summary_view(con, silver_dir=silver_dir)
         has_xbrl_features = _create_duckdb_xbrl_core_features_view(con, silver_dir=silver_dir)
         has_note_summary = _create_duckdb_note_summary_view(con, silver_dir=silver_dir)
+        state_hq_rows = _create_duckdb_state_hq_view(con, silver_dir=silver_dir)
 
         filing_from = "filing_windowed_gold f"
         joins = [
@@ -4260,13 +4370,25 @@ def _build_gold_panels_duckdb(
                 issuer.entity_name,
                 issuer.sic,
                 issuer.sic_description,
-                issuer.entity_type
+                issuer.entity_type,
+                state_hq.issuer_hq_state,
+                CASE WHEN state_hq.issuer_hq_state IS NULL THEN 0 ELSE 1 END
+                    AS issuer_hq_state_observed
             FROM issuer_annual_candidates_gold annual
             LEFT JOIN foreign_forms_gold foreign_forms
                 ON annual.issuer_cik = foreign_forms.issuer_cik
                AND annual.fiscal_year = foreign_forms.fpi_year
             LEFT JOIN issuer_dim_gold issuer
                 ON annual.issuer_cik = issuer.issuer_cik
+            LEFT JOIN LATERAL (
+                SELECT hq.issuer_hq_state
+                FROM state_hq_norm_gold hq
+                WHERE hq.issuer_cik = annual.issuer_cik
+                  AND hq.min_date <= annual.origin_date
+                  AND (hq.max_date IS NULL OR annual.origin_date <= hq.max_date)
+                ORDER BY hq.min_date DESC, hq.max_date DESC NULLS LAST, hq.issuer_hq_state
+                LIMIT 1
+            ) state_hq ON TRUE
             WHERE annual.annual_row_number = 1
             """
         )
@@ -4286,6 +4408,11 @@ def _build_gold_panels_duckdb(
         )
         filing_rows = int(con.execute("SELECT count(*) FROM filing_labeled_gold").fetchone()[0])
         issuer_rows = int(con.execute("SELECT count(*) FROM issuer_origin_gold").fetchone()[0])
+        issuer_state_hq_rows = int(
+            con.execute(
+                "SELECT count(*) FROM issuer_origin_gold WHERE issuer_hq_state_observed = 1"
+            ).fetchone()[0]
+        )
     finally:
         con.close()
 
@@ -4299,6 +4426,9 @@ def _build_gold_panels_duckdb(
                 "engine": "duckdb",
                 "duckdb_threads": int(duckdb_threads),
                 "xbrl_core_tag_scope": "controlled_core_tags",
+                "state_hq_source": "farr_state_hq" if state_hq_rows else None,
+                "state_hq_rows": state_hq_rows,
+                "issuer_hq_state_rows": issuer_state_hq_rows,
                 "filing_rows": filing_rows,
                 "issuer_origin_rows": issuer_rows,
             },
@@ -4422,6 +4552,14 @@ def build_gold_panels(
         )
         if (silver_dir / "aaer_event.csv.gz").exists()
         else pd.DataFrame()
+    )
+    state_hq = _read_farr_state_hq(
+        silver_dir=silver_dir,
+        engine=engine,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
     )
     xbrl_summary = pd.DataFrame()
     xbrl_core_fact = pd.DataFrame()
@@ -4696,6 +4834,8 @@ def build_gold_panels(
         how="left",
         suffixes=("", "_issuer"),
     )
+    issuer_panel = _add_state_hq_features(issuer_panel, state_hq)
+    issuer_state_hq_rows = int(issuer_panel["issuer_hq_state_observed"].sum())
 
     gold_dir.mkdir(parents=True, exist_ok=True)
     filing_path = gold_dir / "filing_origin_panel.parquet"
@@ -4712,6 +4852,9 @@ def build_gold_panels(
                 "engine": engine,
                 "duckdb_threads": int(duckdb_threads) if engine == "duckdb" else None,
                 "xbrl_core_tag_scope": "controlled_core_tags",
+                "state_hq_source": "farr_state_hq" if not state_hq.empty else None,
+                "state_hq_rows": int(len(state_hq)),
+                "issuer_hq_state_rows": issuer_state_hq_rows,
                 "filing_rows": int(len(filing)),
                 "issuer_origin_rows": int(len(issuer_panel)),
             },
