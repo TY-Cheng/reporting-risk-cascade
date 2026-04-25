@@ -11,7 +11,7 @@ cascade.
 review-comment-amendment-correction cascade and estimate a **pre-disclosure reporting-risk state**.
 The old restatement CSV remains a benchmark and validation layer, not the sole research object.
 
-## What This Repo Does
+## Project Scope
 
 | Path | Purpose | Main files |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ are retained as sparse severity-tail descriptors.
 The bridge still needed for final integration is a provenance-controlled
 `gvkey-CIK-year` crosswalk.
 
-## Layout
+## Repository Layout
 
 ```text
 config/       YAML settings for benchmark, public cascade, public data, and study runs
@@ -54,7 +54,7 @@ artifacts/    generated outputs, sample panels, logs, and run reports
 doc/          local reference PDFs
 ```
 
-## Setup
+## Local Setup
 
 Use `just` as the front door. It loads `.env`, uses the configured external
 `UV_PROJECT_ENVIRONMENT`, and runs `ruff` after mutating or analysis recipes.
@@ -84,7 +84,7 @@ If only the legacy CSV exists, convert it once:
 uv run python scripts/convert_raw_dataset.py
 ```
 
-## 5-Minute Workflow
+## Quick Workflow
 
 ```bash
 just setup
@@ -109,7 +109,7 @@ just task study raw artifacts/study
 just docs
 ```
 
-## Complete Workflow
+## End-to-End Workflow
 
 `just full` is the restartable end-to-end entrypoint. It runs setup, runs the
 pytest coverage gate, builds the public lake, then runs the combined benchmark,
@@ -144,7 +144,7 @@ just full mode="smoke" dataset="sample" out_dir="artifacts/full_smoke_sample" fe
 The full public run downloads SEC/PCAOB source files and can take a long time.
 Use the smoke mode first when validating a new machine or GitHub checkout.
 
-## Public Lake Run
+## Public Lake Workflow
 
 For the full public lake, use the operational script so logs and monitoring are
 captured.
@@ -170,14 +170,19 @@ large intermediate panels through Pandas. Small diagnostics and human-readable
 summary/status files remain CSV/JSON/Markdown. Notes raw text is skipped unless
 `notes_mode="raw"` is requested.
 
-## Main Outputs
+## Primary Artifacts
 
 Benchmark:
 
 - `artifacts/benchmark/rolling_metrics.csv`
+- `artifacts/benchmark/timing_coverage.csv`
 - `artifacts/benchmark/feature_family_importance.csv`
 - `artifacts/benchmark/missing_profile_clusters.csv`
 - `artifacts/benchmark/benchmark_summary.md`
+
+The benchmark metrics include `naive`, `proxy_drop_observed`, and the
+`proxy_imputed_lag_*y` timing-assumption grid. The imputed-lag rows are
+sensitivity scenarios, not recovered detection truth.
 
 Public cascade:
 
@@ -185,7 +190,12 @@ Public cascade:
 - `data/public_lake/gold/filing_origin_panel.parquet`
 - `artifacts/public_cascade/public_cascade_metrics.csv`
 - `artifacts/public_cascade/public_cascade_predictions.parquet`
+- `artifacts/public_cascade/public_opacity_dml.csv`
 - `artifacts/public_cascade/public_cascade_summary.md`
+
+The public opacity DML table uses public cascade labels as outcomes and reports
+high-dimensional adjusted associations for `missingness_density_score`; it is
+not a causal estimate.
 
 Bridge probe:
 
@@ -229,7 +239,7 @@ Study:
 - `artifacts/study/study_run_manifest.json`
 - `artifacts/study/study_summary.md`
 
-## Current Priorities
+## Current Gates
 
 1. Treat the full public-cascade run as the current `xbrl_ratio_baseline` snapshot.
 2. Prepare `data/external/gvkey_cik_year.csv` from an authoritative WRDS/Compustat-style

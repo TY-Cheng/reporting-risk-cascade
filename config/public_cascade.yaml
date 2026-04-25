@@ -9,6 +9,11 @@ analysis:
   feature_sets: ["metadata", "xbrl", "auditor", "oversight", "all"]
   parallel_jobs: 2
   seed_policy: "task_isolated"
+  opacity_dml:
+    enabled: true
+    outcomes: ["comment_thread", "amendment", "8k_402"]
+    folds: 3
+    max_iter: 100
 
 model:
   seed: 42

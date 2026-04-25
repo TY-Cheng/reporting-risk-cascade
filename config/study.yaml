@@ -11,11 +11,19 @@ outputs:
   benchmark_subdir: "benchmark"
   public_cascade_subdir: "public_cascade"
   bridge_probe_subdir: "bridge_probe"
+  peer_comparison_subdir: "peer_comparison"
 
 bridge:
   overlap_start_year: 2011
   overlap_end_year: 2019
   require_crosswalk: false
+
+peer_comparison:
+  mode: "none"
+  parallel_jobs: 1
+  model_threads: 1
+  memory_profile: "local_mac_conservative"
+  light_timeout_seconds: 90
 
 notes:
   estimand: "pre-disclosure public reporting-risk state"

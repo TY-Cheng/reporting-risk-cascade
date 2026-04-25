@@ -10,6 +10,8 @@ import pytest
 
 from scripts import fetch_public_data
 from src.public_cascade import (
+    build_public_missingness_density_score,
+    fit_public_opacity_dml,
     _build_preprocessor,
     _evaluate_binary,
     _infer_feature_families,
@@ -35,11 +37,13 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
             "censored_365": [0],
             "label_amendment_365": [0],
             "label_8k_402_365": [0],
+            "k402_item_metadata_unknown_365": [1],
             "label_aaer_proxy_730": [0],
             "censored_730": [0],
             "xbrl_fact_count": [10],
             "note_text_count": [1],
             "form_ap_event_count": [1],
+            "auditor_partner_prior_other_issuer_8k_402_count": [1],
             "prior_comment_thread_count": [1],
         }
     )
@@ -51,6 +55,7 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
     assert "xbrl_fact_count" in families["xbrl"]
     assert "note_text_count" in families["text"]
     assert "form_ap_event_count" in families["auditor"]
+    assert "auditor_partner_prior_other_issuer_8k_402_count" in families["auditor"]
     assert "prior_comment_thread_count" in families["oversight"]
     assert "items" not in all_features
     assert "source_available_notes" not in all_features
@@ -58,6 +63,7 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
     assert "vintage_notes" not in all_features
     assert "label_comment_thread_365" not in all_features
     assert "censored_365" not in all_features
+    assert "k402_item_metadata_unknown_365" not in all_features
 
 
 def test_sic_is_treated_as_categorical_feature() -> None:
@@ -72,13 +78,17 @@ def test_public_cascade_tree_preprocessor_preserves_numeric_missing_values() -> 
         {
             "sic": [1234, None, 5678],
             "xbrl_ratio_leverage": [0.2, np.nan, 0.5],
+            "form_ap_filing_count": pd.Series([1, pd.NA, 3], dtype="Int64"),
         }
     )
-    preprocessor = _build_preprocessor(panel, ["xbrl_ratio_leverage", "sic"])
-    transformed = preprocessor.fit_transform(panel[["xbrl_ratio_leverage", "sic"]])
+    feature_cols = ["xbrl_ratio_leverage", "form_ap_filing_count", "sic"]
+    preprocessor = _build_preprocessor(panel, feature_cols)
+    transformed = preprocessor.fit_transform(panel[feature_cols])
     dense = transformed.toarray() if hasattr(transformed, "toarray") else transformed
 
-    assert np.isnan(np.asarray(dense)[:, 0].astype(float)).any()
+    numeric_block = np.asarray(dense)[:, :2].astype(float)
+    assert np.isnan(numeric_block[1, 0])
+    assert np.isnan(numeric_block[1, 1])
 
 
 def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
@@ -150,6 +160,51 @@ def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
     )
 
 
+def test_public_opacity_dml_uses_public_labels_not_legacy_misstatement() -> None:
+    rows = []
+    for year in range(2011, 2017):
+        for issuer_id in range(12):
+            opaque = int(issuer_id % 3 == 0)
+            rows.append(
+                {
+                    "issuer_cik": f"{issuer_id:010d}",
+                    "accession": f"{issuer_id:010d}-{year}-000001",
+                    "origin_date": f"{year + 1}-03-01",
+                    "fiscal_year": year,
+                    "form": "10-K",
+                    "sic": 1200 + issuer_id,
+                    "is_domestic_us_gaap_proxy": 1,
+                    "xbrl_coverage_assets": 1 - opaque,
+                    "note_text_count": 0 if opaque else 3,
+                    "xbrl_ratio_leverage": 0.1 + issuer_id / 100,
+                    "prior_filing_count": year - 2010,
+                    "label_comment_thread_365": int(opaque or (year + issuer_id) % 7 == 0),
+                    "label_amendment_365": int(opaque and year % 2 == 0),
+                    "label_8k_402_365": int(opaque and issuer_id % 2 == 0),
+                    "label_aaer_proxy_730": 0,
+                    "censored_365": 0,
+                    "censored_730": 0,
+                }
+            )
+    panel = pd.DataFrame(rows)
+
+    scored, components = build_public_missingness_density_score(panel)
+    dml, meta = fit_public_opacity_dml(
+        scored,
+        outcomes=["comment_thread", "amendment", "8k_402"],
+        seed=42,
+        n_splits=3,
+        max_iter=5,
+    )
+
+    assert "misstatement firm-year" not in dml.to_string()
+    assert "missingness_density_score" in scored.columns
+    assert components
+    assert set(dml["outcome"]) == {"comment_thread", "amendment", "8k_402"}
+    assert set(dml["status"]) == {"fit"}
+    assert meta["n_opacity_components"] >= 2
+
+
 def test_public_cascade_skips_zero_positive_tasks_without_metrics(
     tmp_path: Path,
 ) -> None:
@@ -212,6 +267,73 @@ model:
     assert set(task_status["status"]) == {"skipped_one_class_train"}
     assert "aaer_proxy" in set(task_status["task"])
     assert summary["cascade_readiness_level"] == "metadata_baseline"
+
+
+def test_public_cascade_excludes_8k402_item_metadata_unknown_rows(tmp_path: Path) -> None:
+    panel_path = tmp_path / "issuer_origin_panel.parquet"
+    config_path = tmp_path / "public_cascade.yaml"
+    out_dir = tmp_path / "out"
+    rows = []
+    unknown_count = 0
+    for year in range(2011, 2017):
+        for issuer_id in range(6):
+            unknown = int(issuer_id == 5 and year in {2014, 2016})
+            unknown_count += unknown
+            rows.append(
+                {
+                    "issuer_cik": f"{issuer_id:010d}",
+                    "accession": f"{issuer_id:010d}-{year}-000001",
+                    "origin_date": f"{year + 1}-03-01",
+                    "filing_date": f"{year + 1}-03-01",
+                    "report_date": f"{year}-12-31",
+                    "as_of_date": "2026-04-23",
+                    "fiscal_year": year,
+                    "form": "10-K",
+                    "sic": 1200 + issuer_id,
+                    "is_domestic_us_gaap_proxy": 1,
+                    "label_comment_thread_365": int((year + issuer_id) % 3 == 0),
+                    "label_amendment_365": int((year + issuer_id) % 4 == 0),
+                    "label_8k_402_365": pd.NA if unknown else int((year + issuer_id) % 2 == 0),
+                    "k402_item_metadata_unknown_365": unknown,
+                    "label_aaer_proxy_730": int((year + issuer_id) % 5 == 0),
+                    "censored_365": 0,
+                    "censored_730": 0,
+                    "xbrl_ratio_leverage": 0.2 + issuer_id / 100 + year / 10000,
+                }
+            )
+    write_table(pd.DataFrame(rows), panel_path)
+    config_path.write_text(
+        """
+sample:
+  start_year: 2011
+  end_year: 2016
+  domestic_only: true
+analysis:
+  candidate_train_windows: [3]
+  min_train_years: 3
+  feature_sets: ["xbrl"]
+model:
+  seed: 42
+  xgb:
+    n_estimators: 2
+    n_jobs: 1
+""",
+        encoding="utf-8",
+    )
+
+    result = run_public_cascade(
+        config_path=config_path,
+        issuer_origin_panel_path=panel_path,
+        out_dir=out_dir,
+        parallel_jobs=1,
+        model_threads=1,
+    )
+    summary = json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
+    status = pd.read_csv(result["task_status_csv"])
+    k402_status = status.loc[status["task"].eq("8k_402")]
+
+    assert summary["task_exclusion_counts"]["8k_402"] == unknown_count
+    assert int(k402_status["excluded_train"].sum() + k402_status["excluded_test"].sum()) > 0
 
 
 def test_xbrl_ratio_features_unlock_xbrl_readiness_level(tmp_path: Path) -> None:
@@ -406,12 +528,14 @@ model:
     metrics = pd.read_csv(result["metrics_csv"])
     predictions = read_table(result["predictions_table"])
     status = pd.read_csv(result["task_status_csv"])
+    opacity_dml = pd.read_csv(result["public_opacity_dml_csv"])
     assert not metrics.empty
     assert "brier_skill_score" in metrics.columns
     assert "bao_top_1pct_ndcg" in metrics.columns
     assert "bao_top_5pct_precision" in metrics.columns
     assert not predictions.empty
     assert "fit" in set(status["status"])
+    assert "outcome" in opacity_dml.columns
 
 
 @pytest.mark.parametrize(
@@ -437,13 +561,14 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
         "__init__.py",
         "bridge.py",
         "benchmark.py",
-            "data_prep.py",
-            "public_cascade.py",
-            "public_lake.py",
-            "ranking_metrics.py",
-            "sample_dataset.py",
-            "table_io.py",
-        }
+        "data_prep.py",
+        "peer_comparison.py",
+        "public_cascade.py",
+        "public_lake.py",
+        "ranking_metrics.py",
+        "sample_dataset.py",
+        "table_io.py",
+    }
     assert script_files == {
         "convert_raw_dataset.py",
         "fetch_public_data.py",

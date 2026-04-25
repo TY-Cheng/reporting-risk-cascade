@@ -35,11 +35,13 @@ _test-core:
         tests/test_bridge.py \
         tests/test_data_prep.py \
         tests/test_docs.py \
+        tests/test_peer_comparison.py \
         tests/test_public_cascade_interfaces.py \
         tests/test_table_io_sample.py \
         --cov=src.benchmark \
         --cov=src.bridge \
         --cov=src.data_prep \
+        --cov=src.peer_comparison \
         --cov=src.public_cascade \
         --cov=src.ranking_metrics \
         --cov=src.sample_dataset \
@@ -74,15 +76,17 @@ status: _check-env
     fi
 
 task name="study" dataset="raw" out_dir="" extra="": _check-env
-    @case "{{ name }}" in \
+    @task_extra="{{ extra }}"; \
+    case "$task_extra" in extra=*) task_extra="${task_extra#extra=}" ;; esac; \
+    case "{{ name }}" in \
         prep) \
             just _run "{{ dataset }}" "{{ out_dir }}"; \
             ;; \
         benchmark|cascade|bridge|study) \
-            just _analysis "{{ name }}" "{{ dataset }}" "{{ out_dir }}" "{{ extra }}"; \
+            just _analysis "{{ name }}" "{{ dataset }}" "{{ out_dir }}" "$task_extra"; \
             ;; \
         sec-bulk|submissions|companyfacts|fsds|notes|comment-letters|aaer|form-ap|pcaob-inspections|insider|13f|edgar-logs|market-structure|build-lake) \
-            just _fetch "{{ name }}" "{{ extra }}"; \
+            just _fetch "{{ name }}" "$task_extra"; \
             ;; \
         *) \
             echo "task must be one of: prep, benchmark, cascade, bridge, study, sec-bulk, submissions, companyfacts, fsds, notes, comment-letters, aaer, form-ap, pcaob-inspections, insider, 13f, edgar-logs, market-structure, build-lake"; \

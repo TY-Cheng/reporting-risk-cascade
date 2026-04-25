@@ -35,9 +35,11 @@ data blockers are identified.
 
 Fallback hierarchy:
 1. First evaluate native public sources already in or near the repo: SEC bulk
-   submissions, FSDS, Notes, UPLOAD/CORRESP, 10-K/A and 10-Q/A amendments, 8-K
-   Item 4.02, AAER proxy pages, PCAOB Form AP, PCAOB inspections, SEC ticker
-   files, 13F, insider data, EDGAR logs, and market-structure datasets.
+   submissions, FSDS, Notes, UPLOAD/CORRESP, NT 10-K/10-Q, 10-K/A and 10-Q/A
+   amendments, 8-K Items 3.01/4.01/4.02/5.02, DEF 14A/proxy timing, AAER proxy
+   pages, PCAOB Form AP, PCAOB inspections, PCAOB RASR/Form 2/Form 3 public
+   status, SEC ticker files, insider data, EDGAR logs, 13F, FTD, and
+   market-structure datasets.
 2. Then evaluate affordable external APIs only when they solve a concrete
    blocker or reduce implementation cost without replacing the public lake.
 3. Treat institutional paid sources as out-of-scope future work under current
@@ -154,6 +156,14 @@ Audit dimensions:
   into issuer_origin_panel or the public cascade modeling table.
 - Check whether comment letters, amendments, 8-K Item 4.02, and AAER proxy labels
   remain separate rather than collapsed into a single restatement label.
+- Check whether amendment annotations use the conservative mixed-content priority:
+  financial/non-admin triggers override Part III/proxy admin triggers, with an explicit
+  annotation note.
+- Check whether rolling public-history features are anchored on `origin_date`, not
+  fiscal-year end, and whether filing-friction level features are kept separate from
+  public-history rolling counts.
+- Check whether note tag entropy has a formal definition and is interpreted as
+  disclosure dispersion/breadth rather than mechanically as opacity.
 - Check whether source availability masks, first-public dates, hashes, parser
   versions, and as-of dates are preserved through bronze, silver, and gold.
 - Check whether non-CIK-native public sources retain original identifiers and

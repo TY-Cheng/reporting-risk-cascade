@@ -10,7 +10,7 @@ bridge blockers, and the exact commands needed to reproduce the active results.
 <div class="rrc-hero__actions" markdown>
 [Open the paper plan](paper_plan.md){ .md-button .md-button--primary }
 [View results](results_snapshot.md){ .md-button }
-[Run commands](#run-surface){ .md-button }
+[Run commands](#reproducible-commands){ .md-button }
 </div>
 
 <div class="rrc-badge-row">
@@ -39,7 +39,7 @@ bridge blockers, and the exact commands needed to reproduce the active results.
     The repo front door is `just`. Benchmark, public-cascade, study, and docs
     commands are all routed through the same small command surface.
 
-    [:octicons-arrow-right-24: Jump to run surface](#run-surface)
+    [:octicons-arrow-right-24: Jump to commands](#reproducible-commands)
 
 -   :material-chart-box-outline: __Current results__
 
@@ -83,7 +83,7 @@ bridge blockers, and the exact commands needed to reproduce the active results.
 
 </div>
 
-## Run Surface
+## Reproducible Commands
 
 === "Fast path"
 
@@ -127,8 +127,8 @@ bridge blockers, and the exact commands needed to reproduce the active results.
 
 | Layer | Current role | State |
 | --- | --- | --- |
-| Benchmark | `gvkey x data_year` benchmark | Evidence available, but `res_an*` supports timing sensitivity only, not paper-grade maturation |
-| Public cascade | Main public-data measurement layer | Full-run snapshot available; current readiness is `xbrl_ratio_baseline` with nonzero XBRL ratio features |
+| Benchmark | `gvkey x data_year` benchmark | Evidence available; the code emits `naive`, `proxy_drop_observed`, and `proxy_imputed_lag_*y` rows, but external timing is still needed for paper-grade maturation |
+| Public cascade | Main public-data measurement layer | Full-run snapshot available; current readiness is `xbrl_ratio_baseline` with nonzero XBRL ratio features; public-label opacity DML is implemented and refreshes on the next study run |
 | Bridge | Overlap validation between old and new layers | Integration evidence pending until `data/external/gvkey_cik_year.csv` is prepared from an authoritative WRDS/Compustat-style CIK-GVKEY source |
 
 !!! info "Bridge crosswalk"
@@ -142,6 +142,6 @@ bridge blockers, and the exact commands needed to reproduce the active results.
     Open [paper_plan.md](paper_plan.md) when you need the execution contract.
     Open [future_work.md](future_work.md) only after the current paper gates are met.
 
-## Repo Overview
+## Repository Overview
 
 --8<-- "README.md:docs-home"

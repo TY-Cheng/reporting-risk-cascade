@@ -15,6 +15,7 @@ and filing-native keys:
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 import shutil
@@ -115,6 +116,22 @@ EMPTY_TABLE_SCHEMAS: Dict[str, Sequence[str]] = {
 PERIOD_FORMS = {"10-K", "10-K/A", "10-Q", "10-Q/A", "20-F", "40-F"}
 ANNUAL_FORMS = {"10-K", "10-K/A"}
 FPI_FORMS = {"20-F", "40-F", "6-K"}
+EIGHT_K_TARGET_ITEM_CODES = ("3.01", "4.01", "4.02", "5.02")
+EIGHT_K_ITEM_CODE_RE = re.compile(r"(?:\bitem\s*)?([0-9]{1,2}\.[0-9]{2})", re.IGNORECASE)
+AMENDMENT_NOTE_HEADING_RE = re.compile(
+    r"\b(EXPLANATORY NOTES?|NOTE REGARDING AMENDMENT|INTRODUCTORY NOTE)\b",
+    re.IGNORECASE,
+)
+AMENDMENT_MAJOR_HEADING_RE = re.compile(
+    r"\b(PART\s+(?:I|II|III|IV)\b|ITEM\s+[0-9]{1,2}(?:\.[0-9]{2})?\b|"
+    r"SIGNATURES\b|EXHIBIT INDEX\b|TABLE OF CONTENTS\b)",
+    re.IGNORECASE,
+)
+AMENDMENT_FINANCIAL_KEYWORD_RE = re.compile(
+    r"\b(restat(?:e|ed|ement|ing)|correct(?:ed|ion|ing)?|error|misstatement|"
+    r"non-reliance|nonreliance|previously issued financial)\b",
+    re.IGNORECASE,
+)
 _LAST_REQUEST_AT = 0.0
 
 XBRL_CORE_TAGS: Dict[str, Sequence[str]] = {
@@ -2113,6 +2130,215 @@ def build_comment_threads(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
     return out_path
 
 
+def parse_8k_item_codes(items: object) -> Tuple[str, ...]:
+    """Parse structured SEC 8-K item metadata without consulting filing text."""
+
+    if items is None or (isinstance(items, float) and pd.isna(items)):
+        return ()
+    text = str(items).strip()
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return ()
+    return tuple(sorted({match.group(1) for match in EIGHT_K_ITEM_CODE_RE.finditer(text)}))
+
+
+def _is_missing_items_value(value: object) -> bool:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return True
+    text = str(value).strip()
+    return not text or text.lower() in {"nan", "none", "null"}
+
+
+def build_issuer_8k_item_events(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
+    filing_dim = read_table(filing_dim_csv, date_cols=["filing_date", "report_date"])
+    required_cols = {"issuer_cik", "accession", "filing_date", "report_date", "form", "items"}
+    for col in required_cols.difference(filing_dim.columns):
+        filing_dim[col] = pd.NA
+    if "accession_nodash" not in filing_dim.columns:
+        filing_dim["accession_nodash"] = (
+            filing_dim["accession"].fillna("").astype(str).str.replace("-", "", regex=False)
+        )
+    eight_k = filing_dim.loc[filing_dim["form"].eq("8-K")].copy()
+    columns = [
+        "issuer_cik",
+        "accession",
+        "accession_nodash",
+        "public_date",
+        "report_date",
+        "item_code",
+        "event_type",
+        "item_metadata_missing",
+        "identified_from",
+    ]
+    if eight_k.empty:
+        event = pd.DataFrame(columns=columns)
+    else:
+        eight_k["issuer_cik"] = _normalize_cik_series(eight_k["issuer_cik"])
+        eight_k["item_metadata_missing"] = eight_k["items"].map(_is_missing_items_value)
+        eight_k["parsed_item_codes"] = eight_k["items"].map(parse_8k_item_codes)
+        identified = eight_k.loc[~eight_k["item_metadata_missing"]].copy()
+        identified = identified.explode("parsed_item_codes")
+        identified = identified.loc[
+            identified["parsed_item_codes"].isin(EIGHT_K_TARGET_ITEM_CODES)
+        ].copy()
+        if not identified.empty:
+            identified["item_code"] = identified["parsed_item_codes"].astype(str)
+            identified["event_type"] = "8k_item_" + identified["item_code"].str.replace(
+                ".", "_", regex=False
+            )
+            identified["item_metadata_missing"] = 0
+        missing = eight_k.loc[eight_k["item_metadata_missing"]].copy()
+        if not missing.empty:
+            missing["item_code"] = pd.NA
+            missing["event_type"] = "item_metadata_missing"
+            missing["item_metadata_missing"] = 1
+        event = pd.concat([identified, missing], ignore_index=True, sort=False)
+        if not event.empty:
+            event = event.rename(columns={"filing_date": "public_date"})
+            event["identified_from"] = "items_metadata"
+            event = event[columns]
+            event = event.drop_duplicates(
+                subset=["issuer_cik", "accession", "item_code", "event_type"]
+            ).sort_values(["issuer_cik", "public_date", "accession", "event_type"])
+        else:
+            event = pd.DataFrame(columns=columns)
+    silver_dir.mkdir(parents=True, exist_ok=True)
+    out_path = silver_dir / "issuer_8k_item_event.csv.gz"
+    event.to_csv(out_path, index=False, compression="gzip")
+    return out_path
+
+
+def _html_or_text_to_plain_text(document_text: str) -> str:
+    text = re.sub(
+        r"<(script|style)\b[^>]*>.*?</\1>",
+        " ",
+        str(document_text),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(r"<[^>]+>", "\n", text)
+    text = html.unescape(text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    return re.sub(r"\n\s*", "\n", text)
+
+
+def extract_amendment_explanatory_note_window(
+    document_text: str,
+    *,
+    heading_search_chars: int = 20_000,
+    max_window_chars: int = 3_000,
+) -> Tuple[str, bool]:
+    plain = _html_or_text_to_plain_text(document_text)
+    search_region = plain[: int(heading_search_chars)]
+    heading = AMENDMENT_NOTE_HEADING_RE.search(search_region)
+    if heading is None:
+        return "", True
+    start = heading.start()
+    after_heading = plain[heading.end() : min(len(plain), start + int(max_window_chars))]
+    major_heading = AMENDMENT_MAJOR_HEADING_RE.search(after_heading)
+    end = heading.end() + major_heading.start() if major_heading else start + int(max_window_chars)
+    return plain[start:end].strip(), False
+
+
+def _read_optional_amendment_document_text(row: pd.Series, amendment_text_dir: Optional[Path]) -> str:
+    if amendment_text_dir is None:
+        return ""
+    candidates = []
+    for col in ["accession_nodash", "accession", "primary_document"]:
+        value = row.get(col)
+        if pd.notna(value) and str(value).strip():
+            candidates.append(str(value).strip())
+    suffixes = ["", ".txt", ".htm", ".html"]
+    for candidate in candidates:
+        safe_candidate = candidate.replace("/", "_")
+        for suffix in suffixes:
+            path = amendment_text_dir / f"{safe_candidate}{suffix}"
+            if path.exists() and path.is_file():
+                return path.read_text(encoding="utf-8", errors="ignore")
+    return ""
+
+
+def build_amendment_annotations(
+    *,
+    filing_dim_csv: Path,
+    silver_dir: Path,
+    amendment_text_dir: Optional[Path] = None,
+) -> Path:
+    filing_dim = read_table(filing_dim_csv, date_cols=["filing_date", "report_date"])
+    for col in [
+        "issuer_cik",
+        "accession",
+        "accession_nodash",
+        "filing_date",
+        "report_date",
+        "form",
+        "primary_document",
+        "primary_doc_description",
+    ]:
+        if col not in filing_dim.columns:
+            filing_dim[col] = pd.NA
+    amendments = filing_dim.loc[filing_dim["form"].isin({"10-K/A", "10-Q/A"})].copy()
+    rows: List[Dict[str, Any]] = []
+    admin_re = re.compile(r"\b(part\s+iii|proxy|def\s*14a|exhibit)\b", re.IGNORECASE)
+    for _, row in amendments.iterrows():
+        description = str(row.get("primary_doc_description") or "")
+        document_text = _read_optional_amendment_document_text(row, amendment_text_dir)
+        note_window, note_missing = extract_amendment_explanatory_note_window(document_text)
+        financial_override = bool(note_window and AMENDMENT_FINANCIAL_KEYWORD_RE.search(note_window))
+        admin_candidate = bool(admin_re.search(description))
+        mixed = bool(admin_candidate and financial_override)
+        if financial_override:
+            annotation = "non_admin_financial_correction"
+            reason = (
+                "mixed_content_classified_as_nonadmin"
+                if mixed
+                else "explanatory_note_financial_keyword"
+            )
+        elif admin_candidate:
+            annotation = "admin_part_iii_proxy"
+            reason = "admin_candidate_metadata"
+        else:
+            annotation = "broad_amendment_unclassified"
+            reason = "explanatory_note_missing" if note_missing else "no_financial_keyword"
+        rows.append(
+            {
+                "issuer_cik": row["issuer_cik"],
+                "accession": row["accession"],
+                "accession_nodash": row["accession_nodash"],
+                "public_date": row["filing_date"],
+                "report_date": row["report_date"],
+                "form": row["form"],
+                "primary_document": row["primary_document"],
+                "admin_candidate_part_iii": int(admin_candidate),
+                "financial_override": int(financial_override),
+                "mixed_content": int(mixed),
+                "amendment_annotation": annotation,
+                "annotation_reason": reason,
+                "explanatory_note_missing": int(note_missing),
+                "explanatory_note_char_count": int(len(note_window)),
+            }
+        )
+    columns = [
+        "issuer_cik",
+        "accession",
+        "accession_nodash",
+        "public_date",
+        "report_date",
+        "form",
+        "primary_document",
+        "admin_candidate_part_iii",
+        "financial_override",
+        "mixed_content",
+        "amendment_annotation",
+        "annotation_reason",
+        "explanatory_note_missing",
+        "explanatory_note_char_count",
+    ]
+    annotation = pd.DataFrame(rows, columns=columns)
+    silver_dir.mkdir(parents=True, exist_ok=True)
+    out_path = silver_dir / "amendment_annotation.csv.gz"
+    annotation.to_csv(out_path, index=False, compression="gzip")
+    return out_path
+
+
 def build_correction_events(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
     filing_dim = read_table(filing_dim_csv, date_cols=["filing_date", "report_date"])
     filing_dim["items"] = filing_dim.get("items", "").fillna("").astype(str)
@@ -2135,9 +2361,7 @@ def build_correction_events(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
         )
 
     eight_k = filing_dim.loc[filing_dim["form"].eq("8-K")].copy()
-    is_402 = eight_k["items"].str.contains("4.02", regex=False) | eight_k[
-        "primary_doc_description"
-    ].str.contains("4.02", regex=False)
+    is_402 = eight_k["items"].map(lambda value: "4.02" in parse_8k_item_codes(value))
     for _, row in eight_k.loc[is_402].iterrows():
         rows.append(
             {
@@ -2146,7 +2370,7 @@ def build_correction_events(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
                 "public_date": row["filing_date"],
                 "report_date": row["report_date"],
                 "correction_type": "nonreliance_8k_402",
-                "identified_from": "items_or_description",
+                "identified_from": "items_metadata",
             }
         )
 
@@ -2183,6 +2407,268 @@ def build_correction_events(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
     out_path = silver_dir / "correction_event.csv.gz"
     correction.to_csv(out_path, index=False, compression="gzip")
     return out_path
+
+
+def _empty_partner_history_outputs(silver_dir: Path) -> Dict[str, Path]:
+    outputs = {
+        "partner_issuer_engagement": silver_dir / "partner_issuer_engagement.csv.gz",
+        "partner_risk_history": silver_dir / "partner_risk_history.csv.gz",
+        "partner_issuer_risk_history": silver_dir / "partner_issuer_risk_history.csv.gz",
+    }
+    schemas = {
+        "partner_issuer_engagement": [
+            "issuer_cik",
+            "fiscal_period_end",
+            "form_ap_public_date",
+            "form_filing_id",
+            "pcaob_firm_id",
+            "engagement_partner_id",
+            "engagement_partner_name",
+            "number_of_participants",
+        ],
+        "partner_risk_history": [
+            "engagement_partner_id",
+            "event_date",
+            "partner_prior_8k_402_count",
+            "partner_prior_nonadmin_amendment_count",
+            "partner_prior_total_count",
+        ],
+        "partner_issuer_risk_history": [
+            "engagement_partner_id",
+            "issuer_cik",
+            "event_date",
+            "partner_issuer_prior_8k_402_count",
+            "partner_issuer_prior_nonadmin_amendment_count",
+            "partner_issuer_prior_total_count",
+        ],
+    }
+    silver_dir.mkdir(parents=True, exist_ok=True)
+    for name, path in outputs.items():
+        pd.DataFrame(columns=schemas[name]).to_csv(path, index=False, compression="gzip")
+    return outputs
+
+
+def build_partner_risk_histories(
+    *,
+    form_ap_event_path: Path,
+    issuer_8k_item_event_path: Path,
+    amendment_annotation_path: Path,
+    silver_dir: Path,
+) -> Dict[str, Path]:
+    if not form_ap_event_path.exists():
+        return _empty_partner_history_outputs(silver_dir)
+    form_ap = read_table(
+        form_ap_event_path,
+        date_cols=["fiscal_period_end", "report_date", "filing_date"],
+        low_memory=False,
+    )
+    if form_ap.empty or "engagement_partner_id" not in form_ap.columns:
+        return _empty_partner_history_outputs(silver_dir)
+    for col in [
+        "issuer_cik",
+        "fiscal_period_end",
+        "filing_date",
+        "form_filing_id",
+        "pcaob_firm_id",
+        "engagement_partner_id",
+        "engagement_partner_name",
+        "number_of_participants",
+    ]:
+        if col not in form_ap.columns:
+            form_ap[col] = pd.NA
+    engagement = form_ap.copy()
+    engagement["issuer_cik"] = _normalize_cik_series(engagement["issuer_cik"])
+    engagement["form_ap_public_date"] = pd.to_datetime(engagement["filing_date"], errors="coerce")
+    engagement["engagement_partner_id"] = (
+        engagement["engagement_partner_id"].fillna("").astype(str).str.strip()
+    )
+    engagement = engagement.loc[
+        engagement["issuer_cik"].notna()
+        & engagement["form_ap_public_date"].notna()
+        & engagement["engagement_partner_id"].ne("")
+    ].copy()
+    engagement_cols = [
+        "issuer_cik",
+        "fiscal_period_end",
+        "form_ap_public_date",
+        "form_filing_id",
+        "pcaob_firm_id",
+        "engagement_partner_id",
+        "engagement_partner_name",
+        "number_of_participants",
+    ]
+    engagement = engagement[engagement_cols].drop_duplicates()
+
+    risk_frames: List[pd.DataFrame] = []
+    if issuer_8k_item_event_path.exists():
+        item_event = read_table(
+            issuer_8k_item_event_path,
+            date_cols=["public_date", "report_date"],
+            low_memory=False,
+        )
+        if not item_event.empty and {"issuer_cik", "public_date", "item_code"}.issubset(
+            item_event.columns
+        ):
+            k402 = item_event.loc[item_event["item_code"].astype(str).eq("4.02")].copy()
+            if not k402.empty:
+                k402["risk_type"] = "8k_402"
+                risk_frames.append(
+                    k402[["issuer_cik", "public_date", "risk_type"]].rename(
+                        columns={"public_date": "event_date"}
+                    )
+                )
+    if amendment_annotation_path.exists():
+        annotation = read_table(
+            amendment_annotation_path,
+            date_cols=["public_date", "report_date"],
+            low_memory=False,
+        )
+        if not annotation.empty and {"issuer_cik", "public_date", "amendment_annotation"}.issubset(
+            annotation.columns
+        ):
+            nonadmin = annotation.loc[
+                annotation["amendment_annotation"].eq("non_admin_financial_correction")
+            ].copy()
+            if not nonadmin.empty:
+                nonadmin["risk_type"] = "nonadmin_amendment"
+                risk_frames.append(
+                    nonadmin[["issuer_cik", "public_date", "risk_type"]].rename(
+                        columns={"public_date": "event_date"}
+                    )
+                )
+    if risk_frames:
+        risk_events = pd.concat(risk_frames, ignore_index=True)
+    else:
+        risk_events = pd.DataFrame(columns=["issuer_cik", "event_date", "risk_type"])
+    risk_events["issuer_cik"] = _normalize_cik_series(risk_events["issuer_cik"])
+    risk_events["event_date"] = pd.to_datetime(risk_events["event_date"], errors="coerce")
+    risk_events = risk_events.loc[
+        risk_events["issuer_cik"].notna() & risk_events["event_date"].notna()
+    ].copy()
+
+    silver_dir.mkdir(parents=True, exist_ok=True)
+    engagement_path = silver_dir / "partner_issuer_engagement.csv.gz"
+    engagement.to_csv(engagement_path, index=False, compression="gzip")
+    if engagement.empty or risk_events.empty:
+        outputs = _empty_partner_history_outputs(silver_dir)
+        outputs["partner_issuer_engagement"] = engagement_path
+        engagement.to_csv(engagement_path, index=False, compression="gzip")
+        return outputs
+
+    risk_events = risk_events.sort_values(["event_date", "issuer_cik"], kind="mergesort")
+    engagement_sorted = engagement.sort_values(
+        ["form_ap_public_date", "issuer_cik"], kind="mergesort"
+    )
+    matched = pd.merge_asof(
+        risk_events,
+        engagement_sorted,
+        left_on="event_date",
+        right_on="form_ap_public_date",
+        by="issuer_cik",
+        direction="backward",
+        allow_exact_matches=True,
+    )
+    matched = matched.loc[matched["engagement_partner_id"].notna()].copy()
+    matched["engagement_partner_id"] = matched["engagement_partner_id"].astype(str)
+
+    risk_types = ["8k_402", "nonadmin_amendment"]
+    if matched.empty:
+        outputs = _empty_partner_history_outputs(silver_dir)
+        outputs["partner_issuer_engagement"] = engagement_path
+        engagement.to_csv(engagement_path, index=False, compression="gzip")
+        return outputs
+
+    daily_partner = (
+        matched.groupby(["engagement_partner_id", "event_date", "risk_type"], as_index=False)
+        .size()
+        .rename(columns={"size": "event_count"})
+    )
+    partner_wide = (
+        daily_partner.pivot_table(
+            index=["engagement_partner_id", "event_date"],
+            columns="risk_type",
+            values="event_count",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+        .rename_axis(None, axis=1)
+    )
+    for risk_type in risk_types:
+        if risk_type not in partner_wide.columns:
+            partner_wide[risk_type] = 0
+    partner_wide = partner_wide.sort_values(
+        ["engagement_partner_id", "event_date"], kind="mergesort"
+    )
+    for risk_type in risk_types:
+        partner_wide[f"partner_prior_{risk_type}_count"] = partner_wide.groupby(
+            "engagement_partner_id"
+        )[risk_type].cumsum()
+    partner_wide["partner_prior_total_count"] = partner_wide[
+        [f"partner_prior_{risk_type}_count" for risk_type in risk_types]
+    ].sum(axis=1)
+    partner_history = partner_wide[
+        [
+            "engagement_partner_id",
+            "event_date",
+            "partner_prior_8k_402_count",
+            "partner_prior_nonadmin_amendment_count",
+            "partner_prior_total_count",
+        ]
+    ]
+
+    daily_partner_issuer = (
+        matched.groupby(
+            ["engagement_partner_id", "issuer_cik", "event_date", "risk_type"],
+            as_index=False,
+        )
+        .size()
+        .rename(columns={"size": "event_count"})
+    )
+    issuer_wide = (
+        daily_partner_issuer.pivot_table(
+            index=["engagement_partner_id", "issuer_cik", "event_date"],
+            columns="risk_type",
+            values="event_count",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+        .rename_axis(None, axis=1)
+    )
+    for risk_type in risk_types:
+        if risk_type not in issuer_wide.columns:
+            issuer_wide[risk_type] = 0
+    issuer_wide = issuer_wide.sort_values(
+        ["engagement_partner_id", "issuer_cik", "event_date"], kind="mergesort"
+    )
+    for risk_type in risk_types:
+        issuer_wide[f"partner_issuer_prior_{risk_type}_count"] = issuer_wide.groupby(
+            ["engagement_partner_id", "issuer_cik"]
+        )[risk_type].cumsum()
+    issuer_wide["partner_issuer_prior_total_count"] = issuer_wide[
+        [f"partner_issuer_prior_{risk_type}_count" for risk_type in risk_types]
+    ].sum(axis=1)
+    issuer_history = issuer_wide[
+        [
+            "engagement_partner_id",
+            "issuer_cik",
+            "event_date",
+            "partner_issuer_prior_8k_402_count",
+            "partner_issuer_prior_nonadmin_amendment_count",
+            "partner_issuer_prior_total_count",
+        ]
+    ]
+
+    partner_history_path = silver_dir / "partner_risk_history.csv.gz"
+    issuer_history_path = silver_dir / "partner_issuer_risk_history.csv.gz"
+    partner_history.to_csv(partner_history_path, index=False, compression="gzip")
+    issuer_history.to_csv(issuer_history_path, index=False, compression="gzip")
+    return {
+        "partner_issuer_engagement": engagement_path,
+        "partner_risk_history": partner_history_path,
+        "partner_issuer_risk_history": issuer_history_path,
+    }
 
 
 def normalize_aaer_events(
@@ -2415,6 +2901,292 @@ def _event_within_horizon(
         right = np.searchsorted(event_dates, hi, side="right")
         flags.loc[origins.index] = (right > left).astype(int)
     return flags
+
+
+def _event_count_prior_window(
+    base: pd.DataFrame,
+    events: pd.DataFrame,
+    *,
+    date_col: str,
+    window_days: int,
+    event_type: Optional[str] = None,
+    type_col: str = "correction_type",
+) -> pd.Series:
+    if events.empty or "issuer_cik" not in events.columns or "issuer_cik" not in base.columns:
+        return pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
+    work = events.copy()
+    if date_col not in work.columns:
+        return pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
+    work[date_col] = pd.to_datetime(work[date_col], errors="coerce")
+    if event_type is not None:
+        if type_col not in work.columns:
+            return pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
+        work = work.loc[work[type_col].astype(str).eq(str(event_type))].copy()
+    work = work.loc[work[date_col].notna()].copy()
+    if work.empty:
+        return pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
+    work["issuer_cik"] = _normalize_cik_series(work["issuer_cik"])
+    event_dates_by_cik = {
+        cik: np.sort(group[date_col].to_numpy(dtype="datetime64[ns]"))
+        for cik, group in work.groupby("issuer_cik", sort=False)
+    }
+    counts = pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
+    base_work = base[["issuer_cik", "origin_date"]].copy()
+    base_work["issuer_cik"] = _normalize_cik_series(base_work["issuer_cik"])
+    base_work["origin_date"] = pd.to_datetime(base_work["origin_date"], errors="coerce")
+    base_work = base_work.loc[base_work["issuer_cik"].notna() & base_work["origin_date"].notna()]
+    for cik, group in base_work.groupby("issuer_cik", sort=False):
+        event_dates = event_dates_by_cik.get(cik)
+        if event_dates is None or len(event_dates) == 0:
+            continue
+        origins = group["origin_date"]
+        lo = (origins - pd.Timedelta(days=int(window_days))).to_numpy(dtype="datetime64[ns]")
+        hi = origins.to_numpy(dtype="datetime64[ns]")
+        left = np.searchsorted(event_dates, lo, side="left")
+        right = np.searchsorted(event_dates, hi, side="left")
+        counts.loc[origins.index] = (right - left).astype("int64")
+    return counts
+
+
+def _add_public_history_and_filing_friction_features(
+    filing: pd.DataFrame,
+    *,
+    comment_thread: pd.DataFrame,
+    correction_event: pd.DataFrame,
+    issuer_8k_item_event: pd.DataFrame,
+) -> pd.DataFrame:
+    item_event = issuer_8k_item_event.copy()
+    if not item_event.empty and "item_code" in item_event.columns:
+        item_event["item_code"] = item_event["item_code"].map(
+            lambda value: "" if pd.isna(value) else str(value).strip()
+        )
+    public_history_specs = [
+        ("public_history_comment_thread", comment_thread.rename(columns={"first_public_date": "event_date"}), "event_date", None, "correction_type"),
+        ("public_history_amendment", correction_event, "public_date", "amendment_10x_a", "correction_type"),
+        ("public_history_8k_301", item_event, "public_date", "3.01", "item_code"),
+        ("public_history_8k_401", item_event, "public_date", "4.01", "item_code"),
+        ("public_history_8k_402", item_event, "public_date", "4.02", "item_code"),
+        ("public_history_8k_502", item_event, "public_date", "5.02", "item_code"),
+    ]
+    for prefix, events, date_col, event_type, type_col in public_history_specs:
+        for label, days in [("1y", 365), ("3y", 365 * 3)]:
+            filing[f"{prefix}_{label}_count"] = _event_count_prior_window(
+                filing,
+                events,
+                date_col=date_col,
+                window_days=days,
+                event_type=event_type,
+                type_col=type_col,
+            )
+
+    filing["filing_friction_is_nt"] = filing["form"].fillna("").astype(str).str.startswith("NT ").astype(int)
+    nt_forms = {"NT 10-K", "NT 10-Q"}
+    nt = filing.loc[filing["form"].isin(nt_forms), ["issuer_cik", "report_date", "origin_date"]].copy()
+    if nt.empty:
+        filing["filing_friction_nt_pre_origin"] = 0
+        filing["filing_friction_nt_delay_days"] = np.nan
+        return filing
+    nt = (
+        nt.dropna(subset=["issuer_cik", "report_date", "origin_date"])
+        .rename(columns={"origin_date": "nt_public_date"})
+        .sort_values(["issuer_cik", "report_date", "nt_public_date"], kind="mergesort")
+        .drop_duplicates(subset=["issuer_cik", "report_date"], keep="last")
+    )
+    filing = filing.merge(nt, on=["issuer_cik", "report_date"], how="left")
+    filing["filing_friction_nt_pre_origin"] = (
+        filing["nt_public_date"].notna() & filing["nt_public_date"].le(filing["origin_date"])
+    ).astype(int)
+    filing["filing_friction_nt_delay_days"] = np.where(
+        filing["filing_friction_nt_pre_origin"].eq(1),
+        (filing["origin_date"] - filing["nt_public_date"]).dt.days,
+        np.nan,
+    )
+    return filing.drop(columns=["nt_public_date"])
+
+
+def _k402_label_and_unknown(base: pd.DataFrame, issuer_8k_item_event: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
+    if issuer_8k_item_event.empty:
+        labels = pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
+        unknown = pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
+        return labels, unknown
+    events = issuer_8k_item_event.copy()
+    for col in ["issuer_cik", "public_date", "item_code", "event_type", "item_metadata_missing"]:
+        if col not in events.columns:
+            events[col] = pd.NA
+    events["item_code"] = events["item_code"].map(
+        lambda value: "" if pd.isna(value) else str(value).strip()
+    )
+    positive = _event_within_horizon(
+        base,
+        events,
+        date_col="public_date",
+        horizon_days=365,
+        event_type="4.02",
+        type_col="item_code",
+    )
+    missing_events = events.loc[
+        events["item_metadata_missing"].fillna(0).astype(str).isin({"1", "1.0", "True", "true"})
+        | events["event_type"].astype(str).eq("item_metadata_missing")
+    ].copy()
+    missing = _event_within_horizon(
+        base,
+        missing_events,
+        date_col="public_date",
+        horizon_days=365,
+    )
+    unknown = (positive.eq(0) & missing.eq(1)).astype("int64")
+    labels = positive.astype("Int64")
+    labels.loc[unknown.eq(1)] = pd.NA
+    return labels, unknown
+
+
+def _add_partner_prior_features(
+    filing: pd.DataFrame,
+    *,
+    silver_dir: Path,
+    engine: str = "pandas",
+    duckdb_threads: int = 4,
+    duckdb_memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
+    duckdb_temp_directory: Path | str | None = None,
+    duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+) -> pd.DataFrame:
+    feature_cols = [
+        "auditor_partner_prior_other_issuer_8k_402_count",
+        "auditor_partner_prior_other_issuer_nonadmin_amendment_count",
+        "auditor_partner_prior_other_issuer_total_count",
+    ]
+    for col in feature_cols:
+        filing[col] = 0
+    engagement_path = silver_dir / "partner_issuer_engagement.csv.gz"
+    partner_history_path = silver_dir / "partner_risk_history.csv.gz"
+    issuer_history_path = silver_dir / "partner_issuer_risk_history.csv.gz"
+    if not (engagement_path.exists() and partner_history_path.exists() and issuer_history_path.exists()):
+        return filing
+    engagement = _read_csv_with_engine(
+        engagement_path,
+        date_cols=["fiscal_period_end", "form_ap_public_date"],
+        engine=engine,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
+    partner_history = _read_csv_with_engine(
+        partner_history_path,
+        date_cols=["event_date"],
+        engine=engine,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
+    issuer_history = _read_csv_with_engine(
+        issuer_history_path,
+        date_cols=["event_date"],
+        engine=engine,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
+    if engagement.empty or partner_history.empty:
+        return filing
+    work = filing.reset_index().rename(columns={"index": "_filing_index"}).copy()
+    work["issuer_cik"] = _normalize_cik_series(work["issuer_cik"])
+    work["origin_date"] = pd.to_datetime(work["origin_date"], errors="coerce")
+    engagement["issuer_cik"] = _normalize_cik_series(engagement["issuer_cik"])
+    engagement["form_ap_public_date"] = pd.to_datetime(
+        engagement["form_ap_public_date"], errors="coerce"
+    )
+    engagement["engagement_partner_id"] = (
+        engagement["engagement_partner_id"].fillna("").astype(str).str.strip()
+    )
+    work = work.sort_values(["origin_date", "issuer_cik"], kind="mergesort")
+    engagement = engagement.sort_values(["form_ap_public_date", "issuer_cik"], kind="mergesort")
+    assigned = pd.merge_asof(
+        work,
+        engagement[["issuer_cik", "form_ap_public_date", "engagement_partner_id"]],
+        left_on="origin_date",
+        right_on="form_ap_public_date",
+        by="issuer_cik",
+        direction="backward",
+        allow_exact_matches=False,
+    )
+    assigned = assigned.sort_values("_filing_index", kind="mergesort")
+    assigned["engagement_partner_id"] = assigned["engagement_partner_id"].fillna("").astype(str)
+
+    partner_cols = [
+        "partner_prior_8k_402_count",
+        "partner_prior_nonadmin_amendment_count",
+        "partner_prior_total_count",
+    ]
+    issuer_cols = [
+        "partner_issuer_prior_8k_402_count",
+        "partner_issuer_prior_nonadmin_amendment_count",
+        "partner_issuer_prior_total_count",
+    ]
+    if not partner_history.empty:
+        partner_history["engagement_partner_id"] = (
+            partner_history["engagement_partner_id"].fillna("").astype(str)
+        )
+        partner_history = partner_history.sort_values(
+            ["event_date", "engagement_partner_id"], kind="mergesort"
+        )
+        assigned = pd.merge_asof(
+            assigned.sort_values(["origin_date", "engagement_partner_id"], kind="mergesort"),
+            partner_history[["engagement_partner_id", "event_date", *partner_cols]],
+            left_on="origin_date",
+            right_on="event_date",
+            by="engagement_partner_id",
+            direction="backward",
+            allow_exact_matches=False,
+        ).sort_values("_filing_index", kind="mergesort")
+    for col in partner_cols:
+        if col not in assigned.columns:
+            assigned[col] = 0
+        assigned[col] = pd.to_numeric(assigned[col], errors="coerce").fillna(0)
+
+    if not issuer_history.empty:
+        issuer_history["engagement_partner_id"] = (
+            issuer_history["engagement_partner_id"].fillna("").astype(str)
+        )
+        issuer_history["issuer_cik"] = _normalize_cik_series(issuer_history["issuer_cik"])
+        issuer_history = issuer_history.sort_values(
+            ["event_date", "engagement_partner_id", "issuer_cik"], kind="mergesort"
+        )
+        assigned = pd.merge_asof(
+            assigned.sort_values(
+                ["origin_date", "engagement_partner_id", "issuer_cik"], kind="mergesort"
+            ),
+            issuer_history[["engagement_partner_id", "issuer_cik", "event_date", *issuer_cols]],
+            left_on="origin_date",
+            right_on="event_date",
+            by=["engagement_partner_id", "issuer_cik"],
+            direction="backward",
+            allow_exact_matches=False,
+        ).sort_values("_filing_index", kind="mergesort")
+    for col in issuer_cols:
+        if col not in assigned.columns:
+            assigned[col] = 0
+        assigned[col] = pd.to_numeric(assigned[col], errors="coerce").fillna(0)
+
+    deltas = {
+        "auditor_partner_prior_other_issuer_8k_402_count": (
+            assigned["partner_prior_8k_402_count"] - assigned["partner_issuer_prior_8k_402_count"]
+        ),
+        "auditor_partner_prior_other_issuer_nonadmin_amendment_count": (
+            assigned["partner_prior_nonadmin_amendment_count"]
+            - assigned["partner_issuer_prior_nonadmin_amendment_count"]
+        ),
+        "auditor_partner_prior_other_issuer_total_count": (
+            assigned["partner_prior_total_count"] - assigned["partner_issuer_prior_total_count"]
+        ),
+    }
+    for col, values in deltas.items():
+        if (values < 0).any():
+            raise ValueError(f"{col} became negative before clipping; check partner risk joins.")
+        filing[col] = values.clip(lower=0).to_numpy(dtype="int64")
+    return filing
 
 
 def _duckdb_xbrl_summary(
@@ -2909,6 +3681,32 @@ def _build_gold_panels_duckdb(
         )
         _duckdb_source_or_empty(
             con=con,
+            view_name="issuer_8k_item_event_gold",
+            path=silver_dir / "issuer_8k_item_event.csv.gz",
+            empty_columns=(
+                ("issuer_cik", "VARCHAR"),
+                ("public_date", "TIMESTAMP"),
+                ("report_date", "TIMESTAMP"),
+                ("item_code", "VARCHAR"),
+                ("event_type", "VARCHAR"),
+                ("item_metadata_missing", "INTEGER"),
+            ),
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW issuer_8k_item_event_norm_gold AS
+            SELECT
+                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
+                {_duckdb_timestamp_expr("public_date")} AS public_date,
+                CAST(item_code AS VARCHAR) AS item_code,
+                CAST(event_type AS VARCHAR) AS event_type,
+                COALESCE(try_cast(item_metadata_missing AS INTEGER), 0)
+                    AS item_metadata_missing
+            FROM issuer_8k_item_event_gold
+            """
+        )
+        _duckdb_source_or_empty(
+            con=con,
             view_name="aaer_event_gold",
             path=silver_dir / "aaer_event.csv.gz",
             empty_columns=(
@@ -2952,13 +3750,194 @@ def _build_gold_panels_duckdb(
             GROUP BY 1, 2
             """
         )
+        for view_name, filename, empty_columns in [
+            (
+                "partner_issuer_engagement_gold",
+                "partner_issuer_engagement.csv.gz",
+                (
+                    ("issuer_cik", "VARCHAR"),
+                    ("form_ap_public_date", "TIMESTAMP"),
+                    ("engagement_partner_id", "VARCHAR"),
+                ),
+            ),
+            (
+                "partner_risk_history_gold",
+                "partner_risk_history.csv.gz",
+                (
+                    ("engagement_partner_id", "VARCHAR"),
+                    ("event_date", "TIMESTAMP"),
+                    ("partner_prior_8k_402_count", "BIGINT"),
+                    ("partner_prior_nonadmin_amendment_count", "BIGINT"),
+                    ("partner_prior_total_count", "BIGINT"),
+                ),
+            ),
+            (
+                "partner_issuer_risk_history_gold",
+                "partner_issuer_risk_history.csv.gz",
+                (
+                    ("engagement_partner_id", "VARCHAR"),
+                    ("issuer_cik", "VARCHAR"),
+                    ("event_date", "TIMESTAMP"),
+                    ("partner_issuer_prior_8k_402_count", "BIGINT"),
+                    ("partner_issuer_prior_nonadmin_amendment_count", "BIGINT"),
+                    ("partner_issuer_prior_total_count", "BIGINT"),
+                ),
+            ),
+        ]:
+            _duckdb_source_or_empty(
+                con=con,
+                view_name=view_name,
+                path=silver_dir / filename,
+                empty_columns=empty_columns,
+            )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW partner_issuer_engagement_norm_gold AS
+            SELECT
+                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
+                {_duckdb_timestamp_expr("form_ap_public_date")} AS form_ap_public_date,
+                CAST(engagement_partner_id AS VARCHAR) AS engagement_partner_id
+            FROM partner_issuer_engagement_gold
+            WHERE engagement_partner_id IS NOT NULL
+            """
+        )
+        con.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW partner_risk_history_norm_gold AS
+            SELECT
+                CAST(engagement_partner_id AS VARCHAR) AS engagement_partner_id,
+                try_cast(event_date AS TIMESTAMP) AS event_date,
+                COALESCE(try_cast(partner_prior_8k_402_count AS BIGINT), 0)
+                    AS partner_prior_8k_402_count,
+                COALESCE(try_cast(partner_prior_nonadmin_amendment_count AS BIGINT), 0)
+                    AS partner_prior_nonadmin_amendment_count,
+                COALESCE(try_cast(partner_prior_total_count AS BIGINT), 0)
+                    AS partner_prior_total_count
+            FROM partner_risk_history_gold
+            """
+        )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW partner_issuer_risk_history_norm_gold AS
+            SELECT
+                CAST(engagement_partner_id AS VARCHAR) AS engagement_partner_id,
+                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
+                try_cast(event_date AS TIMESTAMP) AS event_date,
+                COALESCE(try_cast(partner_issuer_prior_8k_402_count AS BIGINT), 0)
+                    AS partner_issuer_prior_8k_402_count,
+                COALESCE(try_cast(partner_issuer_prior_nonadmin_amendment_count AS BIGINT), 0)
+                    AS partner_issuer_prior_nonadmin_amendment_count,
+                COALESCE(try_cast(partner_issuer_prior_total_count AS BIGINT), 0)
+                    AS partner_issuer_prior_total_count
+            FROM partner_issuer_risk_history_gold
+            """
+        )
+        con.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW filing_partner_prior_raw_gold AS
+            SELECT
+                f.accession,
+                COALESCE((
+                    SELECT max(hist.partner_prior_8k_402_count)
+                    FROM partner_risk_history_norm_gold hist
+                    WHERE hist.engagement_partner_id = partner.engagement_partner_id
+                      AND hist.event_date < f.origin_date
+                ), 0) AS partner_total_prior_8k_402_count,
+                COALESCE((
+                    SELECT max(hist.partner_prior_nonadmin_amendment_count)
+                    FROM partner_risk_history_norm_gold hist
+                    WHERE hist.engagement_partner_id = partner.engagement_partner_id
+                      AND hist.event_date < f.origin_date
+                ), 0) AS partner_total_prior_nonadmin_amendment_count,
+                COALESCE((
+                    SELECT max(hist.partner_prior_total_count)
+                    FROM partner_risk_history_norm_gold hist
+                    WHERE hist.engagement_partner_id = partner.engagement_partner_id
+                      AND hist.event_date < f.origin_date
+                ), 0) AS partner_total_prior_total_count,
+                COALESCE((
+                    SELECT max(hist.partner_issuer_prior_8k_402_count)
+                    FROM partner_issuer_risk_history_norm_gold hist
+                    WHERE hist.engagement_partner_id = partner.engagement_partner_id
+                      AND hist.issuer_cik = f.issuer_cik
+                      AND hist.event_date < f.origin_date
+                ), 0) AS current_issuer_prior_8k_402_count,
+                COALESCE((
+                    SELECT max(hist.partner_issuer_prior_nonadmin_amendment_count)
+                    FROM partner_issuer_risk_history_norm_gold hist
+                    WHERE hist.engagement_partner_id = partner.engagement_partner_id
+                      AND hist.issuer_cik = f.issuer_cik
+                      AND hist.event_date < f.origin_date
+                ), 0) AS current_issuer_prior_nonadmin_amendment_count,
+                COALESCE((
+                    SELECT max(hist.partner_issuer_prior_total_count)
+                    FROM partner_issuer_risk_history_norm_gold hist
+                    WHERE hist.engagement_partner_id = partner.engagement_partner_id
+                      AND hist.issuer_cik = f.issuer_cik
+                      AND hist.event_date < f.origin_date
+                ), 0) AS current_issuer_prior_total_count
+            FROM filing_windowed_gold f
+            LEFT JOIN LATERAL (
+                SELECT engagement_partner_id
+                FROM partner_issuer_engagement_norm_gold engagement
+                WHERE engagement.issuer_cik = f.issuer_cik
+                  AND engagement.form_ap_public_date < f.origin_date
+                ORDER BY engagement.form_ap_public_date DESC, engagement_partner_id
+                LIMIT 1
+            ) partner ON TRUE
+            """
+        )
+        con.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW filing_partner_prior_gold AS
+            SELECT
+                accession,
+                partner_total_prior_8k_402_count - current_issuer_prior_8k_402_count
+                    AS raw_other_issuer_8k_402_count,
+                partner_total_prior_nonadmin_amendment_count
+                    - current_issuer_prior_nonadmin_amendment_count
+                    AS raw_other_issuer_nonadmin_amendment_count,
+                partner_total_prior_total_count - current_issuer_prior_total_count
+                    AS raw_other_issuer_total_count,
+                greatest(
+                    partner_total_prior_8k_402_count - current_issuer_prior_8k_402_count,
+                    0
+                ) AS auditor_partner_prior_other_issuer_8k_402_count,
+                greatest(
+                    partner_total_prior_nonadmin_amendment_count
+                        - current_issuer_prior_nonadmin_amendment_count,
+                    0
+                ) AS auditor_partner_prior_other_issuer_nonadmin_amendment_count,
+                greatest(
+                    partner_total_prior_total_count - current_issuer_prior_total_count,
+                    0
+                ) AS auditor_partner_prior_other_issuer_total_count
+            FROM filing_partner_prior_raw_gold
+            """
+        )
+        negative_partner_rows = int(
+            con.execute(
+                """
+                SELECT count(*)
+                FROM filing_partner_prior_gold
+                WHERE raw_other_issuer_8k_402_count < 0
+                   OR raw_other_issuer_nonadmin_amendment_count < 0
+                   OR raw_other_issuer_total_count < 0
+                """
+            ).fetchone()[0]
+        )
+        if negative_partner_rows:
+            raise ValueError("Partner other-issuer prior exposure became negative before clipping.")
 
         has_xbrl_summary = _create_duckdb_xbrl_summary_view(con, silver_dir=silver_dir)
         has_xbrl_features = _create_duckdb_xbrl_core_features_view(con, silver_dir=silver_dir)
         has_note_summary = _create_duckdb_note_summary_view(con, silver_dir=silver_dir)
 
         filing_from = "filing_windowed_gold f"
-        joins = ["LEFT JOIN form_ap_summary_gold form_ap USING (issuer_cik, fiscal_year)"]
+        joins = [
+            "LEFT JOIN form_ap_summary_gold form_ap USING (issuer_cik, fiscal_year)",
+            "LEFT JOIN filing_partner_prior_gold partner_prior USING (accession)",
+        ]
         if has_xbrl_summary:
             joins.append("LEFT JOIN xbrl_summary_gold xbrl_summary USING (accession)")
         if has_xbrl_features:
@@ -2973,7 +3952,131 @@ def _build_gold_panels_duckdb(
                 f.*,
                 form_ap.form_ap_filing_count,
                 form_ap.form_ap_unique_partners,
-                form_ap.form_ap_avg_participants
+                form_ap.form_ap_avg_participants,
+                COALESCE(partner_prior.auditor_partner_prior_other_issuer_8k_402_count, 0)
+                    AS auditor_partner_prior_other_issuer_8k_402_count,
+                COALESCE(
+                    partner_prior.auditor_partner_prior_other_issuer_nonadmin_amendment_count,
+                    0
+                ) AS auditor_partner_prior_other_issuer_nonadmin_amendment_count,
+                COALESCE(partner_prior.auditor_partner_prior_other_issuer_total_count, 0)
+                    AS auditor_partner_prior_other_issuer_total_count,
+                CASE WHEN CAST(f.form AS VARCHAR) LIKE 'NT %' THEN 1 ELSE 0 END
+                    AS filing_friction_is_nt,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM filing_windowed_gold nt
+                    WHERE nt.issuer_cik = f.issuer_cik
+                      AND nt.form IN ('NT 10-K', 'NT 10-Q')
+                      AND nt.report_date = f.report_date
+                      AND nt.origin_date <= f.origin_date
+                ) THEN 1 ELSE 0 END AS filing_friction_nt_pre_origin,
+                date_diff(
+                    'day',
+                    (
+                        SELECT max(nt.origin_date)
+                        FROM filing_windowed_gold nt
+                        WHERE nt.issuer_cik = f.issuer_cik
+                          AND nt.form IN ('NT 10-K', 'NT 10-Q')
+                          AND nt.report_date = f.report_date
+                          AND nt.origin_date <= f.origin_date
+                    ),
+                    f.origin_date
+                ) AS filing_friction_nt_delay_days,
+                (
+                    SELECT count(*)
+                    FROM comment_thread_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.first_public_date >= f.origin_date - INTERVAL 365 DAY
+                      AND event.first_public_date < f.origin_date
+                ) AS public_history_comment_thread_1y_count,
+                (
+                    SELECT count(*)
+                    FROM comment_thread_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.first_public_date >= f.origin_date - INTERVAL 1095 DAY
+                      AND event.first_public_date < f.origin_date
+                ) AS public_history_comment_thread_3y_count,
+                (
+                    SELECT count(*)
+                    FROM correction_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.correction_type = 'amendment_10x_a'
+                      AND event.public_date >= f.origin_date - INTERVAL 365 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_amendment_1y_count,
+                (
+                    SELECT count(*)
+                    FROM correction_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.correction_type = 'amendment_10x_a'
+                      AND event.public_date >= f.origin_date - INTERVAL 1095 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_amendment_3y_count,
+                (
+                    SELECT count(*)
+                    FROM issuer_8k_item_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.item_code = '3.01'
+                      AND event.public_date >= f.origin_date - INTERVAL 365 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_8k_301_1y_count,
+                (
+                    SELECT count(*)
+                    FROM issuer_8k_item_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.item_code = '3.01'
+                      AND event.public_date >= f.origin_date - INTERVAL 1095 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_8k_301_3y_count,
+                (
+                    SELECT count(*)
+                    FROM issuer_8k_item_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.item_code = '4.01'
+                      AND event.public_date >= f.origin_date - INTERVAL 365 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_8k_401_1y_count,
+                (
+                    SELECT count(*)
+                    FROM issuer_8k_item_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.item_code = '4.01'
+                      AND event.public_date >= f.origin_date - INTERVAL 1095 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_8k_401_3y_count,
+                (
+                    SELECT count(*)
+                    FROM issuer_8k_item_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.item_code = '4.02'
+                      AND event.public_date >= f.origin_date - INTERVAL 365 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_8k_402_1y_count,
+                (
+                    SELECT count(*)
+                    FROM issuer_8k_item_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.item_code = '4.02'
+                      AND event.public_date >= f.origin_date - INTERVAL 1095 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_8k_402_3y_count,
+                (
+                    SELECT count(*)
+                    FROM issuer_8k_item_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.item_code = '5.02'
+                      AND event.public_date >= f.origin_date - INTERVAL 365 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_8k_502_1y_count,
+                (
+                    SELECT count(*)
+                    FROM issuer_8k_item_event_norm_gold event
+                    WHERE event.issuer_cik = f.issuer_cik
+                      AND event.item_code = '5.02'
+                      AND event.public_date >= f.origin_date - INTERVAL 1095 DAY
+                      AND event.public_date < f.origin_date
+                ) AS public_history_8k_502_3y_count
                 {", xbrl_summary.* EXCLUDE (accession)" if has_xbrl_summary else ""}
                 {", xbrl_core.* EXCLUDE (accession)" if has_xbrl_features else ""}
                 {", note_summary.* EXCLUDE (accession)" if has_note_summary else ""}
@@ -3054,14 +4157,48 @@ def _build_gold_panels_duckdb(
                       AND event.public_date > filing_featured_gold.origin_date
                       AND event.public_date <= filing_featured_gold.origin_date + INTERVAL 365 DAY
                 ) THEN 1 ELSE 0 END AS label_amendment_365,
-                CASE WHEN EXISTS (
-                    SELECT 1
-                    FROM correction_event_norm_gold event
-                    WHERE event.issuer_cik = filing_featured_gold.issuer_cik
-                      AND event.correction_type = 'nonreliance_8k_402'
-                      AND event.public_date > filing_featured_gold.origin_date
-                      AND event.public_date <= filing_featured_gold.origin_date + INTERVAL 365 DAY
-                ) THEN 1 ELSE 0 END AS label_8k_402_365,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM issuer_8k_item_event_norm_gold event
+                        WHERE event.issuer_cik = filing_featured_gold.issuer_cik
+                          AND event.item_code = '4.02'
+                          AND event.public_date > filing_featured_gold.origin_date
+                          AND event.public_date
+                                <= filing_featured_gold.origin_date + INTERVAL 365 DAY
+                    ) THEN 1
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM issuer_8k_item_event_norm_gold event
+                        WHERE event.issuer_cik = filing_featured_gold.issuer_cik
+                          AND event.item_metadata_missing = 1
+                          AND event.public_date > filing_featured_gold.origin_date
+                          AND event.public_date
+                                <= filing_featured_gold.origin_date + INTERVAL 365 DAY
+                    ) THEN NULL
+                    ELSE 0
+                END AS label_8k_402_365,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM issuer_8k_item_event_norm_gold event
+                        WHERE event.issuer_cik = filing_featured_gold.issuer_cik
+                          AND event.item_code = '4.02'
+                          AND event.public_date > filing_featured_gold.origin_date
+                          AND event.public_date
+                                <= filing_featured_gold.origin_date + INTERVAL 365 DAY
+                    ) THEN 0
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM issuer_8k_item_event_norm_gold event
+                        WHERE event.issuer_cik = filing_featured_gold.issuer_cik
+                          AND event.item_metadata_missing = 1
+                          AND event.public_date > filing_featured_gold.origin_date
+                          AND event.public_date
+                                <= filing_featured_gold.origin_date + INTERVAL 365 DAY
+                    ) THEN 1
+                    ELSE 0
+                END AS k402_item_metadata_unknown_365,
                 CASE WHEN EXISTS (
                     SELECT 1
                     FROM aaer_event_norm_gold event
@@ -3209,6 +4346,9 @@ def build_gold_panels(
         duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
     )
     issuer_dim["issuer_cik"] = _normalize_cik_series(issuer_dim["issuer_cik"])
+    for col in ["entity_name", "sic", "sic_description", "entity_type"]:
+        if col not in issuer_dim.columns:
+            issuer_dim[col] = pd.NA
     filing_dim = _read_csv_with_engine(
         _preferred_table_path(silver_dir, "filing_dim"),
         date_cols=["filing_date", "report_date", "acceptance_datetime"],
@@ -3242,6 +4382,19 @@ def build_gold_panels(
             duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
         if (silver_dir / "correction_event.csv.gz").exists()
+        else pd.DataFrame()
+    )
+    issuer_8k_item_event = (
+        _read_csv_with_engine(
+            silver_dir / "issuer_8k_item_event.csv.gz",
+            date_cols=["public_date", "report_date"],
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+        )
+        if (silver_dir / "issuer_8k_item_event.csv.gz").exists()
         else pd.DataFrame()
     )
     form_ap_event = (
@@ -3458,6 +4611,22 @@ def build_gold_panels(
             how="left",
         )
 
+    filing = _add_partner_prior_features(
+        filing,
+        silver_dir=silver_dir,
+        engine=engine,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+    )
+    filing = _add_public_history_and_filing_friction_features(
+        filing,
+        comment_thread=comment_thread,
+        correction_event=correction_event,
+        issuer_8k_item_event=issuer_8k_item_event,
+    )
+
     filing["label_comment_thread_365"] = _event_within_horizon(
         filing,
         comment_thread.rename(columns={"first_public_date": "event_date"}),
@@ -3471,13 +4640,9 @@ def build_gold_panels(
         horizon_days=365,
         event_type="amendment_10x_a",
     )
-    filing["label_8k_402_365"] = _event_within_horizon(
-        filing,
-        correction_event,
-        date_col="public_date",
-        horizon_days=365,
-        event_type="nonreliance_8k_402",
-    )
+    label_8k_402, k402_unknown = _k402_label_and_unknown(filing, issuer_8k_item_event)
+    filing["label_8k_402_365"] = label_8k_402
+    filing["k402_item_metadata_unknown_365"] = k402_unknown
     filing["label_aaer_proxy_730"] = _event_within_horizon(
         filing,
         aaer_event.rename(columns={"event_date": "public_date", "issuer_cik": "issuer_cik"}),
@@ -3697,21 +4862,46 @@ def build_public_lake(
         )
 
     def derived_tables_task() -> Dict[str, Path]:
-        return {
+        filing_dim_path = _preferred_table_path(silver_dir, "filing_dim")
+        issuer_8k_item_event = build_issuer_8k_item_events(
+            filing_dim_csv=filing_dim_path,
+            silver_dir=silver_dir,
+        )
+        amendment_annotation = build_amendment_annotations(
+            filing_dim_csv=filing_dim_path,
+            silver_dir=silver_dir,
+            amendment_text_dir=(
+                bronze_dir / "amendment-primary-docs"
+                if (bronze_dir / "amendment-primary-docs").exists()
+                else None
+            ),
+        )
+        outputs: Dict[str, Path] = {
             "comment_thread": build_comment_threads(
-                filing_dim_csv=_preferred_table_path(silver_dir, "filing_dim"),
+                filing_dim_csv=filing_dim_path,
                 silver_dir=silver_dir,
             ),
             "correction_event": build_correction_events(
-                filing_dim_csv=_preferred_table_path(silver_dir, "filing_dim"),
+                filing_dim_csv=filing_dim_path,
                 silver_dir=silver_dir,
             ),
+            "issuer_8k_item_event": issuer_8k_item_event,
+            "amendment_annotation": amendment_annotation,
             "aaer_event": normalize_aaer_events(
                 aaer_bronze_dir=bronze_dir / "aaer",
                 silver_dir=silver_dir,
                 issuer_dim_path=_preferred_table_path(silver_dir, "issuer_dim"),
             ),
         }
+        outputs.update(
+            build_partner_risk_histories(
+                form_ap_event_path=_preferred_table_path(silver_dir, "form_ap_event"),
+                issuer_8k_item_event_path=issuer_8k_item_event,
+                amendment_annotation_path=amendment_annotation,
+                silver_dir=silver_dir,
+            )
+        )
+        return outputs
 
     def empty_tables_task() -> Dict[str, Path]:
         task_outputs: Dict[str, Path] = {}
@@ -3772,7 +4962,7 @@ def build_public_lake(
         DagTask("normalize_inspections", (), normalize_inspections_task),
         DagTask("normalize_fsds", (), normalize_fsds_task),
         DagTask("normalize_notes", (), normalize_notes_task),
-        DagTask("derived_tables", ("normalize_submissions",), derived_tables_task),
+        DagTask("derived_tables", ("normalize_submissions", "normalize_form_ap"), derived_tables_task),
         DagTask("empty_tables", ("derived_tables",), empty_tables_task),
         DagTask(
             "build_gold",

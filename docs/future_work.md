@@ -1,14 +1,14 @@
-# Future Work
+# Deferred Extensions
 
 This page records the research program after the current benchmark plus public
 cascade paper. These extensions are deliberately deferred so the main study does
 not become an engineering omnibus before the measurement spine is stable.
 
 !!! warning "Scope guardrail"
-    The current paper must first finish label maturation, concept drift,
-    strategic-silence missingness, full public-lake construction, public cascade
-    prediction, and `gvkey-CIK-year` overlap validation. Future models should be
-    added only after those foundations are reproducible.
+    The current paper must first keep label-observability diagnostics, concept
+    drift, public-label opacity analysis, full public-lake construction, public
+    cascade prediction, and `gvkey-CIK-year` overlap validation reproducible.
+    Future models should be added only after those foundations are stable.
 
 [Back to the current paper plan](paper_plan.md){ .md-button .md-button--primary }
 [Return to docs home](index.md){ .md-button }
@@ -26,8 +26,10 @@ not become an engineering omnibus before the measurement spine is stable.
 
     ---
 
-    Add 13F, insider, EDGAR-log, and market-structure inputs only after temporal
-    bridges and source-availability masks are defensible.
+    Add 13F, EDGAR-log, FTD, and market-structure inputs only after temporal
+    security bridges and source-availability masks are defensible. SEC Insider
+    Transactions are a narrower P1 issuer-CIK extension in the current paper plan,
+    not part of this security-level expansion.
 
 -   :material-account-network-outline: __Auditor and oversight network__
 
@@ -57,12 +59,12 @@ not become an engineering omnibus before the measurement spine is stable.
     - Do not widen the paper into a single giant SEC data warehouse story.
     - Do not let later extensions weaken the current measurement claim.
 
-## Extension Map
+## Extension Portfolio
 
 | Extension | Research contribution | When to activate |
 | --- | --- | --- |
 | Multimodal cascade | Test whether narrative filings add lead time and stage-specific information. | After public cascade labels are stable. |
-| Public security and attention layers | Add institutional, insider, attention, and market microstructure channels. | After temporal security-to-CIK bridges are available. |
+| Public security and attention layers | Add institutional, attention, FTD, and market microstructure channels. | After temporal security-to-CIK bridges are available. |
 | Auditor and oversight network | Model monitoring exposure through Form AP, partners, firms, and PCAOB inspections. | After Form AP and inspection joins are clean. |
 | Severity and detector labels | Move toward occurrence-detection-disclosure decomposition. | After higher-quality restatement or detector data are acquired. |
 | Reproducibility package | Make the empirical pipeline submission-ready. | Before manuscript circulation and review. |
@@ -159,7 +161,7 @@ stage-specific evidence:
 - 8-K framing predicts downstream severity proxy
 - graph features represent monitoring exposure, not untested contagion
 
-### Current Code Status
+### Implementation Status
 
 No runtime code is retained for this extension. The old multimodal prototype was
 removed so the active codebase stays focused on benchmark, public cascade, and the
@@ -168,7 +170,7 @@ combined study workflow.
 When this extension becomes active again, implement it as a new module rather than
 reintroducing it into the current study path.
 
-## Extension 2: Public Security And Attention Layers
+## Extension 2: Public Security and Attention Layers
 
 ### Research Question
 
@@ -218,16 +220,16 @@ lookup is not enough for a historical panel.
 - feature availability masks must distinguish source non-existence from issuer silence
 - attention and liquidity variables must be timestamped strictly before `origin_date`
 
-## Extension 3: Auditor And Oversight Network
+## Extension 3: Auditor and Oversight Network
 
 ### Research Question
 
 Does public monitoring exposure through auditors, partners, and PCAOB inspections
 help explain public scrutiny and correction outcomes?
 
-The mechanism is monitoring, not contagion. The design should ask whether public
-oversight networks reveal where reporting-risk states are more likely to become
-visible.
+The mechanism is monitoring and lagged public exposure, not a causal contagion
+claim. The design should ask whether public oversight networks reveal where
+reporting-risk states are more likely to become visible.
 
 ### Network Nodes
 
@@ -265,7 +267,7 @@ visible.
 Can the public cascade be upgraded into a richer occurrence-detection-disclosure
 decomposition once stronger external labels are available?
 
-### Data Needed
+### Data Requirements
 
 If paid or higher-quality data become available, add:
 
@@ -306,7 +308,7 @@ development.
 - smoke-data test path for reviewers without public downloads
 - documentation build command
 
-### Candidate Command Shape
+### Reproducibility Command Shape
 
 ```bash
 just status

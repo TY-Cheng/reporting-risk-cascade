@@ -1137,6 +1137,313 @@ def test_xbrl_and_event_helpers_cover_empty_and_filter_branches(tmp_path: Path) 
     ).tolist() == [0]
 
 
+def test_8k_item_parser_uses_items_metadata_only(tmp_path: Path) -> None:
+    assert public_lake.parse_8k_item_codes("3.01, 4.01, Item 4.02") == (
+        "3.01",
+        "4.01",
+        "4.02",
+    )
+    assert public_lake.parse_8k_item_codes("Item 5.02 Item 4.02") == ("4.02", "5.02")
+    assert public_lake.parse_8k_item_codes("4.02 5.02") == ("4.02", "5.02")
+    assert public_lake.parse_8k_item_codes("") == ()
+
+    silver = tmp_path / "silver"
+    filing_dim = tmp_path / "filing_dim.parquet"
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "accession": "a-items",
+                    "accession_nodash": "aitems",
+                    "filing_date": "2022-01-02",
+                    "report_date": "2022-01-01",
+                    "form": "8-K",
+                    "items": "Item 4.02, 5.02",
+                    "primary_doc_description": "",
+                },
+                {
+                    "issuer_cik": "1",
+                    "accession": "a-missing",
+                    "accession_nodash": "amissing",
+                    "filing_date": "2022-01-03",
+                    "report_date": "2022-01-01",
+                    "form": "8-K",
+                    "items": "",
+                    "primary_doc_description": "",
+                },
+                {
+                    "issuer_cik": "1",
+                    "accession": "a-description-only",
+                    "accession_nodash": "adescriptiononly",
+                    "filing_date": "2022-01-04",
+                    "report_date": "2022-01-01",
+                    "form": "8-K",
+                    "items": "1.01",
+                    "primary_doc_description": "Item 4.02 in text-like description",
+                },
+            ]
+        ),
+        filing_dim,
+    )
+
+    path = public_lake.build_issuer_8k_item_events(filing_dim_csv=filing_dim, silver_dir=silver)
+    events = pd.read_csv(path)
+
+    assert set(
+        events.loc[events["accession"].eq("a-items"), "item_code"].dropna().astype(str)
+    ) == {"4.02", "5.02"}
+    assert events.loc[events["accession"].eq("a-missing"), "event_type"].tolist() == [
+        "item_metadata_missing"
+    ]
+    assert not events["accession"].eq("a-description-only").any()
+
+
+def test_8k_402_label_unknown_uses_task_level_censoring(tmp_path: Path) -> None:
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    write_table(
+        pd.DataFrame(
+            [
+                {"issuer_cik": "0000000001", "entity_name": "A", "sic": 1000},
+                {"issuer_cik": "0000000002", "entity_name": "B", "sic": 1000},
+                {"issuer_cik": "0000000003", "entity_name": "C", "sic": 1000},
+            ]
+        ),
+        silver / "issuer_dim.parquet",
+    )
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": f"{issuer_id:010d}",
+                    "accession": f"base-{issuer_id}",
+                    "accession_nodash": f"base{issuer_id}",
+                    "filing_date": "2022-01-01",
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": "2022-01-01",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "base.htm",
+                    "primary_doc_description": "10-K",
+                }
+                for issuer_id in [1, 2, 3]
+            ]
+        ),
+        silver / "filing_dim.parquet",
+    )
+    _write_csv_gz(
+        silver / "issuer_8k_item_event.csv.gz",
+        [
+            {
+                "issuer_cik": "0000000001",
+                "accession": "k402-positive",
+                "accession_nodash": "k402positive",
+                "public_date": "2022-03-01",
+                "report_date": "2022-03-01",
+                "item_code": "4.02",
+                "event_type": "8k_item_4_02",
+                "item_metadata_missing": 0,
+                "identified_from": "items_metadata",
+            },
+            {
+                "issuer_cik": "0000000001",
+                "accession": "missing-overridden",
+                "accession_nodash": "missingoverridden",
+                "public_date": "2022-04-01",
+                "report_date": "2022-04-01",
+                "item_code": None,
+                "event_type": "item_metadata_missing",
+                "item_metadata_missing": 1,
+                "identified_from": "items_metadata",
+            },
+            {
+                "issuer_cik": "0000000002",
+                "accession": "missing-only",
+                "accession_nodash": "missingonly",
+                "public_date": "2022-03-01",
+                "report_date": "2022-03-01",
+                "item_code": None,
+                "event_type": "item_metadata_missing",
+                "item_metadata_missing": 1,
+                "identified_from": "items_metadata",
+            },
+        ],
+    )
+
+    build_gold_panels(silver_dir=silver, gold_dir=gold, as_of_date="2026-04-23", engine="pandas")
+    panel = read_table(gold / "issuer_origin_panel.parquet").sort_values("issuer_cik")
+
+    assert panel["label_8k_402_365"].tolist()[0] == 1
+    assert panel["k402_item_metadata_unknown_365"].tolist()[0] == 0
+    assert pd.isna(panel["label_8k_402_365"].tolist()[1])
+    assert panel["k402_item_metadata_unknown_365"].tolist()[1] == 1
+    assert panel["label_8k_402_365"].tolist()[2] == 0
+    assert panel["k402_item_metadata_unknown_365"].tolist()[2] == 0
+
+
+def test_amendment_annotation_bounded_explanatory_note_rules(tmp_path: Path) -> None:
+    silver = tmp_path / "silver"
+    texts = tmp_path / "texts"
+    texts.mkdir()
+    fixtures = {
+        "adminonly": "EXPLANATORY NOTE This amendment only provides Part III information. ITEM 1. Business",
+        "financialonly": (
+            "Intro EXPLANATORY NOTES We correct an error in the financial statements. SIGNATURES"
+        ),
+        "mixed": "EXPLANATORY NOTE We restate a note disclosure. PART II",
+        "missingnote": "This amendment has no bounded explanatory heading but says restate elsewhere.",
+        "bounded": "EXPLANATORY NOTE This amendment updates governance. ITEM 1. Later we correct an error.",
+        "cutoff": "EXPLANATORY NOTE " + ("A" * 3_100) + " restatement",
+    }
+    for stem, text in fixtures.items():
+        (texts / f"{stem}.txt").write_text(text, encoding="utf-8")
+    filing_dim = tmp_path / "filing_dim.parquet"
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "accession": stem,
+                    "accession_nodash": stem,
+                    "filing_date": "2022-03-01",
+                    "report_date": "2021-12-31",
+                    "form": "10-K/A",
+                    "primary_document": f"{stem}.txt",
+                    "primary_doc_description": description,
+                }
+                for stem, description in [
+                    ("adminonly", "Part III proxy amendment"),
+                    ("financialonly", "10-K/A"),
+                    ("mixed", "Part III proxy amendment"),
+                    ("missingnote", "10-K/A"),
+                    ("bounded", "10-K/A"),
+                    ("cutoff", "10-K/A"),
+                ]
+            ]
+        ),
+        filing_dim,
+    )
+
+    path = public_lake.build_amendment_annotations(
+        filing_dim_csv=filing_dim,
+        silver_dir=silver,
+        amendment_text_dir=texts,
+    )
+    annotations = pd.read_csv(path).set_index("accession")
+
+    assert annotations.loc["adminonly", "amendment_annotation"] == "admin_part_iii_proxy"
+    assert (
+        annotations.loc["financialonly", "amendment_annotation"]
+        == "non_admin_financial_correction"
+    )
+    assert annotations.loc["mixed", "annotation_reason"] == "mixed_content_classified_as_nonadmin"
+    assert annotations.loc["missingnote", "explanatory_note_missing"] == 1
+    assert annotations.loc["bounded", "financial_override"] == 0
+    assert annotations.loc["cutoff", "explanatory_note_char_count"] <= 3_000
+    assert annotations.loc["cutoff", "financial_override"] == 0
+
+
+def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path: Path) -> None:
+    silver = tmp_path / "silver"
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "0000000001",
+                    "fiscal_period_end": "2020-12-31",
+                    "report_date": "2021-02-01",
+                    "filing_date": "2021-02-01",
+                    "form_filing_id": "ap-1",
+                    "pcaob_firm_id": "firm",
+                    "engagement_partner_id": "P1",
+                    "engagement_partner_name": "Partner One",
+                    "number_of_participants": 1,
+                },
+                {
+                    "issuer_cik": "0000000002",
+                    "fiscal_period_end": "2020-12-31",
+                    "report_date": "2021-02-01",
+                    "filing_date": "2021-02-01",
+                    "form_filing_id": "ap-2",
+                    "pcaob_firm_id": "firm",
+                    "engagement_partner_id": "P1",
+                    "engagement_partner_name": "Partner One",
+                    "number_of_participants": 1,
+                },
+            ]
+        ),
+        silver / "form_ap_event.parquet",
+    )
+    _write_csv_gz(
+        silver / "issuer_8k_item_event.csv.gz",
+        [
+            {
+                "issuer_cik": "0000000002",
+                "accession": "other-prior",
+                "accession_nodash": "otherprior",
+                "public_date": "2021-04-01",
+                "report_date": "2021-04-01",
+                "item_code": "4.02",
+                "event_type": "8k_item_4_02",
+                "item_metadata_missing": 0,
+                "identified_from": "items_metadata",
+            },
+            {
+                "issuer_cik": "0000000001",
+                "accession": "current-prior",
+                "accession_nodash": "currentprior",
+                "public_date": "2021-06-01",
+                "report_date": "2021-06-01",
+                "item_code": "4.02",
+                "event_type": "8k_item_4_02",
+                "item_metadata_missing": 0,
+                "identified_from": "items_metadata",
+            },
+            {
+                "issuer_cik": "0000000001",
+                "accession": "same-day",
+                "accession_nodash": "sameday",
+                "public_date": "2022-01-01",
+                "report_date": "2022-01-01",
+                "item_code": "4.02",
+                "event_type": "8k_item_4_02",
+                "item_metadata_missing": 0,
+                "identified_from": "items_metadata",
+            },
+        ],
+    )
+    pd.DataFrame(
+        columns=["issuer_cik", "public_date", "amendment_annotation"]
+    ).to_csv(silver / "amendment_annotation.csv.gz", index=False, compression="gzip")
+
+    outputs = public_lake.build_partner_risk_histories(
+        form_ap_event_path=silver / "form_ap_event.parquet",
+        issuer_8k_item_event_path=silver / "issuer_8k_item_event.csv.gz",
+        amendment_annotation_path=silver / "amendment_annotation.csv.gz",
+        silver_dir=silver,
+    )
+    assert set(outputs) == {
+        "partner_issuer_engagement",
+        "partner_risk_history",
+        "partner_issuer_risk_history",
+    }
+    filing = pd.DataFrame(
+        [
+            {
+                "issuer_cik": "0000000001",
+                "accession": "origin",
+                "origin_date": pd.Timestamp("2022-01-01"),
+            }
+        ]
+    )
+    featured = public_lake._add_partner_prior_features(filing.copy(), silver_dir=silver)
+
+    assert len(featured) == len(filing)
+    assert featured.loc[0, "auditor_partner_prior_other_issuer_8k_402_count"] == 1
+    assert featured.loc[0, "auditor_partner_prior_other_issuer_total_count"] == 1
+
+
 def test_comment_threads_and_correction_events_nonempty_branches(tmp_path: Path) -> None:
     silver = tmp_path / "silver"
     filing_dim = tmp_path / "filing_dim.parquet"
@@ -1499,6 +1806,22 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         ],
     )
     _write_csv_gz(
+        silver / "issuer_8k_item_event.csv.gz",
+        [
+            {
+                "issuer_cik": "0000000001",
+                "accession": "a-8k",
+                "accession_nodash": "a8k",
+                "public_date": "2022-07-01",
+                "report_date": "2022-07-01",
+                "item_code": "4.02",
+                "event_type": "8k_item_4_02",
+                "item_metadata_missing": 0,
+                "identified_from": "items_metadata",
+            }
+        ],
+    )
+    _write_csv_gz(
         silver / "aaer_event.csv.gz",
         [
             {
@@ -1557,6 +1880,7 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         "label_comment_thread_365",
         "label_amendment_365",
         "label_8k_402_365",
+        "k402_item_metadata_unknown_365",
         "label_aaer_proxy_730",
         "censored_365",
         "censored_730",

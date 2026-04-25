@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint, tests, docs, peer smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Configure CI environment
+        run: |
+          cat > .env <<'EOF'
+          UV_PROJECT_ENVIRONMENT=/tmp/reporting-risk-cascade-venv
+          DIR_MANUSCRIPT=/tmp/reporting-risk-cascade-manuscript
+          EOF
+          mkdir -p /tmp/reporting-risk-cascade-manuscript
+
+      - name: Install dependencies
+        run: uv sync --group docs
+
+      - name: Ruff and coverage tests
+        run: just check dataset="sample"
+
+      - name: Build docs
+        run: just _docs-build
+
+      - name: Peer-comparison light smoke
+        run: |
+          timeout 90s just task study sample artifacts/study_peer_light \
+            extra="--peer-comparison-mode light --skip-public-cascade --skip-bridge-probe"

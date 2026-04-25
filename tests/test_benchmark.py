@@ -15,7 +15,9 @@ from src.benchmark import (
     compute_structural_breaks,
     compute_metrics,
     compute_window_summary,
+    expand_label_modes,
     expected_calibration_error,
+    expected_calibration_error_quantile,
     fit_missing_profile_model,
     get_feature_columns,
     infer_feature_family,
@@ -89,6 +91,45 @@ def test_proxy_sensitivity_labels_use_only_detection_visible_by_train_origin() -
     assert y_train.tolist() == [1, 1, 0, 0, 0]
 
 
+def test_proxy_drop_observed_and_imputed_lag_labels_follow_paper_contract() -> None:
+    panel = _build_detection_year_proxy(
+        _toy_timing_panel(),
+        year_col="data_year",
+        target_col="misstatement firm-year",
+        leakage_cols=["res_an0", "res_an1", "res_an2", "res_an3"],
+        unknown_positive_strategy="drop",
+    )
+
+    x_drop, y_drop, _x_test, _y_test = _prepare_xy(
+        panel,
+        panel,
+        feature_cols=["feature_signal"],
+        target_col="misstatement firm-year",
+        year_col="data_year",
+        train_origin_year=2019,
+        label_mode="proxy_drop_observed",
+        unknown_positive_strategy="drop",
+    )
+    x_imp, y_imp, _x_test, _y_test = _prepare_xy(
+        panel,
+        panel,
+        feature_cols=["feature_signal"],
+        target_col="misstatement firm-year",
+        year_col="data_year",
+        train_origin_year=2019,
+        label_mode="proxy_imputed_lag_1y",
+        unknown_positive_strategy="drop",
+    )
+
+    assert len(x_drop) == 5
+    assert y_drop.tolist() == [1, 1, 0, 0, 0]
+    assert len(x_imp) == 6
+    assert y_imp.tolist() == [1, 1, 0, 0, 1, 0]
+    assert expand_label_modes(
+        ["naive", "proxy_imputed_lag"], proxy_imputed_lags=[1, 3]
+    ) == ["naive", "proxy_imputed_lag_1y", "proxy_imputed_lag_3y"]
+
+
 def test_res_an_timing_proxies_do_not_enter_benchmark_features() -> None:
     panel = _build_detection_year_proxy(
         _toy_timing_panel(),
@@ -126,7 +167,7 @@ def test_timing_coverage_report_labels_proxy_maturation_as_sensitivity() -> None
     )
     summary = coverage.loc[coverage["section"].eq("summary")].set_index("metric")["value"]
 
-    assert status == "proxy_sensitivity"
+    assert status == "proxy_drop_observed"
     assert int(summary["positive_rows"]) == 5
     assert int(summary["same_row_positive_with_any_res_an"]) == 4
     assert int(summary["same_row_positive_without_any_res_an"]) == 1
@@ -332,6 +373,11 @@ def test_benchmark_metric_helpers_cover_degenerate_inputs() -> None:
         pd.Series([0.1, 0.6, 0.9]),
         n_bins=2,
     ) >= 0
+    assert expected_calibration_error_quantile(
+        pd.Series([0, 0, 0, 1]),
+        pd.Series([0.01, 0.02, 0.03, 0.9]),
+        n_bins=2,
+    ) >= 0
     metrics = compute_metrics(
         pd.Series([0, 0, 0]),
         pd.Series([0.2, 0.2, 0.2]),
@@ -341,6 +387,8 @@ def test_benchmark_metric_helpers_cover_degenerate_inputs() -> None:
     assert metrics["pr_auc"] == pytest.approx(0.0)
     assert metrics["brier_null"] == 0.0
     assert pd.isna(metrics["brier_skill_score"])
+    assert "ece_quantile" in metrics
+    assert metrics["ece_method"] == "uniform_width_and_quantile"
     assert metrics["top_1_precision"] == 0.0
     assert metrics["top_5_precision"] == 0.0
     assert metrics["bao_top_1pct_k"] == 0
@@ -460,7 +508,7 @@ def test_benchmark_timing_and_summary_edge_branches(tmp_path: Path) -> None:
         target_col="misstatement firm-year",
         leakage_cols=["missing_res_an1"],
     )
-    assert status == "proxy_sensitivity"
+    assert status == "proxy_drop_observed"
     assert "missing_column" in set(coverage["value"].astype(str))
     blocked_panel = current.assign(detection_year_proxy=pd.NA, detection_source="none")
     _blocked_coverage, blocked_status = build_timing_coverage_report(

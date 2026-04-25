@@ -101,6 +101,10 @@ def test_mkdocs_enables_richer_material_navigation_and_content_features() -> Non
         "slate",
     }
     assert mkdocs["extra_css"] == ["assets/stylesheets/extra.css"]
+    assert mkdocs["extra_javascript"] == [
+        "https://unpkg.com/mermaid@11/dist/mermaid.min.js",
+        "assets/javascripts/mermaid-init.js",
+    ]
     assert mkdocs["repo_url"] == "https://github.com/TY-Cheng/reporting-risk-cascade"
 
     extensions = mkdocs["markdown_extensions"]
@@ -116,6 +120,20 @@ def test_mkdocs_enables_richer_material_navigation_and_content_features() -> Non
         "pymdownx.superfences",
     }
     assert required_extensions.issubset(extension_names)
+
+    superfences = next(
+        item["pymdownx.superfences"]
+        for item in extensions
+        if isinstance(item, dict) and "pymdownx.superfences" in item
+    )
+    mermaid_fence = superfences["custom_fences"][0]
+    assert mermaid_fence["name"] == "mermaid"
+    assert mermaid_fence["class"] == "mermaid"
+    assert mermaid_fence["format"] == "pymdownx.superfences.fence_code_format"
+
+    mermaid_init = _read("docs/assets/javascripts/mermaid-init.js")
+    assert "window.document$.subscribe(renderMermaid)" in mermaid_init
+    assert 'querySelector: ".mermaid"' in mermaid_init
 
 
 def test_docs_file_names_are_paper_facing_not_internal_codenames() -> None:
@@ -141,7 +159,7 @@ def test_docs_home_keeps_readme_as_source_but_adds_material_landing_shell() -> N
     assert '--8<-- "README.md:docs-home"' in home
     assert "grid cards" in home
     assert ".md-button" in home
-    assert "Run Surface" in home
+    assert "Reproducible Commands" in home
     assert "results_snapshot.md" in home
     assert "Readiness Snapshot" in home
     assert "development_audit_prompt.md" in home
@@ -159,7 +177,7 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "205,832",
         "Rows | 82,908",
         "Main sample rows | 90,451",
-        "Interpretation At A Glance",
+        "Interpretation Summary",
         "Supported now: XBRL ratio features enter the public cascade",
         "mean PR-AUC `0.2067`",
         "metadata-only configuration is close behind at `0.1981`",
@@ -194,14 +212,14 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
 def test_readme_home_explains_project_and_workflow() -> None:
     home = _read("README.md")
     required_phrases = [
-        "What This Repo Does",
+        "Project Scope",
         "Research Spine",
-        "Layout",
-        "5-Minute Workflow",
-        "Complete Workflow",
-        "Public Lake Run",
-        "Main Outputs",
-        "Current Priorities",
+        "Repository Layout",
+        "Quick Workflow",
+        "End-to-End Workflow",
+        "Public Lake Workflow",
+        "Primary Artifacts",
+        "Current Gates",
         "pre-disclosure reporting-risk state",
         "just full smoke sample artifacts/full_smoke_sample",
         "just full full raw artifacts/full",
@@ -227,11 +245,11 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Operationally, the paper combines two evidence layers",
         "pre-disclosure reporting-risk state",
         "gvkey-CIK-year",
-        "Label Observability And Detection-Timing Sensitivity",
-        "Concept Drift And Model Shelf-Life",
-        "Opacity And Public Review/Correction Risk",
+        "Label Observability and Detection-Timing Sensitivity",
+        "Concept Drift and Model Shelf-Life",
+        "Opacity and Public Review/Correction Risk",
         "Public Cascade Prediction",
-        "Old Benchmark And Public Cascade Overlap",
+        "Old Benchmark and Public Cascade Overlap",
         "[Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases)",
         "[eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl)",
         "comment_thread_365",
@@ -251,7 +269,7 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
     plan = _read("docs/paper_plan.md")
     required_phrases = [
         "Execution Invariants",
-        "Evidence State And Decision Gate",
+        "Evidence State and Decision Gate",
         "benchmark evidence available",
         "Public cascade evidence available",
         "current full-run snapshot is `xbrl_ratio_baseline`",
@@ -261,6 +279,8 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
         "timing_claim_status",
         "proxy_drop_observed",
         "proxy_imputed_lag",
+        "flowchart LR",
+        "Public-label opacity DML",
         "metric collapse under",
         "public-label PLR spec",
         "train_origin_year = test_year - 1",
@@ -288,8 +308,8 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
 def test_paper_plan_documents_prior_literature_and_intended_contribution() -> None:
     plan = _read("docs/paper_plan.md")
     required_phrases = [
-        "Prior Literature And Intended Contribution",
-        "Closest-peer boundary",
+        "Prior Literature and Intended Contribution",
+        "Peer-Comparable Boundary",
         "Dechow, Ge, Larson, and Sloan",
         "Perols",
         "Bao, Ke, Li, Yu, and Zhang",
@@ -301,7 +321,7 @@ def test_paper_plan_documents_prior_literature_and_intended_contribution() -> No
         "Brown, Tian, and Tucker",
         "risk-exposure funnel",
         "does not mechanically force an earlier-stage label",
-        "Peer model and metric comparability",
+        "Peer Models and Metric Comparability",
         "Dechow F-score baseline",
         "legacy model zoo",
         "Bao-style ranking metrics",
@@ -310,7 +330,7 @@ def test_paper_plan_documents_prior_literature_and_intended_contribution() -> No
         "Comment-letter papers are regression evidence",
         "Using Machine Learning to Detect Misstatements",
         "The intended contribution is not another horse race",
-        "Potential findings and selling points",
+        "Expected Evidence and Contribution Boundaries",
     ]
     for phrase in required_phrases:
         assert phrase in plan
@@ -334,8 +354,8 @@ def test_future_work_documents_deferred_scope_and_guardrails() -> None:
         "Multimodal Cascade Model",
         "long-context finance embeddings",
         "No runtime code is retained",
-        "Public Security And Attention Layers",
-        "Auditor And Oversight Network",
+        "Public Security and Attention Layers",
+        "Auditor and Oversight Network",
         "Restatement Severity And Detector Labels",
         "do not put bivariate-probit",
     ]

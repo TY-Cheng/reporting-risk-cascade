@@ -9,7 +9,8 @@ columns:
 analysis:
   raw_missing_threshold: 0.30
   unknown_positive_strategy: "drop"
-  label_modes: ["naive", "proxy_sensitivity"]
+  label_modes: ["naive", "proxy_drop_observed", "proxy_imputed_lag"]
+  proxy_imputed_lags: [1, 2, 3, 5]
   candidate_train_windows: [null, 5, 7, 10]
   min_train_years: 5
   top_k: [50, 100, 200, 500]
@@ -17,7 +18,7 @@ analysis:
   mixture_k_values: [3, 4, 5]
   dml_treatment_col: "missingness_density_score"
   dml_folds: 5
-  recommendation_label_mode: "proxy_sensitivity"
+  recommendation_label_mode: "proxy_imputed_lag_2y"
   seed: 42
   parallel_jobs: 2
   seed_policy: "task_isolated"

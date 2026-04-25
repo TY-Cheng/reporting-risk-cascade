@@ -6,6 +6,15 @@
     workflow. Regenerate the artifacts with `just full full raw artifacts/full`
     before updating these numbers.
 
+!!! note "Implementation freshness"
+    The code now implements the paper-plan timing grid (`proxy_drop_observed` plus
+    `proxy_imputed_lag_1y`, `proxy_imputed_lag_2y`, `proxy_imputed_lag_3y`, and
+    `proxy_imputed_lag_5y`) and public-label opacity DML
+    (`public_opacity_dml.csv`). The `artifacts/full` metrics below predate that
+    rerun: they still show the older `proxy_sensitivity` benchmark label and do
+    not yet include public opacity DML output. Rerun `just task study raw
+    artifacts/full` or `just full full raw artifacts/full` to refresh the snapshot.
+
 ## Run Metadata
 
 | Field | Value |
@@ -16,7 +25,7 @@
 | Public issuer panel | `data/public_lake/gold/issuer_origin_panel.parquet` |
 | Bridge crosswalk | `data/external/gvkey_cik_year.csv` required; not available in this run |
 
-## Interpretation At A Glance
+## Interpretation Summary
 
 The current run supports a conservative result: the repo has moved from scaffold
 to a reproducible empirical pipeline, and the public review-and-correction
@@ -31,6 +40,7 @@ filing-native public cascade.
 | Feature readiness | Supported now: XBRL ratio features enter the public cascade, with 11 `xbrl_ratio_*` features and 15 XBRL coverage features in the `all` feature set. |
 | Public cascade signal | Supported now: no task is zero-positive, and the repo-generated equal-task ranking selects `all + rolling_10y` with mean PR-AUC `0.2067`. |
 | Benchmark role | Diagnostic only: the old restatement benchmark is useful for label-observability checks, not paper-grade label maturation evidence. |
+| Opacity role | Implemented in code: public-label DML now uses `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365`; the static full snapshot has not yet been rerun with this table. |
 | Bridge role | Integrated-paper blocker: `raw_identifier_blocker` means old-vs-public overlap validation has not run because the raw benchmark lacks public issuer identifiers. |
 | Overclaim guardrail | Not supported yet: fraud truth, causal claims, stable AAER severity-tail modeling, or integrated benchmark-to-public validation. |
 
@@ -125,7 +135,31 @@ itself because deleting most positives changes the estimand and class balance.
 The missingness clusters are descriptive: higher missingness groups have higher
 raw positive rates, but the old-benchmark DML-style adjustment is not significant
 (`p=0.5925`) and should be treated as legacy diagnostic evidence until the
-opacity analysis is moved to public review/correction labels.
+full study is refreshed with the implemented public review/correction opacity
+DML output.
+
+Implementation update: the benchmark code now separates this legacy
+drop-observed path into the explicit `proxy_drop_observed` label mode and expands
+`proxy_imputed_lag` into fixed 1-, 2-, 3-, and 5-year assumptions. New
+`rolling_metrics.csv` files include `timing_assumption`, `imputed_lag_years`,
+and `retained_positive_train_share`, so the class-balance cost of each timing
+assumption is visible in the artifact.
+
+## Public Opacity DML
+
+The public-cascade code now writes `public_opacity_dml.csv` and
+`public_opacity_dml_meta.json` beside the public-cascade metrics. The treatment is
+`missingness_density_score`, built from pre-origin opacity and coverage
+components such as `xbrl_coverage_*` and notes-summary availability. The primary
+outcomes are public labels:
+
+- `label_comment_thread_365`
+- `label_amendment_365`
+- `label_8k_402_365`
+
+Interpretation remains conservative: these are DML-style high-dimensional
+adjusted associations, not causal effects. The current full snapshot predates
+this output, so the table should be refreshed before citing numeric DML results.
 
 ## Bridge Gate
 
@@ -148,10 +182,11 @@ just task bridge raw artifacts/bridge_probe
 just task study raw artifacts/study
 ```
 
-## Artifact Pointers
+## Artifact Index
 
 - `artifacts/full/study_summary.md`
 - `artifacts/full/study_run_manifest.json`
 - `artifacts/full/benchmark/benchmark_summary.md`
 - `artifacts/full/public_cascade/public_cascade_summary.md`
+- `artifacts/full/public_cascade/public_opacity_dml.csv` after the next study rerun
 - `artifacts/full/bridge_probe/bridge_probe_summary.json`

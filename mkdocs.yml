@@ -60,6 +60,9 @@ extra:
 copyright: Copyright &copy; 2026 Reporting Risk Cascade
 extra_css:
   - assets/stylesheets/extra.css
+extra_javascript:
+  - https://unpkg.com/mermaid@11/dist/mermaid.min.js
+  - assets/javascripts/mermaid-init.js
 nav:
   - Home: index.md
   - Results Snapshot: results_snapshot.md
@@ -84,7 +87,11 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.highlight
   - pymdownx.inlinehilite
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - tables

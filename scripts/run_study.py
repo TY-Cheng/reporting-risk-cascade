@@ -134,6 +134,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Random seed policy for model tasks",
     )
+    parser.add_argument(
+        "--peer-comparison-mode",
+        choices=["none", "light", "full"],
+        default=None,
+        help="Run PR1 benchmark peer-compatible comparison suite",
+    )
     return parser.parse_args()
 
 
@@ -153,7 +159,9 @@ def _write_summary(
         "",
         "## Completed Components",
     ]
-    for key in ["benchmark", "public_cascade"]:
+    for key in ["benchmark", "public_cascade", "peer_comparison"]:
+        if key not in manifest["components"]:
+            continue
         status = manifest["components"][key]["status"]
         out = manifest["components"][key].get("out_dir", "")
         lines.append(f"- `{key}`: {status}; output: `{out}`")
@@ -183,6 +191,7 @@ def _write_summary(
             "## Main Outputs To Read First",
             "- `benchmark/benchmark_summary.md`",
             "- `public_cascade/public_cascade_summary.md`",
+            "- `peer_comparison/peer_comparison_summary.md` when peer mode is enabled",
             "- `study_run_manifest.json`",
         ]
     )
@@ -195,12 +204,15 @@ def main() -> None:
     from src import LAKE_GOLD_DIR, LAKE_SILVER_DIR, RAW_DATASET_PATH
     from src.benchmark import run_benchmark
     from src.bridge import run_bridge_probe
+    from src.peer_comparison import run_peer_comparison
     from src.public_cascade import run_public_cascade
 
     args = parse_args()
     cfg = _load_yaml(args.config)
     inputs = cfg.get("inputs", {})
     outputs = cfg.get("outputs", {})
+    peer_cfg = dict(cfg.get("peer_comparison", {}))
+    peer_mode = args.peer_comparison_mode or str(peer_cfg.get("mode", "none"))
 
     raw_data_arg = args.raw_data or args.raw_csv
     raw_csv = _resolve_project_path(
@@ -222,6 +234,9 @@ def main() -> None:
     benchmark_out = args.out_dir / str(outputs.get("benchmark_subdir", "benchmark"))
     public_cascade_out = args.out_dir / str(outputs.get("public_cascade_subdir", "public_cascade"))
     bridge_probe_out = args.out_dir / str(outputs.get("bridge_probe_subdir", "bridge_probe"))
+    peer_comparison_out = args.out_dir / str(
+        outputs.get("peer_comparison_subdir", "peer_comparison")
+    )
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: dict[str, Any] = {
@@ -231,6 +246,7 @@ def main() -> None:
             "benchmark": {"status": "skipped" if args.skip_benchmark else "pending"},
             "public_cascade": {"status": "skipped" if args.skip_public_cascade else "pending"},
             "bridge_probe": {"status": "skipped" if args.skip_bridge_probe else "pending"},
+            "peer_comparison": {"status": "skipped" if peer_mode == "none" else "pending"},
         },
         "inputs": {
             "raw_data": str(raw_csv),
@@ -242,6 +258,7 @@ def main() -> None:
             "parallel_jobs": args.parallel_jobs,
             "model_threads": args.model_threads,
             "seed_policy": args.seed_policy,
+            "peer_comparison_mode": peer_mode,
         },
     }
 
@@ -260,6 +277,24 @@ def main() -> None:
         manifest["components"]["benchmark"] = {
             "status": "complete",
             "out_dir": str(benchmark_out),
+        }
+
+    if peer_mode != "none":
+        if not raw_csv.exists():
+            raise FileNotFoundError(f"peer comparison raw table not found: {raw_csv}")
+        peer_summary = run_peer_comparison(
+            config_path=args.benchmark_config,
+            raw_data_path=raw_csv,
+            out_dir=peer_comparison_out,
+            mode=peer_mode,
+            peer_config=peer_cfg,
+            timing_csv=args.timing_csv,
+        )
+        manifest["components"]["peer_comparison"] = {
+            "status": "complete",
+            "out_dir": str(peer_comparison_out),
+            "summary_md": str(peer_summary["summary_md"]),
+            "manifest_json": str(peer_summary["manifest_json"]),
         }
 
     if not args.skip_public_cascade:

@@ -47,6 +47,7 @@ except Exception as e:  # pragma: no cover - import guard mirrors the existing d
 
 
 LEAKAGE_COLS_DEFAULT = ["res_an0", "res_an1", "res_an2", "res_an3"]
+PROXY_DROP_LABEL_MODES = {"matured", "proxy_sensitivity", "proxy_drop_observed"}
 AUDIT_COLS = {
     "big4",
     "feeratio",
@@ -111,6 +112,51 @@ def load_config(config_path: Path) -> Dict[str, Any]:
 
 def _safe_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True)
+
+
+def _proxy_imputed_lag_years(label_mode: str) -> Optional[int]:
+    if label_mode == "proxy_imputed_lag":
+        return None
+    prefix = "proxy_imputed_lag_"
+    if not label_mode.startswith(prefix) or not label_mode.endswith("y"):
+        return None
+    raw = label_mode[len(prefix) : -1]
+    return int(raw) if raw.isdigit() else None
+
+
+def is_proxy_imputed_label_mode(label_mode: str) -> bool:
+    return label_mode == "proxy_imputed_lag" or _proxy_imputed_lag_years(label_mode) is not None
+
+
+def expand_label_modes(
+    label_modes: Sequence[str],
+    *,
+    proxy_imputed_lags: Sequence[int],
+) -> List[str]:
+    """Expand the paper-plan proxy imputation placeholder into fixed lag scenarios."""
+    expanded: List[str] = []
+    for raw_mode in label_modes:
+        mode = str(raw_mode)
+        if mode == "proxy_imputed_lag":
+            for lag in proxy_imputed_lags:
+                expanded.append(f"proxy_imputed_lag_{int(lag)}y")
+        else:
+            expanded.append(mode)
+    deduped: List[str] = []
+    for mode in expanded:
+        if mode not in deduped:
+            deduped.append(mode)
+    return deduped
+
+
+def _label_timing_assumption(label_mode: str) -> str:
+    if label_mode == "naive":
+        return "observed_final_label"
+    if label_mode in PROXY_DROP_LABEL_MODES:
+        return "proxy_drop_observed"
+    if is_proxy_imputed_label_mode(label_mode):
+        return "proxy_imputed_lag"
+    return "unknown"
 
 
 def _build_detection_year_proxy(
@@ -226,6 +272,7 @@ def build_timing_coverage_report(
     *,
     target_col: str,
     leakage_cols: Sequence[str],
+    label_modes: Optional[Sequence[str]] = None,
 ) -> Tuple[pd.DataFrame, str]:
     target = pd.to_numeric(panel[target_col], errors="coerce").fillna(0).astype(int)
     positive = target.eq(1)
@@ -309,10 +356,14 @@ def build_timing_coverage_report(
                     }
                 )
 
+    configured_label_modes = {str(mode) for mode in label_modes or []}
+    has_imputed_mode = any(is_proxy_imputed_label_mode(mode) for mode in configured_label_modes)
     if int(external_positive.sum()) > 0 and int(positive_without_proxy.sum()) == 0:
         claim_status = "external_timing"
+    elif has_imputed_mode and int(positive.sum()) > 0:
+        claim_status = "proxy_imputed_lag"
     elif int(positive_with_proxy.sum()) > 0:
-        claim_status = "proxy_sensitivity"
+        claim_status = "proxy_drop_observed"
     else:
         claim_status = "blocked"
     return pd.DataFrame(rows), claim_status
@@ -398,6 +449,7 @@ def summarize_panel(
     year_col: str,
     target_col: str,
     leakage_cols: Sequence[str],
+    label_modes: Optional[Sequence[str]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any], pd.DataFrame]:
     year_summary = (
         panel.groupby(year_col)[target_col]
@@ -407,7 +459,10 @@ def summarize_panel(
     )
     year_summary["positive_rate"] = year_summary["positive_rate"].round(6)
     timing_coverage, timing_claim_status = build_timing_coverage_report(
-        panel, target_col=target_col, leakage_cols=leakage_cols
+        panel,
+        target_col=target_col,
+        leakage_cols=leakage_cols,
+        label_modes=label_modes,
     )
     summary_metrics = timing_coverage.loc[timing_coverage["section"].eq("summary")]
     summary_values = {
@@ -467,26 +522,45 @@ def _prepare_xy(
     *,
     feature_cols: Sequence[str],
     target_col: str,
+    year_col: str = "data_year",
     train_origin_year: int,
     label_mode: str,
     unknown_positive_strategy: str,
 ) -> Tuple[pd.DataFrame, np.ndarray, pd.DataFrame, np.ndarray]:
     y_train = train_df[target_col].astype(int).copy()
 
-    if label_mode in {"matured", "proxy_sensitivity"}:
+    imputed_lag = _proxy_imputed_lag_years(label_mode)
+    if label_mode in PROXY_DROP_LABEL_MODES or imputed_lag is not None:
         detection_year = pd.to_numeric(train_df["detection_year_proxy"], errors="coerce")
+        if imputed_lag is not None:
+            if year_col in train_df.columns:
+                year_values = pd.to_numeric(train_df[year_col], errors="coerce")
+            else:
+                year_values = pd.Series(np.nan, index=train_df.index)
+            unknown_positive = y_train.eq(1) & detection_year.isna()
+            detection_year = detection_year.copy()
+            detection_year.loc[unknown_positive] = year_values.loc[unknown_positive] + int(
+                imputed_lag
+            )
         future_positive = (
             y_train.eq(1)
             & train_df["detection_year_proxy"].notna()
             & (detection_year > train_origin_year)
         )
+        if imputed_lag is not None:
+            future_positive = y_train.eq(1) & (
+                detection_year.isna() | (detection_year > train_origin_year)
+            )
         y_train.loc[future_positive] = 0
-        if unknown_positive_strategy == "drop":
+        if label_mode in PROXY_DROP_LABEL_MODES and unknown_positive_strategy == "drop":
             drop_mask = y_train.eq(1) & train_df["detection_year_proxy"].isna()
             train_df = train_df.loc[~drop_mask].copy()
             y_train = y_train.loc[train_df.index]
     elif label_mode != "naive":
-        raise ValueError("label_mode must be 'naive', 'proxy_sensitivity', or 'matured'")
+        raise ValueError(
+            "label_mode must be 'naive', 'proxy_drop_observed', 'proxy_imputed_lag_<N>y', "
+            "'proxy_sensitivity', or 'matured'"
+        )
 
     X_train = train_df[list(feature_cols)].apply(pd.to_numeric, errors="coerce")
     X_test = test_df[list(feature_cols)].apply(pd.to_numeric, errors="coerce")
@@ -554,6 +628,29 @@ def expected_calibration_error(
     return float(ece)
 
 
+def expected_calibration_error_quantile(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    *,
+    n_bins: int = 10,
+) -> float:
+    """Compute ECE with equal-mass bins for rare-event calibration diagnostics."""
+    y = np.asarray(y_true, dtype=float)
+    p = np.asarray(y_prob, dtype=float)
+    if len(y) == 0:
+        return float("nan")
+    order = np.argsort(p, kind="mergesort")
+    buckets = np.array_split(order, min(int(n_bins), len(order)))
+    ece = 0.0
+    for bucket in buckets:
+        if len(bucket) == 0:
+            continue
+        obs = y[bucket].mean()
+        pred = p[bucket].mean()
+        ece += np.abs(obs - pred) * (len(bucket) / len(y))
+    return float(ece)
+
+
 def compute_metrics(
     y_true: np.ndarray,
     y_prob: np.ndarray,
@@ -569,6 +666,8 @@ def compute_metrics(
         "brier_null": brier_null,
         "brier_skill_score": float(1.0 - brier / brier_null) if brier_null > 0 else np.nan,
         "ece": expected_calibration_error(y_true, y_prob),
+        "ece_quantile": expected_calibration_error_quantile(y_true, y_prob),
+        "ece_method": "uniform_width_and_quantile",
         "pos_rate": prevalence,
         "n_obs": int(len(y_true)),
     }
@@ -632,6 +731,7 @@ def _run_rolling_task(
         test_df,
         feature_cols=feature_cols,
         target_col=target_col,
+        year_col=year_col,
         train_origin_year=int(test_year) - 1,
         label_mode=label_mode,
         unknown_positive_strategy=unknown_positive_strategy,
@@ -658,6 +758,13 @@ def _run_rolling_task(
         "train_end_year": int(train_df[year_col].max()),
         "n_train": int(len(X_train)),
         "n_test": int(len(X_test)),
+        "original_positive_train": int(train_df[target_col].astype(int).sum()),
+        "retained_positive_train": int(np.sum(y_train)),
+        "retained_positive_train_share": float(
+            np.sum(y_train) / max(int(train_df[target_col].astype(int).sum()), 1)
+        ),
+        "timing_assumption": _label_timing_assumption(label_mode),
+        "imputed_lag_years": _proxy_imputed_lag_years(label_mode),
         "train_positive_rate": float(np.mean(y_train)),
     }
     metric_row.update(compute_metrics(y_test, y_prob, top_k=top_k))
@@ -859,6 +966,7 @@ def compute_window_summary(metrics_df: pd.DataFrame) -> pd.DataFrame:
         "brier_null",
         "brier_skill_score",
         "ece",
+        "ece_quantile",
         "top_decile_precision",
         "top_decile_recall",
     ]
@@ -1192,12 +1300,17 @@ def run_benchmark(
         detection_year_col=columns.get("external_detection_year_col", "detection_year"),
         filing_date_col=columns.get("external_filing_date_col"),
     )
+    label_modes = expand_label_modes(
+        analysis.get("label_modes", ["naive", "proxy_drop_observed"]),
+        proxy_imputed_lags=analysis.get("proxy_imputed_lags", [1, 2, 3, 5]),
+    )
     year_summary, timing_summary, timing_coverage = summarize_panel(
         panel,
         firm_col=firm_col,
         year_col=year_col,
         target_col=target_col,
         leakage_cols=leakage_cols,
+        label_modes=label_modes,
     )
     feature_cols = get_feature_columns(
         panel,
@@ -1216,7 +1329,7 @@ def run_benchmark(
         year_col=year_col,
         target_col=target_col,
         feature_cols=feature_cols,
-        label_modes=analysis.get("label_modes", ["naive", "proxy_sensitivity"]),
+        label_modes=label_modes,
         candidate_windows=analysis.get("candidate_train_windows", [None, 5, 7, 10]),
         min_train_years=int(analysis.get("min_train_years", 5)),
         top_k=analysis.get("top_k", [50, 100, 200, 500]),

@@ -8,15 +8,18 @@ import gc
 import hashlib
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
 import yaml
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
+from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
 from xgboost import XGBClassifier
@@ -30,6 +33,9 @@ TASKS = {
     "amendment": {"label": "label_amendment_365", "censor": "censored_365"},
     "8k_402": {"label": "label_8k_402_365", "censor": "censored_365"},
     "aaer_proxy": {"label": "label_aaer_proxy_730", "censor": "censored_730"},
+}
+TASK_EXCLUSION_COLS = {
+    "8k_402": ("k402_item_metadata_unknown_365",),
 }
 
 IDENTIFIER_COLS = {
@@ -89,6 +95,12 @@ def _as_string_array(values: object) -> object:
     return values.astype(str)
 
 
+def _as_float_array(values: object) -> object:
+    if isinstance(values, pd.DataFrame):
+        return values.apply(pd.to_numeric, errors="coerce").astype("float64")
+    return pd.to_numeric(values, errors="coerce").astype("float64")
+
+
 def _filter_main_sample(
     panel: pd.DataFrame,
     *,
@@ -120,6 +132,7 @@ def _infer_feature_families(df: pd.DataFrame) -> Dict[str, List[str]]:
     label_cols = {meta["label"] for meta in TASKS.values()} | {
         meta["censor"] for meta in TASKS.values()
     }
+    label_cols |= {col for cols in TASK_EXCLUSION_COLS.values() for col in cols}
     candidate_cols = [col for col in candidate_cols if col not in label_cols]
     candidate_cols = [col for col in candidate_cols if col not in MODEL_EXCLUDED_COLS]
     candidate_cols = [
@@ -141,7 +154,7 @@ def _infer_feature_families(df: pd.DataFrame) -> Dict[str, List[str]]:
             families["xbrl"].append(col)
         elif lower.startswith(("note_", "item_")):
             families["text"].append(col)
-        elif lower.startswith(("form_ap_", "pcaob_")):
+        elif lower.startswith(("form_ap_", "pcaob_", "auditor_partner_prior_")):
             families["auditor"].append(col)
         elif lower.startswith("prior_"):
             families["oversight"].append(col)
@@ -171,7 +184,7 @@ def _build_preprocessor(df: pd.DataFrame, feature_cols: Sequence[str]) -> Column
     numeric = [col for col in sample.columns if col not in categorical]
     return ColumnTransformer(
         transformers=[
-            ("numeric", "passthrough", numeric),
+            ("numeric", FunctionTransformer(_as_float_array), numeric),
             (
                 "categorical",
                 Pipeline(
@@ -187,6 +200,16 @@ def _build_preprocessor(df: pd.DataFrame, feature_cols: Sequence[str]) -> Column
         ],
         sparse_threshold=1.0,
     )
+
+
+def _task_exclusion_mask(df: pd.DataFrame, *, task_name: str, label_col: str) -> pd.Series:
+    mask = pd.Series(False, index=df.index)
+    for col in TASK_EXCLUSION_COLS.get(task_name, ()):
+        if col in df.columns:
+            mask = mask | pd.to_numeric(df[col], errors="coerce").fillna(0).ne(0)
+    if label_col in df.columns:
+        mask = mask | pd.to_numeric(df[label_col], errors="coerce").isna()
+    return mask
 
 
 def _build_model(
@@ -276,6 +299,242 @@ def _prepare_xy(
     return x, y
 
 
+def _public_opacity_components(panel: pd.DataFrame) -> pd.DataFrame:
+    components: Dict[str, pd.Series] = {}
+    for col in panel.columns:
+        lower = col.lower()
+        if lower.startswith(("missing_", "raw_missing_")):
+            components[col] = pd.to_numeric(panel[col], errors="coerce").fillna(0).clip(0, 1)
+        elif lower.startswith("xbrl_coverage_"):
+            coverage = pd.to_numeric(panel[col], errors="coerce").clip(0, 1)
+            components[f"opacity_{col}"] = 1.0 - coverage.fillna(0)
+    for col in ["note_text_count", "note_text_char_count"]:
+        if col in panel.columns:
+            values = pd.to_numeric(panel[col], errors="coerce")
+            components[f"opacity_{col}_absent"] = (values.fillna(0) <= 0).astype(float)
+    if not components:
+        return pd.DataFrame(index=panel.index)
+    return pd.DataFrame(components, index=panel.index).astype(float)
+
+
+def build_public_missingness_density_score(
+    panel: pd.DataFrame,
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Add the public-side opacity treatment used by Experiment 3."""
+    work = panel.copy()
+    components = _public_opacity_components(work)
+    if components.empty:
+        work["missingness_density_score"] = 0.0
+        return work, []
+    work["missingness_density_score"] = components.mean(axis=1).astype(float)
+    return work, list(components.columns)
+
+
+def _public_dml_control_columns(
+    panel: pd.DataFrame,
+    *,
+    opacity_component_names: Sequence[str],
+) -> List[str]:
+    families = _infer_feature_families(panel)
+    opacity_source_cols = {
+        name.replace("opacity_", "").replace("_absent", "") for name in opacity_component_names
+    }
+    excluded = {
+        "missingness_density_score",
+        *opacity_component_names,
+        *opacity_source_cols,
+    }
+    controls: List[str] = []
+    for col in families["all"]:
+        lower = col.lower()
+        if col in excluded:
+            continue
+        if lower.startswith(("missing_", "raw_missing_", "xbrl_coverage_")):
+            continue
+        if lower.startswith(MODEL_EXCLUDED_PREFIXES):
+            continue
+        if col in MODEL_EXCLUDED_COLS or col in IDENTIFIER_COLS:
+            continue
+        controls.append(col)
+    return controls
+
+
+def _public_dml_matrix(
+    work: pd.DataFrame,
+    controls: Sequence[str],
+    *,
+    max_categories: int = 50,
+) -> Tuple[np.ndarray, List[str]]:
+    if not controls:
+        return np.zeros((len(work), 1), dtype=float), ["constant_control"]
+    frame = work[list(controls)].copy()
+    categorical = [
+        col
+        for col in frame.columns
+        if col in {"form", "entity_type"}
+        or frame[col].dtype == object
+        or str(frame[col].dtype).startswith("category")
+    ]
+    categorical = [
+        col
+        for col in categorical
+        if frame[col].nunique(dropna=True) <= int(max_categories)
+    ]
+    numeric = [col for col in frame.columns if col not in categorical]
+    parts: List[pd.DataFrame] = []
+    used: List[str] = []
+    if numeric:
+        numeric_frame = frame[numeric].apply(pd.to_numeric, errors="coerce")
+        numeric_frame = numeric_frame.replace([np.inf, -np.inf], np.nan).clip(
+            lower=-1e12, upper=1e12
+        )
+        parts.append(numeric_frame)
+        used.extend(numeric)
+    if categorical:
+        cat_frame = frame[categorical].astype("object").fillna("__MISSING__")
+        dummies = pd.get_dummies(cat_frame, columns=categorical, dummy_na=False, dtype=float)
+        parts.append(dummies)
+        used.extend(list(dummies.columns))
+    if not parts:
+        return np.zeros((len(work), 1), dtype=float), ["constant_control"]
+    X = pd.concat(parts, axis=1)
+    imputer = SimpleImputer(strategy="median")
+    return imputer.fit_transform(X), used
+
+
+def fit_public_opacity_dml(
+    panel: pd.DataFrame,
+    *,
+    outcomes: Sequence[str],
+    seed: int,
+    n_splits: int = 3,
+    max_iter: int = 100,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    panel_with_score, opacity_components = build_public_missingness_density_score(panel)
+    controls = _public_dml_control_columns(
+        panel_with_score,
+        opacity_component_names=opacity_components,
+    )
+    rows: List[Dict[str, object]] = []
+    for outcome in outcomes:
+        if outcome not in TASKS:
+            rows.append(
+                {
+                    "outcome": outcome,
+                    "label_col": "",
+                    "censor_col": "",
+                    "treatment": "missingness_density_score",
+                    "status": "skipped_unknown_outcome",
+                    "n_obs": 0,
+                    "prevalence": np.nan,
+                    "mean_treatment": np.nan,
+                    "coef": np.nan,
+                    "std_err": np.nan,
+                    "p_value": np.nan,
+                    "n_controls": int(len(controls)),
+                    "n_opacity_components": int(len(opacity_components)),
+                }
+            )
+            continue
+        label_col = TASKS[outcome]["label"]
+        censor_col = TASKS[outcome]["censor"]
+        if label_col not in panel_with_score.columns or censor_col not in panel_with_score.columns:
+            rows.append(
+                {
+                    "outcome": outcome,
+                    "label_col": label_col,
+                    "censor_col": censor_col,
+                    "treatment": "missingness_density_score",
+                    "status": "skipped_missing_label_or_censor",
+                    "n_obs": 0,
+                    "prevalence": np.nan,
+                    "mean_treatment": np.nan,
+                    "coef": np.nan,
+                    "std_err": np.nan,
+                    "p_value": np.nan,
+                    "n_controls": int(len(controls)),
+                    "n_opacity_components": int(len(opacity_components)),
+                }
+            )
+            continue
+        uncensored = pd.to_numeric(panel_with_score[censor_col], errors="coerce").fillna(0).eq(0)
+        work = panel_with_score.loc[uncensored].copy()
+        work = work.dropna(subset=[label_col, "missingness_density_score"])
+        y = pd.to_numeric(work[label_col], errors="coerce").fillna(0).astype(int).to_numpy()
+        t = pd.to_numeric(work["missingness_density_score"], errors="coerce").to_numpy(dtype=float)
+        base_row = {
+            "outcome": outcome,
+            "label_col": label_col,
+            "censor_col": censor_col,
+            "treatment": "missingness_density_score",
+            "n_obs": int(len(work)),
+            "prevalence": float(np.mean(y)) if len(y) else np.nan,
+            "mean_treatment": float(np.mean(t)) if len(t) else np.nan,
+            "n_controls": int(len(controls)),
+            "n_opacity_components": int(len(opacity_components)),
+        }
+        if len(opacity_components) == 0:
+            rows.append({**base_row, "status": "skipped_no_opacity_components", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            continue
+        if len(work) < 20 or len(np.unique(y)) < 2:
+            rows.append({**base_row, "status": "skipped_one_class_or_too_small", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            continue
+        if float(np.nanstd(t)) == 0:
+            rows.append({**base_row, "status": "skipped_constant_treatment", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            continue
+        X, used_controls = _public_dml_matrix(work, controls)
+        splits = min(int(n_splits), len(work))
+        if splits < 2:
+            rows.append({**base_row, "status": "skipped_insufficient_folds", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            continue
+        y_hat = np.zeros(len(work), dtype=float)
+        t_hat = np.zeros(len(work), dtype=float)
+        splitter = KFold(n_splits=splits, shuffle=True, random_state=int(seed))
+        for fold, (train_idx, test_idx) in enumerate(splitter.split(X), start=1):
+            if len(np.unique(y[train_idx])) < 2:
+                y_hat[test_idx] = float(np.mean(y[train_idx]))
+            else:
+                y_model = HistGradientBoostingClassifier(
+                    random_state=int(seed) + fold,
+                    max_iter=int(max_iter),
+                )
+                y_model.fit(X[train_idx], y[train_idx])
+                y_hat[test_idx] = y_model.predict_proba(X[test_idx])[:, 1]
+            if float(np.nanstd(t[train_idx])) == 0:
+                t_hat[test_idx] = float(np.mean(t[train_idx]))
+            else:
+                t_model = HistGradientBoostingRegressor(
+                    random_state=int(seed) + 100 + fold,
+                    max_iter=int(max_iter),
+                )
+                t_model.fit(X[train_idx], t[train_idx])
+                t_hat[test_idx] = t_model.predict(X[test_idx])
+        y_res = y - y_hat
+        t_res = t - t_hat
+        if float(np.nanstd(t_res)) == 0:
+            rows.append({**base_row, "status": "skipped_constant_residual_treatment", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            continue
+        fitted = sm.OLS(y_res, sm.add_constant(t_res)).fit(cov_type="HC3")
+        rows.append(
+            {
+                **base_row,
+                "status": "fit",
+                "coef": float(fitted.params[1]),
+                "std_err": float(fitted.bse[1]),
+                "p_value": float(fitted.pvalues[1]),
+                "n_controls": int(len(used_controls)),
+            }
+        )
+    meta = {
+        "treatment": "missingness_density_score",
+        "opacity_components": opacity_components,
+        "control_columns": controls,
+        "n_opacity_components": int(len(opacity_components)),
+        "n_controls": int(len(controls)),
+    }
+    return pd.DataFrame(rows), meta
+
+
 def _run_public_cascade_unit(
     *,
     panel: pd.DataFrame,
@@ -310,8 +569,22 @@ def _run_public_cascade_unit(
     task_status_rows: List[Dict[str, object]] = []
 
     for task_suborder, (task_name, task_meta) in enumerate(TASKS.items()):
-        task_train = train_df.loc[train_df[task_meta["censor"]].eq(0)].copy()
-        task_test = test_df.loc[test_df[task_meta["censor"]].eq(0)].copy()
+        uncensored_train = train_df.loc[train_df[task_meta["censor"]].eq(0)].copy()
+        uncensored_test = test_df.loc[test_df[task_meta["censor"]].eq(0)].copy()
+        excluded_train_mask = _task_exclusion_mask(
+            uncensored_train,
+            task_name=task_name,
+            label_col=str(task_meta["label"]),
+        )
+        excluded_test_mask = _task_exclusion_mask(
+            uncensored_test,
+            task_name=task_name,
+            label_col=str(task_meta["label"]),
+        )
+        excluded_train = int(excluded_train_mask.sum())
+        excluded_test = int(excluded_test_mask.sum())
+        task_train = uncensored_train.loc[~excluded_train_mask].copy()
+        task_test = uncensored_test.loc[~excluded_test_mask].copy()
         if task_train.empty or task_test.empty:
             task_status_rows.append(
                 {
@@ -324,6 +597,8 @@ def _run_public_cascade_unit(
                     "status": "skipped_empty_train_or_test",
                     "n_train": int(len(task_train)),
                     "n_test": int(len(task_test)),
+                    "excluded_train": excluded_train,
+                    "excluded_test": excluded_test,
                     "positive_train": 0,
                     "positive_test": 0,
                 }
@@ -345,6 +620,8 @@ def _run_public_cascade_unit(
             "task": task_name,
             "n_train": int(len(task_train)),
             "n_test": int(len(task_test)),
+            "excluded_train": excluded_train,
+            "excluded_test": excluded_test,
             "positive_train": int(y_train.sum()),
             "positive_test": int(y_test.sum()),
         }
@@ -502,6 +779,7 @@ def run_public_cascade(
     if seed_policy not in {"task_isolated", "legacy"}:
         raise ValueError("seed_policy must be 'task_isolated' or 'legacy'")
     years = panel["fiscal_year"].dropna().astype(int).sort_values().unique().tolist()
+    opacity_dml_cfg = dict(analysis_cfg.get("opacity_dml", {}))
 
     metric_rows: List[Dict[str, object]] = []
     prediction_frames: List[pd.DataFrame] = []
@@ -609,6 +887,8 @@ def run_public_cascade(
         "status",
         "n_train",
         "n_test",
+        "excluded_train",
+        "excluded_test",
         "positive_train",
         "positive_test",
     ]
@@ -634,6 +914,11 @@ def run_public_cascade(
         )
     task_positive_counts = {
         task_name: int(pd.to_numeric(panel[meta["label"]], errors="coerce").fillna(0).sum())
+        for task_name, meta in TASKS.items()
+        if meta["label"] in panel.columns
+    }
+    task_exclusion_counts = {
+        task_name: int(_task_exclusion_mask(panel, task_name=task_name, label_col=meta["label"]).sum())
         for task_name, meta in TASKS.items()
         if meta["label"] in panel.columns
     }
@@ -665,6 +950,7 @@ def run_public_cascade(
         else [],
         "domestic_only": bool(sample_cfg.get("domestic_only", True)),
         "task_positive_counts": task_positive_counts,
+        "task_exclusion_counts": task_exclusion_counts,
         "zero_positive_tasks": zero_positive_tasks,
         "feature_family_summary": feature_family_summary,
         "empty_feature_family_blockers": empty_feature_family_blockers,
@@ -700,16 +986,53 @@ def run_public_cascade(
     else:
         summary["ranking_status"] = "No model fits were produced."
 
+    if bool(opacity_dml_cfg.get("enabled", True)):
+        opacity_dml_df, opacity_dml_meta = fit_public_opacity_dml(
+            panel,
+            outcomes=opacity_dml_cfg.get(
+                "outcomes",
+                ["comment_thread", "amendment", "8k_402"],
+            ),
+            seed=int(opacity_dml_cfg.get("seed", seed)),
+            n_splits=int(opacity_dml_cfg.get("folds", 3)),
+            max_iter=int(opacity_dml_cfg.get("max_iter", 100)),
+        )
+    else:
+        opacity_dml_df = pd.DataFrame()
+        opacity_dml_meta = {
+            "treatment": "missingness_density_score",
+            "opacity_components": [],
+            "control_columns": [],
+            "n_opacity_components": 0,
+            "n_controls": 0,
+            "status": "disabled",
+        }
+    summary["public_opacity_dml_status_counts"] = (
+        {
+            str(status): int(count)
+            for status, count in opacity_dml_df["status"].value_counts().items()
+        }
+        if not opacity_dml_df.empty and "status" in opacity_dml_df.columns
+        else {}
+    )
+    summary["public_opacity_dml_n_opacity_components"] = int(
+        opacity_dml_meta.get("n_opacity_components", 0)
+    )
+
     out_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = out_dir / "public_cascade_metrics.csv"
     predictions_path = out_dir / "public_cascade_predictions.parquet"
     task_status_path = out_dir / "public_cascade_task_status.csv"
+    opacity_dml_path = out_dir / "public_opacity_dml.csv"
+    opacity_dml_meta_path = out_dir / "public_opacity_dml_meta.json"
     summary_path = out_dir / "public_cascade_summary.json"
     readiness_md = out_dir / "public_cascade_summary.md"
 
     metrics_df.to_csv(metrics_path, index=False)
     write_table(predictions_df, predictions_path)
     task_status_df.to_csv(task_status_path, index=False)
+    opacity_dml_df.to_csv(opacity_dml_path, index=False)
+    opacity_dml_meta_path.write_text(json.dumps(opacity_dml_meta, indent=2), encoding="utf-8")
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     lines = [
         "# Public Cascade Summary",
@@ -722,6 +1045,7 @@ def run_public_cascade(
     ]
     if summary:
         lines.append(f"- Task positive counts: `{summary.get('task_positive_counts', {})}`")
+        lines.append(f"- Task exclusion counts: `{summary.get('task_exclusion_counts', {})}`")
         lines.append(f"- Zero-positive tasks: `{summary.get('zero_positive_tasks', [])}`")
         lines.append(f"- Task status counts: `{summary.get('task_status_counts', {})}`")
         lines.append(f"- Feature family summary: `{summary.get('feature_family_summary', {})}`")
@@ -733,6 +1057,10 @@ def run_public_cascade(
             f"- XBRL aggregate-only blocker: `{summary.get('xbrl_aggregate_only_blocker', False)}`"
         )
         lines.append(f"- Cascade readiness level: `{summary.get('cascade_readiness_level')}`")
+        lines.append(
+            f"- Public opacity DML status counts: "
+            f"`{summary.get('public_opacity_dml_status_counts', {})}`"
+        )
         if "best_feature_set" in summary:
             lines.extend(
                 [
@@ -749,6 +1077,8 @@ def run_public_cascade(
         "predictions_table": predictions_path,
         "predictions_csv": predictions_path,
         "task_status_csv": task_status_path,
+        "public_opacity_dml_csv": opacity_dml_path,
+        "public_opacity_dml_meta_json": opacity_dml_meta_path,
         "summary_json": summary_path,
         "summary_md": readiness_md,
     }
