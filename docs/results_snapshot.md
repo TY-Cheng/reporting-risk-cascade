@@ -27,12 +27,12 @@
 
 ## Interpretation Summary
 
-The current run supports a conservative result: the repo has moved from scaffold
-to a reproducible empirical pipeline, and the public review-and-correction
-cascade contains measurable signal for a public reporting-risk state. It does
-not yet support a claim about true fraud, causal identification, stable AAER
-severity-tail modeling, or completed overlap validation between the old benchmark and the
-filing-native public cascade.
+The current run supports a conservative result: the empirical workflow is
+reproducible, and the public review-and-correction cascade contains measurable
+signal for a public reporting-risk state. It does not yet support a claim about
+true fraud, causal identification, stable AAER severity-tail modeling, or
+completed overlap validation between the old benchmark and the filing-native
+public cascade.
 
 | Claim area | Current interpretation |
 | --- | --- |

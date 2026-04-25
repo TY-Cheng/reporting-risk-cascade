@@ -1,11 +1,11 @@
 <section class="rrc-hero" markdown>
-<div class="rrc-kicker">Executable research docs</div>
+<div class="rrc-kicker">Reproducible research record</div>
 
 # Reporting Risk Cascade
 
-This site is the operational front door for the current reporting-risk cascade
-paper: public-lake construction, benchmark diagnostics, cascade readiness,
-bridge blockers, and the exact commands needed to reproduce the active results.
+This site records the current reporting-risk cascade study: public-lake
+construction, benchmark diagnostics, cascade readiness, bridge status, and the
+commands used to reproduce the active artifacts.
 
 <div class="rrc-hero__actions" markdown>
 [Open the paper plan](paper_plan.md){ .md-button .md-button--primary }
@@ -36,8 +36,8 @@ bridge blockers, and the exact commands needed to reproduce the active results.
 
     ---
 
-    The repo front door is `just`. Benchmark, public-cascade, study, and docs
-    commands are all routed through the same small command surface.
+    The repo uses `just` as a narrow command surface for benchmark,
+    public-cascade, study, and documentation runs.
 
     [:octicons-arrow-right-24: Jump to commands](#reproducible-commands)
 
@@ -55,7 +55,8 @@ bridge blockers, and the exact commands needed to reproduce the active results.
     ---
 
     The public paper is gated by gold-panel availability, zero-positive tasks,
-    and the eventual `gvkey-CIK-year` bridge. The docs should make those gates obvious.
+    and the eventual `gvkey-CIK-year` bridge. These gates are reported before
+    integrated old-benchmark/public-cascade claims are made.
     Large public-lake panels are Parquet-first so repeated full runs do not spend
     most of their time decompressing and rewriting gzip CSV; the DuckDB path now
     builds the Gold panels directly in SQL before writing Parquet.
@@ -67,7 +68,7 @@ bridge blockers, and the exact commands needed to reproduce the active results.
     ---
 
     Multimodal text, graph structure, attention layers, and richer detector labels
-    are explicitly deferred until the current measurement spine is reproducible.
+    are deferred until the current measurement design is reproducible.
 
     [:octicons-arrow-right-24: Future work](future_work.md)
 

@@ -68,7 +68,7 @@ def test_project_identity_uses_reporting_risk_cascade_name() -> None:
     assert pyproject["project"]["name"] == "reporting-risk-cascade"
     assert "# Reporting Risk Cascade" in readme
     assert "# Reporting Risk Cascade" in home
-    assert "Executable research docs" in home
+    assert "Reproducible research record" in home
     assert "reporting-risk-cascade-manuscript" in env_example
 
 

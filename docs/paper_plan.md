@@ -5,9 +5,8 @@ Working title:
 **From Restatements to Public Review and Correction: Label Observability and the Public Reporting-Risk Cascade**
 
 !!! abstract "How to use this page"
-    This page is not a brainstorming memo. It is the current paper's execution
-    contract: what the paper is claiming, what the code must implement, and which
-    gates must be satisfied before the public-cascade result is treated as paper-ready.
+    This page defines the paper's research design, implementation contract, and
+    evidence gates for treating the public-cascade result as manuscript evidence.
 
 [Jump to the readiness matrix](#readiness-matrix){ .md-button .md-button--primary }
 [Open deferred future work](future_work.md){ .md-button }
@@ -18,8 +17,8 @@ Working title:
 
     ---
 
-    The contribution is to redesign the outcome and timing problem, not to claim
-    that one classifier trivially dominates another.
+    The contribution is to redesign the outcome and timing problem, not to rank
+    classifiers on a different estimand.
 
 -   :material-timetable: __Benchmark discipline__
 
@@ -51,7 +50,7 @@ Working title:
 
     - A timing-aware benchmark paper about why naive restatement prediction can mislead.
     - A public-data measurement paper about the reporting-risk public review-and-correction cascade.
-    - A reproducible workflow paper with explicit readiness gates and blocker states.
+    - A reproducible empirical study with explicit readiness gates and blocker states.
 
 === "This paper is not"
 
@@ -125,8 +124,8 @@ Operationally, the paper combines two evidence layers:
 - **Public cascade layer:** SEC and PCAOB public data, used to construct a filing-native
   public review and correction process.
 
-The old benchmark panel is not discarded. It is stored as Parquet after local CSV conversion
-and used as a disciplined benchmark and validation layer.
+The old benchmark panel is retained. It is stored as Parquet after local CSV conversion
+and used as a benchmark and validation layer.
 The public lake is the paper's main measurement innovation.
 
 ## Evidence State and Decision Gate
@@ -665,7 +664,7 @@ Public cascade readiness levels:
 - `metadata_baseline`: only metadata and issuer-history features are non-empty; this is a
   smoke/readiness result, not feature-family evidence.
 - `xbrl_ratio_baseline` or XBRL ratio baseline: at least one `xbrl_ratio_*` feature is
-  present and visible at origin; this is the first non-metadata empirical unlock.
+  present and visible at origin; this establishes the first non-metadata empirical baseline.
 - `auditor_form_ap_ablation`: Form AP fields are non-empty in the applicable post-2017
   source window.
 - `oversight_pcaob_later_window_ablation`: PCAOB inspection fields are non-empty in the
@@ -1031,7 +1030,7 @@ Workflow follow-up:
 | Component | Current status | Gate before paper claim |
 | --- | --- | --- |
 | Experiment 1 benchmark | benchmark evidence available; current timing claim is observability sensitivity only; code now emits `proxy_drop_observed` and `proxy_imputed_lag` grid rows | `timing_coverage.csv`, retained-positive share, imputed-lag grid, and external timing required for paper-grade maturation |
-| Experiment 2 drift | scaffold-only diagnostics | validated breakpoint diagnostics over annual PR-AUC/Brier Skill Score and feature-family shares |
+| Experiment 2 drift | preliminary diagnostics | validated breakpoint diagnostics over annual PR-AUC/Brier Skill Score and feature-family shares |
 | Experiment 3 opacity | benchmark-side DML remains legacy diagnostic; public-label DML is implemented on the issuer-origin panel | public-label PLR spec for `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` |
 | Experiment 4 public lake | full-run gold snapshot available | source coverage, task positives, censoring, and reproducibility manifest refreshed for manuscript tables |
 | Experiment 5 public cascade | current full-run snapshot is `xbrl_ratio_baseline`; AAER remains sparse | `xbrl_ratio_*` and `xbrl_coverage_*` columns present with tag coverage, non-degenerate core tasks, and AAER framed as feasibility only |
@@ -1072,7 +1071,7 @@ Empirical sufficiency:
 - zero-positive or sparse AAER robustness tasks are skipped and reported as severity-tail
   blockers, not failed headline models
 - feature-family ablations are not metadata-only in the full public run; `xbrl_ratio_*`
-  features unlock the first non-metadata baseline
+  features establish the first non-metadata baseline
 - overlap validation reports both alignment and non-equivalence between old labels and public
   cascade labels before any integrated-paper construct claim
 
