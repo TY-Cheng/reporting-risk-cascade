@@ -84,6 +84,12 @@ If only the legacy CSV exists, convert it once:
 uv run python scripts/convert_raw_dataset.py
 ```
 
+The `sample` dataset used by local recipes is a deterministic firm-level subset
+materialized from the local raw benchmark table. A clean GitHub checkout without
+the benchmark data can run CI unit tests and fixture-based smoke checks, but it
+cannot run benchmark, study, or full workflows until the raw benchmark Parquet or
+legacy CSV is present.
+
 ## Quick Workflow
 
 ```bash
@@ -119,7 +125,7 @@ threads per model fit, two public-source fetch workers, DuckDB Parquet for the
 public-lake build, `10GB` DuckDB memory, `50GB` DuckDB temp spill, FSDS batches
 of four archives, and Notes batches of two archives.
 
-For a clean-clone smoke run without the local raw benchmark CSV:
+For a local smoke run after the raw benchmark Parquet or legacy CSV is present:
 
 ```bash
 cp .env.example .env

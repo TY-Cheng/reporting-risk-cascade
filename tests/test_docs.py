@@ -148,6 +148,20 @@ def test_docs_file_names_are_paper_facing_not_internal_codenames() -> None:
     }
 
 
+def test_ci_workflow_is_clean_checkout_safe() -> None:
+    ci = _read(".github/workflows/ci.yml")
+    assert 'just check dataset="sample"' not in ci
+    assert "run: just _test" in ci
+    assert "run: just _ruff" in ci
+    assert "scripts/run_study.py" in ci
+    assert "--peer-comparison-mode light" in ci
+    assert "--skip-benchmark" in ci
+    assert "--skip-public-cascade" in ci
+    assert "--skip-bridge-probe" in ci
+    assert "artifacts/ci_peer_raw.parquet" in ci
+    assert "data/raw_dataset_misstatement.parquet" not in ci
+
+
 def test_readme_points_to_current_docs_pages() -> None:
     readme = _read("README.md")
     assert "docs/paper_plan.md" in readme

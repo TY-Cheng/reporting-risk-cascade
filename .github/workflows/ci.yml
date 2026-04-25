@@ -45,13 +45,79 @@ jobs:
       - name: Install dependencies
         run: uv sync --group docs
 
-      - name: Ruff and coverage tests
-        run: just check dataset="sample"
+      - name: Coverage tests
+        run: just _test
+
+      - name: Ruff
+        run: just _ruff
 
       - name: Build docs
         run: just _docs-build
 
       - name: Peer-comparison light smoke
         run: |
-          timeout 90s just task study sample artifacts/study_peer_light \
-            extra="--peer-comparison-mode light --skip-public-cascade --skip-bridge-probe"
+          uv run python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          import pandas as pd
+
+          from src.table_io import write_table
+
+          rows = []
+          for year in range(2018, 2023):
+              for firm_id in range(1, 7):
+                  rows.append(
+                      {
+                          "gvkey": f"{firm_id:04d}",
+                          "data_year": year,
+                          "misstatement firm-year": int((firm_id + year) % 4 == 0),
+                          "res_an0": 0,
+                          "res_an1": 0,
+                          "res_an2": 0,
+                          "res_an3": 0,
+                          "ch_rec": firm_id * 0.01,
+                          "ch_inv": (year - 2017) * 0.02,
+                          "soft_assets": 0.5 + firm_id * 0.01,
+                          "ch_cs": (firm_id % 3) * 0.03,
+                          "ch_roa": (year - 2020) * 0.01,
+                          "issue": int(firm_id % 2 == 0),
+                          "WC_acc": firm_id * 0.02,
+                          "ret_t": 0.01 * firm_id,
+                          "bm": 0.4 + 0.01 * firm_id,
+                          "big4": int(firm_id % 2 == 1),
+                      }
+                  )
+          out = Path("artifacts/ci_peer_raw.parquet")
+          write_table(pd.DataFrame(rows), out)
+
+          config = Path("artifacts/ci_peer_benchmark.yaml")
+          config.write_text(
+              dedent(
+                  """
+          columns:
+            target: "misstatement firm-year"
+            firm_col: "gvkey"
+            year_col: "data_year"
+            leakage_cols: ["res_an0", "res_an1", "res_an2", "res_an3"]
+          analysis:
+            raw_missing_threshold: 0.30
+            unknown_positive_strategy: "drop"
+            label_modes: ["naive"]
+            candidate_train_windows: [null, 3]
+            min_train_years: 2
+            top_k: [1, 2, 50, 100, 200]
+            seed: 42
+          """
+              ),
+              encoding="utf-8",
+          )
+          PY
+          timeout 90s uv run python scripts/run_study.py \
+            --benchmark-config artifacts/ci_peer_benchmark.yaml \
+            --raw-data artifacts/ci_peer_raw.parquet \
+            --out-dir artifacts/study_peer_light \
+            --skip-benchmark \
+            --skip-public-cascade \
+            --skip-bridge-probe \
+            --peer-comparison-mode light
