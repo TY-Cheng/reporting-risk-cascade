@@ -52,6 +52,7 @@ def _connect(
     duckdb = _require_duckdb()
     con = duckdb.connect(database=":memory:")
     con.execute(f"PRAGMA threads={max(1, int(threads))}")
+    con.execute("SET preserve_insertion_order = false")
     if memory_limit:
         con.execute(f"SET memory_limit = {_duckdb_literal(memory_limit)}")
     if temp_directory:

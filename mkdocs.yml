@@ -1,34 +1,68 @@
 site_name: Reporting Risk Cascade
 site_description: Documentation for the public reporting-risk cascade workflow.
+site_url: https://ty-cheng.github.io/reporting-risk-cascade/
+repo_url: https://github.com/TY-Cheng/reporting-risk-cascade
+repo_name: TY-Cheng/reporting-risk-cascade
+edit_uri: edit/main/docs/
 docs_dir: docs
 dev_addr: 127.0.0.1:8001
 theme:
   name: material
+  font:
+    text: Inter
+    code: JetBrains Mono
   palette:
     - scheme: default
-      primary: indigo
-      accent: blue
+      primary: teal
+      accent: deep orange
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - scheme: slate
-      primary: indigo
-      accent: blue
+      primary: teal
+      accent: amber
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
   features:
+    - announce.dismiss
+    - content.action.view
+    - content.code.annotate
     - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.path
+    - navigation.footer
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
     - navigation.top
     - navigation.tracking
     - content.code.copy
     - content.tabs.link
+    - content.tooltips
     - search.highlight
+    - search.share
     - search.suggest
+    - toc.follow
   icon:
+    logo: material/chart-line
+    repo: fontawesome/brands/github
     annotation: material/arrow-right-circle
+plugins:
+  - search
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/TY-Cheng/reporting-risk-cascade
+      name: GitHub repository
+copyright: Copyright &copy; 2026 Reporting Risk Cascade
+extra_css:
+  - assets/stylesheets/extra.css
 nav:
   - Home: index.md
+  - Results Snapshot: results_snapshot.md
   - Paper Plan: paper_plan.md
   - Audit Prompts:
       - Development Audit: development_audit_prompt.md

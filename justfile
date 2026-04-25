@@ -29,16 +29,31 @@ _check-env:
 _ruff:
     uv run ruff check src scripts tests
 
-_test:
+_test-core:
     uv run pytest -q \
+        tests/test_benchmark.py \
+        tests/test_bridge.py \
+        tests/test_data_prep.py \
+        tests/test_docs.py \
+        tests/test_public_cascade_interfaces.py \
+        tests/test_table_io_sample.py \
         --cov=src.benchmark \
         --cov=src.bridge \
         --cov=src.data_prep \
         --cov=src.public_cascade \
+        --cov=src.ranking_metrics \
         --cov=src.sample_dataset \
         --cov=src.table_io \
         --cov-report=term \
         --cov-fail-under=95
+
+_test-public-lake:
+    uv run pytest -q tests/test_public_lake.py \
+        --cov=src.public_lake \
+        --cov-report=term \
+        --cov-fail-under=93
+
+_test: _test-core _test-public-lake
 
 setup: _check-env
     uv sync
@@ -58,7 +73,24 @@ status: _check-env
         echo "python_prefix missing; run 'just setup'"; \
     fi
 
-run dataset="sample" out_dir="": _check-env
+task name="study" dataset="raw" out_dir="" extra="": _check-env
+    @case "{{ name }}" in \
+        prep) \
+            just _run "{{ dataset }}" "{{ out_dir }}"; \
+            ;; \
+        benchmark|cascade|bridge|study) \
+            just _analysis "{{ name }}" "{{ dataset }}" "{{ out_dir }}" "{{ extra }}"; \
+            ;; \
+        sec-bulk|submissions|companyfacts|fsds|notes|comment-letters|aaer|form-ap|pcaob-inspections|insider|13f|edgar-logs|market-structure|build-lake) \
+            just _fetch "{{ name }}" "{{ extra }}"; \
+            ;; \
+        *) \
+            echo "task must be one of: prep, benchmark, cascade, bridge, study, sec-bulk, submissions, companyfacts, fsds, notes, comment-letters, aaer, form-ap, pcaob-inspections, insider, 13f, edgar-logs, market-structure, build-lake"; \
+            exit 1; \
+            ;; \
+    esac
+
+_run dataset="sample" out_dir="": _check-env
     @if [ "{{ dataset }}" != "sample" ] && [ "{{ dataset }}" != "raw" ]; then \
         echo "dataset must be 'sample' or 'raw'"; \
         exit 1; \
@@ -70,7 +102,7 @@ run dataset="sample" out_dir="": _check-env
     fi
     just _ruff
 
-analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
+_analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
     @if [ "{{ stage }}" = "benchmark" ]; then \
         if [ "{{ dataset }}" = "sample" ]; then \
             raw_data="artifacts/sample_dataset_misstatement.parquet"; \
@@ -137,7 +169,7 @@ analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
     fi
     just _ruff
 
-fetch source="sec-bulk" extra="": _check-env
+_fetch source="sec-bulk" extra="": _check-env
     uv run python scripts/fetch_public_data.py --mode "{{ source }}" {{ extra }}
     just _ruff
 
@@ -300,7 +332,7 @@ check *args: _check-env
     just _test
     just _ruff
 
-docs: _check-env
+docs: _docs-build
     @for port in 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010; do \
         if ! lsof -nP -iTCP:${port} -sTCP:LISTEN >/dev/null 2>&1; then \
             echo "Serving docs on http://127.0.0.1:${port}"; \
@@ -310,8 +342,7 @@ docs: _check-env
     done; \
     echo "No free docs port in 8001-8010"; \
     exit 1
-    just _ruff
 
 _docs-build: _check-env
-    uv run --group docs mkdocs build --clean
+    uv run --group docs mkdocs build --strict --clean
     just _ruff

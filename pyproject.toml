@@ -59,6 +59,7 @@ source = [
     "src.bridge",
     "src.data_prep",
     "src.public_cascade",
+    "src.ranking_metrics",
     "src.sample_dataset",
     "src.table_io",
 ]

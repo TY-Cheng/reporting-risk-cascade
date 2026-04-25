@@ -455,11 +455,13 @@ def _filter_link_frame(
         return frame
     work = frame.copy()
     haystack = (work["url"].fillna("") + " " + work["basename"].fillna("")).str.lower()
+    work["year_hint"] = pd.to_numeric(
+        haystack.str.extract(r"(?P<year>20\d{2}|19\d{2})")["year"],
+        errors="coerce",
+    )
     if match:
         work = work.loc[haystack.str.contains(match.lower(), regex=False)].copy()
     if start_year is not None or end_year is not None:
-        years = haystack.str.extract(r"(?P<year>20\d{2}|19\d{2})")["year"]
-        work["year_hint"] = pd.to_numeric(years, errors="coerce")
         if start_year is not None:
             work = work.loc[
                 work["year_hint"].isna() | work["year_hint"].ge(int(start_year))
@@ -627,7 +629,7 @@ def _read_table_auto(path: Path) -> pd.DataFrame:
             return pd.read_csv(path, sep="|", low_memory=False)
         if any("\t" in line for line in sample):
             return pd.read_csv(path, sep="\t", low_memory=False)
-        return pd.read_csv(path, sep=r"\s{2,}", engine="python", low_memory=False)
+        return pd.read_csv(path, sep=r"\s{2,}", engine="python")
     if suffix == ".json":
         return pd.read_json(path)
     if suffix == ".xml":
@@ -737,6 +739,7 @@ def _duckdb_connect(
     duckdb = _require_duckdb()
     con = duckdb.connect(database=":memory:")
     con.execute(f"PRAGMA threads={max(1, int(threads))}")
+    con.execute("SET preserve_insertion_order = false")
     if memory_limit:
         con.execute(f"SET memory_limit = {_duckdb_literal(memory_limit)}")
     if temp_directory:
@@ -3136,12 +3139,12 @@ def _build_gold_panels_duckdb(
         issuer_path = gold_dir / "issuer_origin_panel.parquet"
         _duckdb_copy_query_to_parquet_on_connection(
             con,
-            query="SELECT * FROM filing_labeled_gold ORDER BY issuer_cik, origin_date, accession",
+            query="SELECT * FROM filing_labeled_gold",
             dest=filing_path,
         )
         _duckdb_copy_query_to_parquet_on_connection(
             con,
-            query="SELECT * FROM issuer_origin_gold ORDER BY issuer_cik, fiscal_year, accession",
+            query="SELECT * FROM issuer_origin_gold",
             dest=issuer_path,
         )
         filing_rows = int(con.execute("SELECT count(*) FROM filing_labeled_gold").fetchone()[0])

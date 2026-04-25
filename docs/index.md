@@ -1,12 +1,25 @@
-# Reporting Risk Cascade Docs
+<section class="rrc-hero" markdown>
+<div class="rrc-kicker">Executable research docs</div>
 
-!!! abstract "What this site is for"
-    This docs site is the operational front door for the current reporting-risk cascade paper.
-    Use it to orient the project quickly, inspect the executable paper plan, and
-    keep deferred research separate from the active benchmark plus public-cascade study.
+# Reporting Risk Cascade
 
-[Open the current paper plan](paper_plan.md){ .md-button .md-button--primary }
-[See deferred future work](future_work.md){ .md-button }
+This site is the operational front door for the current reporting-risk cascade
+paper: public-lake construction, benchmark diagnostics, cascade readiness,
+bridge blockers, and the exact commands needed to reproduce the active results.
+
+<div class="rrc-hero__actions" markdown>
+[Open the paper plan](paper_plan.md){ .md-button .md-button--primary }
+[View results](results_snapshot.md){ .md-button }
+[Run commands](#run-surface){ .md-button }
+</div>
+
+<div class="rrc-badge-row">
+  <span class="rrc-badge">Parquet-first public lake</span>
+  <span class="rrc-badge">95% core coverage gate</span>
+  <span class="rrc-badge">Strict docs build</span>
+  <span class="rrc-badge">Bridge gate explicit</span>
+</div>
+</section>
 
 <div class="grid cards" markdown>
 
@@ -27,6 +40,15 @@
     commands are all routed through the same small command surface.
 
     [:octicons-arrow-right-24: Jump to run surface](#run-surface)
+
+-   :material-chart-box-outline: __Current results__
+
+    ---
+
+    The site includes a static snapshot of the current `artifacts/full` run:
+    public-lake scale, cascade readiness, benchmark diagnostics, and bridge status.
+
+    [:octicons-arrow-right-24: Results snapshot](results_snapshot.md)
 
 -   :material-bridge: __Readiness and blockers__
 
@@ -68,9 +90,9 @@
     ```bash
     just setup
     just status
-    just analysis benchmark raw
-    just analysis bridge raw
-    just analysis study raw
+    just task benchmark raw
+    just task bridge raw
+    just task study raw
     just docs
     ```
 
@@ -85,9 +107,9 @@
 === "Public-lake path"
 
     ```bash
-    just fetch sec-bulk
-    just fetch form-ap
-    just fetch build-lake
+    just task sec-bulk
+    just task form-ap
+    just task build-lake
     bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200 --fetch-workers 2 --engine duckdb --duckdb-threads 4 --duckdb-memory-limit 10GB --duckdb-max-temp-size 50GB --fsds-batch-size 4 --notes-batch-size 2 --storage-format parquet --notes-mode summary --fresh-build
     ```
 
@@ -97,16 +119,23 @@
     just docs
     ```
 
-    `just docs` now serves MkDocs on the first free local port in `8001-8010`,
-    which avoids collisions with other repo-local dashboards and docs servers.
+    `just docs` first runs a strict clean MkDocs build, then serves MkDocs on
+    the first free local port in `8001-8010`, which avoids stale pages and local
+    port collisions.
 
 ## Readiness Snapshot
 
 | Layer | Current role | State |
 | --- | --- | --- |
 | Benchmark | `gvkey x data_year` benchmark | Evidence available, but `res_an*` supports timing sensitivity only, not paper-grade maturation |
-| Public cascade | Main public-data measurement layer | Evidence under construction; metadata baseline is not enough until `xbrl_ratio_*` features land |
-| Bridge | Overlap validation between old and new layers | Integration evidence pending; current raw shape should emit `raw_identifier_blocker` |
+| Public cascade | Main public-data measurement layer | Full-run snapshot available; current readiness is `xbrl_ratio_baseline` with nonzero XBRL ratio features |
+| Bridge | Overlap validation between old and new layers | Integration evidence pending until `data/external/gvkey_cik_year.csv` is prepared from an authoritative WRDS/Compustat-style CIK-GVKEY source |
+
+!!! info "Bridge crosswalk"
+    The repo can normalize and validate an external `gvkey-CIK-year` crosswalk,
+    but it cannot derive one from the current raw benchmark alone. Use
+    `scripts/prepare_gvkey_cik_crosswalk.py` on a WRDS/Compustat CIK-GVKEY export,
+    then rerun `just task bridge raw`.
 
 !!! note "Reading order"
     Start with the home overview below if you need the repo story in five minutes.

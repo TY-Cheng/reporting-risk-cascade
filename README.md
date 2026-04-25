@@ -4,19 +4,19 @@
 `reporting-risk-cascade` is the code workspace for a corporate reporting-risk project.
 The goal is not to run another model horse race on a static `restatement = 1`
 label. The goal is to rebuild the measurement problem around label timing,
-concept drift, strategic missingness, and the public scrutiny-correction-
-enforcement cascade.
+concept drift, strategic missingness, and the public review-and-correction
+cascade.
 
 **Current main claim:** with public data alone, we can model the publicly observable
-review-comment-amendment-enforcement cascade and estimate a **pre-disclosure reporting-risk state**.
+review-comment-amendment-correction cascade and estimate a **pre-disclosure reporting-risk state**.
 The old restatement CSV remains a benchmark and validation layer, not the sole research object.
 
 ## What This Repo Does
 
 | Path | Purpose | Main files |
 | --- | --- | --- |
-| Benchmark | Rebuild the old firm-year restatement benchmark with label maturation, drift diagnostics, missingness regimes, and DML-style adjustment. | `src/benchmark.py`, `scripts/run_benchmark.py`, `config/benchmark.yaml` |
-| Public cascade | Build and model a filing-native SEC/PCAOB public cascade over comment letters, amendments, 8-K Item 4.02, and AAER proxy events. | `src/public_lake.py`, `src/public_cascade.py`, `scripts/run_public_cascade.py`, `config/public_cascade.yaml` |
+| Benchmark | Rebuild the old firm-year restatement benchmark with label-observability, drift diagnostics, and legacy missingness checks. | `src/benchmark.py`, `scripts/run_benchmark.py`, `config/benchmark.yaml` |
+| Public cascade | Build and model a filing-native SEC/PCAOB public review-and-correction cascade over comment letters, amendments, and 8-K Item 4.02; AAER matches are severity-tail descriptors. | `src/public_lake.py`, `src/public_cascade.py`, `scripts/run_public_cascade.py`, `config/public_cascade.yaml` |
 | Study workflow | Run the benchmark and public cascade together, then report what is still needed for overlap validation. | `scripts/run_study.py`, `config/study.yaml` |
 
 The detailed paper design is in `docs/paper_plan.md`. Deferred multimodal, graph,
@@ -35,7 +35,8 @@ and missingness is economically meaningful.
 **Public cascade layer:** public SEC and PCAOB data are organized around filing-native
 keys: `issuer_cik`, `accession/adsh`, `filing_date`, `report_date`,
 `fiscal_period_end`, and `origin_date`. The cascade separates comment-letter
-scrutiny, amendments, 8-K Item 4.02 non-reliance events, and AAER proxy events.
+scrutiny, amendments, and 8-K Item 4.02 non-reliance events; AAER matches
+are retained as sparse severity-tail descriptors.
 
 The bridge still needed for final integration is a provenance-controlled
 `gvkey-CIK-year` crosswalk.
@@ -57,8 +58,13 @@ doc/          local reference PDFs
 
 Use `just` as the front door. It loads `.env`, uses the configured external
 `UV_PROJECT_ENVIRONMENT`, and runs `ruff` after mutating or analysis recipes.
-`just check` also runs the pytest coverage gate; the fast unit surface must stay
-at or above 95% coverage.
+The visible command surface is intentionally small: `setup`, `status`, `check`,
+`task`, `full`, and `docs`. Use `task` for one-off prep, analysis, and public
+data subtasks.
+`just check` also runs the pytest gates: core runtime modules must stay at or
+above 95% coverage, and the larger public-lake builder has a separate toy-data
+gate at 93% so it is measured with focused public-lake behavior tests without
+pretending the full lake is a fast unit-test surface.
 
 ```bash
 cp .env.example .env
@@ -83,23 +89,23 @@ uv run python scripts/convert_raw_dataset.py
 ```bash
 just setup
 just status
-just run sample
-just analysis benchmark raw
-just fetch sec-bulk
-just fetch form-ap
-just fetch build-lake
-just analysis cascade
-just analysis bridge raw
-just analysis study raw
+just task prep sample
+just task benchmark raw
+just task sec-bulk
+just task form-ap
+just task build-lake
+just task cascade
+just task bridge raw
+just task study raw
 just docs
 ```
 
 Common variants:
 
 ```bash
-just analysis benchmark raw artifacts/benchmark
-just analysis bridge raw artifacts/bridge_probe
-just analysis study raw artifacts/study
+just task benchmark raw artifacts/benchmark
+just task bridge raw artifacts/bridge_probe
+just task study raw artifacts/study
 just docs
 ```
 
@@ -150,7 +156,7 @@ nohup bash scripts/run_public_lake_full.sh --mode full > artifacts/logs/public_l
 ```
 
 The first full lake includes SEC bulk submissions, FSDS, Notes summaries, Form AP,
-PCAOB inspections, and AAER proxy events. Large Silver and Gold tables use
+PCAOB inspections, and AAER severity-tail proxy events. Large Silver and Gold tables use
 Parquet by default: `issuer_dim.parquet`, `filing_dim.parquet`,
 `form_ap_event.parquet`, `xbrl_fact_summary.parquet`, batch-sharded
 `xbrl_core_fact/`, `note_summary.parquet`, `issuer_origin_panel.parquet`, and
@@ -188,6 +194,33 @@ Bridge probe:
 - `artifacts/bridge_probe/multiplicity_report.csv`
 - `artifacts/bridge_probe/unmatched_raw_characteristics.csv`
 
+External bridge input:
+
+- `data/external/gvkey_cik_year.csv`
+
+The repo cannot infer this table from the current benchmark panel because the
+raw benchmark only has `gvkey` and `data_year`, not CIK, ticker, company name,
+CUSIP, or PERMNO. SEC public ticker/CIK files are useful public identifiers, but
+they are not a historical GVKEY source. Prepare this table from an authoritative
+WRDS/Compustat CIK-GVKEY link export or equivalent institutional crosswalk:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/prepare_gvkey_cik_crosswalk.py \
+  --input path/to/wrds_cik_gvkey_link.csv \
+  --out data/external/gvkey_cik_year.csv \
+  --source wrds_compustat_cik_gvkey_link \
+  --source-version "YYYY-MM-DD"
+
+just task bridge raw
+```
+
+Accepted source columns are `gvkey`, `issuer_cik` or `cik`, plus either
+`data_year`/`fiscal_year`/`fyear` or `start_year` and `end_year`. The prepared
+file keeps provenance fields (`source`, `source_version`, `extracted_at`,
+`match_method`, `match_score`) so bridge coverage and many-to-many mappings stay
+auditable.
+
 Study:
 
 - `artifacts/study/benchmark/`
@@ -198,10 +231,10 @@ Study:
 
 ## Current Priorities
 
-1. Audit and enrich the existing public lake with core `xbrl_ratio_*` features.
-2. Run benchmark timing-coverage outputs and public cascade readiness summaries.
-3. Run the public-only bridge probe and report `raw_identifier_blocker`, coverage, and
-   multiplicity instead of guessing crosswalks.
-4. Use XBRL baseline plus bridge-probe evidence to decide whether the project remains one
-   integrated paper or splits into benchmark critique and public cascade papers.
+1. Treat the full public-cascade run as the current `xbrl_ratio_baseline` snapshot.
+2. Prepare `data/external/gvkey_cik_year.csv` from an authoritative WRDS/Compustat-style
+   source to unlock bridge validation.
+3. Treat the bridge gate as mandatory for an integrated old-benchmark/public-cascade
+   paper; without it, the paper should remain a public review-and-correction measurement
+   paper rather than a validated fraud/restatement overlap paper.
 <!-- --8<-- [end:docs-home] -->

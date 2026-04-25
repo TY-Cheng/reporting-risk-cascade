@@ -49,6 +49,12 @@ def parse_args() -> argparse.Namespace:
         help="Fallback public-lake gold issuer panel",
     )
     parser.add_argument(
+        "--crosswalk",
+        type=Path,
+        default=REPO_ROOT / "data" / "external" / "gvkey_cik_year.csv",
+        help="Optional authoritative gvkey-CIK-year crosswalk",
+    )
+    parser.add_argument(
         "--out-dir",
         type=Path,
         default=ARTIFACTS_DIR / "bridge_probe",
@@ -69,6 +75,7 @@ def main() -> None:
         raw_data_path=raw_data,
         issuer_dim_path=args.issuer_dim,
         issuer_origin_panel_path=args.issuer_origin_panel,
+        crosswalk_path=args.crosswalk,
         out_dir=args.out_dir,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

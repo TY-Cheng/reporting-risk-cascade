@@ -1,9 +1,10 @@
 """
 Public-only bridge feasibility probe.
 
-This module deliberately does not build an authoritative historical crosswalk.
-It reports whether the old gvkey benchmark panel has enough public identifiers to
-attempt a candidate gvkey-CIK-year bridge, then writes coverage and multiplicity
+This module deliberately does not infer an authoritative historical crosswalk.
+It can use a provenance-tagged external gvkey-CIK-year crosswalk, or it can
+report whether the old gvkey benchmark panel has enough public identifiers to
+attempt a candidate bridge. In both cases it writes coverage and multiplicity
 reports before any overlap analysis is allowed.
 """
 
@@ -16,7 +17,7 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 import pandas as pd
 
-from .table_io import read_table
+from .table_io import read_table, write_table
 
 
 RAW_CIK_COLS = ("issuer_cik", "cik", "CIK")
@@ -26,13 +27,31 @@ RAW_CUSIP_COLS = ("cusip", "CUSIP")
 PUBLIC_TICKER_COLS = ("ticker", "tickers", "tickers_json")
 PUBLIC_NAME_COLS = ("entity_name", "company_name", "name")
 PUBLIC_CIK_COLS = ("issuer_cik", "cik", "CIK")
+CROSSWALK_GVKEY_COLS = ("gvkey", "GVKEY", "global_company_key")
+CROSSWALK_CIK_COLS = ("issuer_cik", "cik", "CIK", "cik_number")
+CROSSWALK_YEAR_COLS = ("data_year", "fiscal_year", "fyear", "year")
+CROSSWALK_START_YEAR_COLS = ("start_year", "start_fiscal_year", "start_fyear")
+CROSSWALK_END_YEAR_COLS = ("end_year", "end_fiscal_year", "end_fyear")
+PROVENANCE_COLUMNS = (
+    "source",
+    "source_version",
+    "extracted_at",
+    "match_method",
+    "match_score",
+)
 
 
 def _first_existing(columns: Iterable[str], candidates: Sequence[str]) -> Optional[str]:
-    column_set = set(columns)
+    column_list = list(columns)
+    column_set = set(column_list)
     for candidate in candidates:
         if candidate in column_set:
             return candidate
+    lower_map = {str(column).lower(): column for column in column_list}
+    for candidate in candidates:
+        found = lower_map.get(str(candidate).lower())
+        if found is not None:
+            return found
     return None
 
 
@@ -52,6 +71,42 @@ def _normalize_cik(value: object) -> Optional[str]:
     if numeric <= 0:
         return None
     return str(numeric).zfill(10)
+
+
+def _normalize_gvkey(value: object) -> Optional[str]:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+    try:
+        numeric = int(float(text))
+    except ValueError:
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if not digits:
+            return None
+        numeric = int(digits)
+    if numeric < 0:
+        return None
+    return str(numeric)
+
+
+def _normalize_year(value: object) -> Optional[int]:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+    try:
+        year = int(float(text))
+    except ValueError:
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if len(digits) < 4:
+            return None
+        year = int(digits[:4])
+    if year < 1800 or year > 2200:
+        return None
+    return year
 
 
 def _normalize_ticker(value: object) -> Optional[str]:
@@ -102,6 +157,13 @@ def _read_table_if_exists(path: Optional[Path]) -> pd.DataFrame:
     return read_table(path, low_memory=False)
 
 
+def _raw_years(raw: Optional[pd.DataFrame], *, year_col: str) -> List[int]:
+    if raw is None or year_col not in raw.columns:
+        return []
+    years = raw[year_col].map(_normalize_year).dropna().astype(int)
+    return sorted(years.unique().tolist())
+
+
 def _resolve_optional_path_arg(
     *,
     preferred_name: str,
@@ -122,6 +184,140 @@ def _raw_identifier_columns(raw: pd.DataFrame) -> Dict[str, Optional[str]]:
         "name": _first_existing(raw.columns, RAW_NAME_COLS),
         "cusip": _first_existing(raw.columns, RAW_CUSIP_COLS),
     }
+
+
+def _external_crosswalk_frame(
+    crosswalk: pd.DataFrame,
+    *,
+    raw: Optional[pd.DataFrame] = None,
+    firm_col: str = "gvkey",
+    year_col: str = "data_year",
+    source: Optional[str] = None,
+    source_version: Optional[str] = None,
+    extracted_at: Optional[str] = None,
+    match_method: Optional[str] = None,
+    match_score: Optional[float] = None,
+) -> pd.DataFrame:
+    """Normalize a gvkey-CIK crosswalk to annual rows with provenance."""
+
+    columns = crosswalk.columns
+    gvkey_col = _first_existing(columns, CROSSWALK_GVKEY_COLS)
+    cik_col = _first_existing(columns, CROSSWALK_CIK_COLS)
+    year_value_col = _first_existing(columns, CROSSWALK_YEAR_COLS)
+    start_year_col = _first_existing(columns, CROSSWALK_START_YEAR_COLS)
+    end_year_col = _first_existing(columns, CROSSWALK_END_YEAR_COLS)
+    if gvkey_col is None:
+        raise ValueError("external crosswalk is missing a gvkey column")
+    if cik_col is None:
+        raise ValueError("external crosswalk is missing an issuer_cik/cik column")
+    if year_value_col is None and (start_year_col is None or end_year_col is None):
+        raise ValueError(
+            "external crosswalk must include data_year/fiscal_year/fyear or start_year/end_year"
+        )
+
+    raw_year_values = _raw_years(raw, year_col=year_col)
+    raw_year_set = set(raw_year_values)
+    min_raw_year = min(raw_year_values) if raw_year_values else None
+    max_raw_year = max(raw_year_values) if raw_year_values else None
+
+    rows: List[Dict[str, object]] = []
+    for _, row in crosswalk.iterrows():
+        gvkey = _normalize_gvkey(row.get(gvkey_col))
+        issuer_cik = _normalize_cik(row.get(cik_col))
+        if gvkey is None or issuer_cik is None:
+            continue
+
+        if year_value_col is not None:
+            years = [_normalize_year(row.get(year_value_col))]
+        else:
+            start_year = _normalize_year(row.get(start_year_col))
+            end_year = _normalize_year(row.get(end_year_col))
+            if start_year is None or end_year is None:
+                years = []
+            else:
+                if min_raw_year is not None:
+                    start_year = max(start_year, min_raw_year)
+                if max_raw_year is not None:
+                    end_year = min(end_year, max_raw_year)
+                years = list(range(start_year, end_year + 1)) if end_year >= start_year else []
+
+        for year in years:
+            if year is None:
+                continue
+            year = int(year)
+            if raw_year_set and year not in raw_year_set:
+                continue
+            record: Dict[str, object] = {
+                "gvkey": gvkey,
+                "data_year": year,
+                "issuer_cik": issuer_cik,
+                "source": row.get("source", source or "external_crosswalk"),
+                "source_version": row.get("source_version", source_version or ""),
+                "extracted_at": row.get("extracted_at", extracted_at or ""),
+                "match_method": row.get("match_method", match_method or "external_crosswalk"),
+                "match_score": row.get("match_score", match_score if match_score is not None else ""),
+                "_bridge_gvkey": gvkey,
+                "_bridge_year": year,
+            }
+            rows.append(record)
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "gvkey",
+                "data_year",
+                "issuer_cik",
+                *PROVENANCE_COLUMNS,
+                "_bridge_gvkey",
+                "_bridge_year",
+            ]
+        )
+    normalized = pd.DataFrame(rows)
+    return normalized.drop_duplicates(
+        subset=["gvkey", "data_year", "issuer_cik", *PROVENANCE_COLUMNS]
+    ).reset_index(drop=True)
+
+
+def prepare_gvkey_cik_crosswalk(
+    *,
+    input_path: Path,
+    output_path: Path,
+    raw_data_path: Optional[Path] = None,
+    source: Optional[str] = None,
+    source_version: Optional[str] = None,
+    extracted_at: Optional[str] = None,
+    match_method: Optional[str] = None,
+    match_score: Optional[float] = None,
+) -> Dict[str, object]:
+    """Normalize an external WRDS/Compustat gvkey-CIK export for bridge use."""
+
+    crosswalk = read_table(input_path, low_memory=False)
+    raw = read_table(raw_data_path, low_memory=False) if raw_data_path and raw_data_path.exists() else None
+    normalized = _external_crosswalk_frame(
+        crosswalk,
+        raw=raw,
+        source=source,
+        source_version=source_version,
+        extracted_at=extracted_at,
+        match_method=match_method,
+        match_score=match_score,
+    )
+    output = normalized[
+        ["gvkey", "data_year", "issuer_cik", *PROVENANCE_COLUMNS]
+    ].sort_values(["gvkey", "data_year", "issuer_cik"])
+    write_table(output, output_path)
+    summary = {
+        "input_path": str(input_path),
+        "output_path": str(output_path),
+        "raw_data_path": str(raw_data_path) if raw_data_path else None,
+        "input_rows": int(len(crosswalk)),
+        "output_rows": int(len(output)),
+        "gvkeys": int(output["gvkey"].nunique()) if not output.empty else 0,
+        "issuer_ciks": int(output["issuer_cik"].nunique()) if not output.empty else 0,
+        "year_min": int(output["data_year"].min()) if not output.empty else None,
+        "year_max": int(output["data_year"].max()) if not output.empty else None,
+    }
+    return summary
 
 
 def _public_identifier_frame(public: pd.DataFrame) -> pd.DataFrame:
@@ -221,6 +417,66 @@ def _raw_identifier_frame(
             if name:
                 rows.append({**base, "match_type": "name", "match_value": name})
     return pd.DataFrame(rows)
+
+
+def _external_crosswalk_candidates(
+    raw: pd.DataFrame,
+    crosswalk: pd.DataFrame,
+    *,
+    firm_col: str,
+    year_col: str,
+    target_col: str,
+) -> pd.DataFrame:
+    normalized = _external_crosswalk_frame(
+        crosswalk,
+        raw=raw,
+        firm_col=firm_col,
+        year_col=year_col,
+    )
+    if normalized.empty:
+        return pd.DataFrame()
+
+    raw_work = raw.reset_index(drop=True).copy()
+    raw_work["raw_row_id"] = raw_work.index.astype(int)
+    raw_work["_bridge_gvkey"] = raw_work[firm_col].map(_normalize_gvkey)
+    raw_work["_bridge_year"] = raw_work[year_col].map(_normalize_year)
+    base_cols = ["raw_row_id", firm_col, year_col, "_bridge_gvkey", "_bridge_year"]
+    if target_col in raw_work.columns:
+        base_cols.append(target_col)
+    else:
+        raw_work[target_col] = pd.NA
+        base_cols.append(target_col)
+    raw_work = raw_work.loc[
+        raw_work["_bridge_gvkey"].notna() & raw_work["_bridge_year"].notna(), base_cols
+    ].copy()
+    if raw_work.empty:
+        return pd.DataFrame()
+
+    normalized_merge = normalized.drop(columns=["gvkey", "data_year"], errors="ignore")
+    candidates = raw_work.merge(
+        normalized_merge,
+        on=["_bridge_gvkey", "_bridge_year"],
+        how="inner",
+    )
+    if candidates.empty:
+        return candidates
+    candidates["match_type"] = "external_crosswalk"
+    candidates["match_value"] = candidates["issuer_cik"]
+    candidates["provenance"] = candidates["source"].fillna("external_crosswalk")
+    columns = [
+        "raw_row_id",
+        firm_col,
+        year_col,
+        target_col,
+        "issuer_cik",
+        "match_type",
+        "match_value",
+        "provenance",
+        *PROVENANCE_COLUMNS,
+    ]
+    return candidates[columns].drop_duplicates(
+        subset=["raw_row_id", "issuer_cik", "match_type", "match_value", *PROVENANCE_COLUMNS]
+    )
 
 
 def _coverage_report(
@@ -381,12 +637,73 @@ def _write_blocker_outputs(
     return summary
 
 
+def _write_candidate_outputs(
+    *,
+    out_dir: Path,
+    raw: pd.DataFrame,
+    candidates: pd.DataFrame,
+    status: str,
+    firm_col: str,
+    year_col: str,
+    target_col: str,
+    raw_identifier_cols: Dict[str, Optional[str]],
+    public_rows: int,
+    candidate_source: str,
+    blocker: Optional[str] = None,
+) -> Dict[str, object]:
+    candidate_path = out_dir / "candidate_crosswalk.csv"
+    candidates.to_csv(candidate_path, index=False)
+
+    coverage = _coverage_report(raw, candidates, firm_col=firm_col, target_col=target_col)
+    multiplicity = _multiplicity_report(candidates, firm_col=firm_col)
+    unmatched = _unmatched_raw_characteristics(
+        raw,
+        candidates,
+        year_col=year_col,
+        target_col=target_col,
+    )
+    coverage_path = out_dir / "coverage_report.csv"
+    multiplicity_path = out_dir / "multiplicity_report.csv"
+    unmatched_path = out_dir / "unmatched_raw_characteristics.csv"
+    coverage.to_csv(coverage_path, index=False)
+    multiplicity.to_csv(multiplicity_path, index=False)
+    unmatched.to_csv(unmatched_path, index=False)
+
+    ambiguous_raw_rows = (
+        multiplicity.loc[
+            multiplicity["grain"].eq("raw_row") & multiplicity["candidate_count"].gt(1)
+        ]
+        if not multiplicity.empty
+        else pd.DataFrame()
+    )
+    summary = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "status": status,
+        "raw_rows": int(len(raw)),
+        "public_rows": int(public_rows),
+        "raw_identifier_columns": raw_identifier_cols,
+        "candidate_source": candidate_source,
+        "candidate_crosswalk_rows": int(len(candidates)),
+        "ambiguous_raw_rows": int(len(ambiguous_raw_rows)),
+        "candidate_crosswalk_csv": str(candidate_path),
+        "coverage_report_csv": str(coverage_path),
+        "multiplicity_report_csv": str(multiplicity_path),
+        "unmatched_raw_characteristics_csv": str(unmatched_path),
+    }
+    if blocker:
+        summary["blocker"] = blocker
+    summary_path = out_dir / "bridge_probe_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    return summary
+
+
 def run_bridge_probe(
     *,
     raw_data_path: Optional[Path] = None,
     out_dir: Path,
     issuer_dim_path: Optional[Path] = None,
     issuer_origin_panel_path: Optional[Path] = None,
+    crosswalk_path: Optional[Path] = None,
     raw_csv: Optional[Path] = None,
     issuer_dim_csv: Optional[Path] = None,
     issuer_origin_panel_csv: Optional[Path] = None,
@@ -420,6 +737,36 @@ def run_bridge_probe(
 
     raw = read_table(raw_data_path, low_memory=False)
     raw_identifier_cols = _raw_identifier_columns(raw)
+    external_crosswalk = _read_table_if_exists(crosswalk_path)
+    if not external_crosswalk.empty:
+        candidates = _external_crosswalk_candidates(
+            raw,
+            external_crosswalk,
+            firm_col=firm_col,
+            year_col=year_col,
+            target_col=target_col,
+        )
+        status = (
+            "external_crosswalk_available"
+            if not candidates.empty
+            else "external_crosswalk_no_matches"
+        )
+        return _write_candidate_outputs(
+            out_dir=out_dir,
+            raw=raw,
+            candidates=candidates,
+            status=status,
+            firm_col=firm_col,
+            year_col=year_col,
+            target_col=target_col,
+            raw_identifier_cols=raw_identifier_cols,
+            public_rows=0,
+            candidate_source="external_crosswalk",
+            blocker="external crosswalk did not match raw gvkey-year rows"
+            if candidates.empty
+            else None,
+        )
+
     if not any(raw_identifier_cols.values()):
         return _write_blocker_outputs(
             out_dir=out_dir,
@@ -478,44 +825,15 @@ def run_bridge_probe(
         subset=["raw_row_id", "issuer_cik", "match_type", "match_value"]
     )
     candidates["provenance"] = "public_probe"
-    candidate_path = out_dir / "candidate_crosswalk.csv"
-    candidates.to_csv(candidate_path, index=False)
-
-    coverage = _coverage_report(raw, candidates, firm_col=firm_col, target_col=target_col)
-    multiplicity = _multiplicity_report(candidates, firm_col=firm_col)
-    unmatched = _unmatched_raw_characteristics(
-        raw,
-        candidates,
+    return _write_candidate_outputs(
+        out_dir=out_dir,
+        raw=raw,
+        candidates=candidates,
+        status=status,
+        firm_col=firm_col,
         year_col=year_col,
         target_col=target_col,
+        raw_identifier_cols=raw_identifier_cols,
+        public_rows=int(len(public)),
+        candidate_source="public_probe",
     )
-    coverage_path = out_dir / "coverage_report.csv"
-    multiplicity_path = out_dir / "multiplicity_report.csv"
-    unmatched_path = out_dir / "unmatched_raw_characteristics.csv"
-    coverage.to_csv(coverage_path, index=False)
-    multiplicity.to_csv(multiplicity_path, index=False)
-    unmatched.to_csv(unmatched_path, index=False)
-
-    ambiguous_raw_rows = (
-        multiplicity.loc[
-            multiplicity["grain"].eq("raw_row") & multiplicity["candidate_count"].gt(1)
-        ]
-        if not multiplicity.empty
-        else pd.DataFrame()
-    )
-    summary = {
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "status": status,
-        "raw_rows": int(len(raw)),
-        "public_rows": int(len(public)),
-        "raw_identifier_columns": raw_identifier_cols,
-        "candidate_crosswalk_rows": int(len(candidates)),
-        "ambiguous_raw_rows": int(len(ambiguous_raw_rows)),
-        "candidate_crosswalk_csv": str(candidate_path),
-        "coverage_report_csv": str(coverage_path),
-        "multiplicity_report_csv": str(multiplicity_path),
-        "unmatched_raw_characteristics_csv": str(unmatched_path),
-    }
-    summary_path = out_dir / "bridge_probe_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    return summary

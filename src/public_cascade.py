@@ -18,9 +18,10 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
 from xgboost import XGBClassifier
 
+from .ranking_metrics import BAO_TOP_FRACTIONS, bao_top_fraction_metrics
 from .table_io import read_table, write_table
 
 
@@ -80,6 +81,14 @@ def _load_config(path: Path) -> Dict[str, object]:
         return yaml.safe_load(handle)
 
 
+def _as_object_array(values: object) -> object:
+    return values.astype(object)
+
+
+def _as_string_array(values: object) -> object:
+    return values.astype(str)
+
+
 def _filter_main_sample(
     panel: pd.DataFrame,
     *,
@@ -93,6 +102,17 @@ def _filter_main_sample(
     if domestic_only and "is_domestic_us_gaap_proxy" in work.columns:
         work = work.loc[work["is_domestic_us_gaap_proxy"].eq(1)].copy()
     return work.reset_index(drop=True)
+
+
+def _sort_panel_for_model(panel: pd.DataFrame) -> pd.DataFrame:
+    sort_cols = [
+        col for col in ["issuer_cik", "fiscal_year", "origin_date", "accession"] if col in panel
+    ]
+    if not sort_cols:
+        return panel.reset_index(drop=True)
+    return panel.sort_values(sort_cols, kind="mergesort", na_position="last").reset_index(
+        drop=True
+    )
 
 
 def _infer_feature_families(df: pd.DataFrame) -> Dict[str, List[str]]:
@@ -151,12 +171,14 @@ def _build_preprocessor(df: pd.DataFrame, feature_cols: Sequence[str]) -> Column
     numeric = [col for col in sample.columns if col not in categorical]
     return ColumnTransformer(
         transformers=[
-            ("numeric", SimpleImputer(strategy="median"), numeric),
+            ("numeric", "passthrough", numeric),
             (
                 "categorical",
                 Pipeline(
                     steps=[
-                        ("impute", SimpleImputer(strategy="most_frequent")),
+                        ("as_object", FunctionTransformer(_as_object_array)),
+                        ("impute", SimpleImputer(strategy="constant", fill_value="__MISSING__")),
+                        ("as_string", FunctionTransformer(_as_string_array)),
                         ("encode", OneHotEncoder(handle_unknown="ignore")),
                     ]
                 ),
@@ -187,12 +209,13 @@ def _build_model(
         reg_lambda=float(params.get("reg_lambda", 1.0)),
         n_jobs=int(params.get("n_jobs", -1)),
         tree_method=str(params.get("tree_method", "hist")),
+        missing=np.nan,
     )
     return clf
 
 
 def _evaluate_binary(y_true: np.ndarray, prob: np.ndarray) -> Dict[str, float]:
-    if y_true.sum() == 0:
+    if len(np.unique(y_true)) < 2:
         roc_auc = np.nan
         pr_auc = np.nan
     else:
@@ -202,7 +225,25 @@ def _evaluate_binary(y_true: np.ndarray, prob: np.ndarray) -> Dict[str, float]:
         brier = float(brier_score_loss(y_true, prob))
     except ValueError:
         brier = np.nan
-    return {"roc_auc": roc_auc, "pr_auc": pr_auc, "brier": brier}
+    prevalence = float(np.mean(y_true)) if len(y_true) else np.nan
+    try:
+        brier_null = float(brier_score_loss(y_true, np.full(len(y_true), prevalence)))
+    except ValueError:
+        brier_null = np.nan
+    brier_skill_score = (
+        float(1.0 - brier / brier_null)
+        if np.isfinite(brier) and np.isfinite(brier_null) and brier_null > 0
+        else np.nan
+    )
+    metrics = {
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
+        "brier": brier,
+        "brier_null": brier_null,
+        "brier_skill_score": brier_skill_score,
+    }
+    metrics.update(bao_top_fraction_metrics(y_true, prob))
+    return metrics
 
 
 def _rolling_year_pairs(
@@ -433,6 +474,7 @@ def run_public_cascade(
         end_year=int(sample_cfg.get("end_year", 2023)),
         domestic_only=bool(sample_cfg.get("domestic_only", True)),
     )
+    panel = _sort_panel_for_model(panel)
     families = _infer_feature_families(panel)
     metadata_family = set(families.get("metadata", []))
     feature_family_summary = {
@@ -536,7 +578,13 @@ def run_public_cascade(
         "roc_auc",
         "pr_auc",
         "brier",
+        "brier_null",
+        "brier_skill_score",
     ]
+    for fraction in BAO_TOP_FRACTIONS:
+        pct = int(round(float(fraction) * 100))
+        for suffix in ["k", "precision", "sensitivity", "specificity", "bac", "ndcg"]:
+            metric_columns.append(f"bao_top_{pct}pct_{suffix}")
     metrics_df = pd.DataFrame(metric_rows, columns=metric_columns)
     prediction_columns = [
         "issuer_cik",

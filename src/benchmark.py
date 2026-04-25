@@ -37,6 +37,7 @@ from sklearn.model_selection import KFold
 from xgboost import XGBClassifier
 
 from . import SEED_DEFAULT
+from .ranking_metrics import bao_top_fraction_metrics
 from .table_io import read_table, write_table
 
 try:
@@ -559,11 +560,16 @@ def compute_metrics(
     *,
     top_k: Sequence[int],
 ) -> Dict[str, Any]:
+    prevalence = float(np.mean(y_true)) if len(y_true) else np.nan
+    brier = float(brier_score_loss(y_true, y_prob))
+    brier_null = float(brier_score_loss(y_true, np.full(len(y_true), prevalence)))
     metrics: Dict[str, Any] = {
         "pr_auc": float(average_precision_score(y_true, y_prob)),
-        "brier": float(brier_score_loss(y_true, y_prob)),
+        "brier": brier,
+        "brier_null": brier_null,
+        "brier_skill_score": float(1.0 - brier / brier_null) if brier_null > 0 else np.nan,
         "ece": expected_calibration_error(y_true, y_prob),
-        "pos_rate": float(np.mean(y_true)),
+        "pos_rate": prevalence,
         "n_obs": int(len(y_true)),
     }
     if len(np.unique(y_true)) > 1:
@@ -585,6 +591,7 @@ def compute_metrics(
     metrics["top_decile_threshold"] = float(threshold)
     metrics["top_decile_precision"] = float(precision_score(y_true, pred_label, zero_division=0))
     metrics["top_decile_recall"] = float(recall_score(y_true, pred_label, zero_division=0))
+    metrics.update(bao_top_fraction_metrics(y_true, y_prob))
     return metrics
 
 
@@ -846,11 +853,21 @@ def run_rolling_backtest(
 def compute_window_summary(metrics_df: pd.DataFrame) -> pd.DataFrame:
     if metrics_df.empty:
         return pd.DataFrame()
-    agg_cols = ["pr_auc", "brier", "ece", "top_decile_precision", "top_decile_recall"]
+    agg_cols = [
+        "pr_auc",
+        "brier",
+        "brier_null",
+        "brier_skill_score",
+        "ece",
+        "top_decile_precision",
+        "top_decile_recall",
+    ]
     top_k_cols = [
         col for col in metrics_df.columns if col.startswith("top_") and col.endswith("_precision")
     ]
     agg_cols.extend([col for col in top_k_cols if col not in agg_cols])
+    bao_cols = [col for col in metrics_df.columns if col.startswith("bao_top_")]
+    agg_cols.extend([col for col in bao_cols if col not in agg_cols])
     summary = (
         metrics_df.groupby(["window", "label_mode"], as_index=False)[agg_cols]
         .mean(numeric_only=True)
@@ -1063,6 +1080,9 @@ def build_recommendation(
         "decision_metric": {
             "pr_auc": float(best.get("pr_auc", np.nan)),
             "top_100_precision": float(best.get("top_100_precision", np.nan)),
+            "bao_top_1pct_ndcg": float(best.get("bao_top_1pct_ndcg", np.nan)),
+            "bao_top_1pct_precision": float(best.get("bao_top_1pct_precision", np.nan)),
+            "bao_top_1pct_sensitivity": float(best.get("bao_top_1pct_sensitivity", np.nan)),
             "brier": float(best.get("brier", np.nan)),
         },
     }
@@ -1104,7 +1124,10 @@ def render_summary_markdown(
         for _, row in window_summary.iterrows():
             lines.append(
                 f"- {row['label_mode']} | {row['window']} | PR-AUC={row['pr_auc']:.4f} | "
-                f"Brier={row['brier']:.4f} | Top-100 precision={row.get('top_100_precision', np.nan):.4f}"
+                f"Brier={row['brier']:.4f} | "
+                f"BSS={row.get('brier_skill_score', np.nan):.4f} | "
+                f"Top-100 precision={row.get('top_100_precision', np.nan):.4f} | "
+                f"Bao NDCG@1%={row.get('bao_top_1pct_ndcg', np.nan):.4f}"
             )
     lines.extend(["", "## Missing-Profile Clusters"])
     if cluster_summary.empty:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import zipfile
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -30,6 +31,19 @@ from src.table_io import read_table, write_table
 def _write_csv_gz(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(path, index=False, compression="gzip")
+
+
+def _sort_gold_for_compare(frame: pd.DataFrame) -> pd.DataFrame:
+    sort_cols = [
+        col
+        for col in ["issuer_cik", "fiscal_year", "origin_date", "accession"]
+        if col in frame.columns
+    ]
+    if not sort_cols:
+        return frame.reset_index(drop=True)
+    return frame.sort_values(sort_cols, kind="mergesort", na_position="last").reset_index(
+        drop=True
+    )
 
 
 def _write_submissions_zip(path: Path) -> None:
@@ -201,6 +215,418 @@ def test_duckdb_sec_date_expr_parses_decimal_suffix_dates() -> None:
     assert pd.isna(parsed.loc["bad"])
 
 
+def test_metadata_hash_table_readers_and_link_filters_are_defensive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cached = tmp_path / "cached.csv"
+    cached.write_text("a,b\n1,2\n", encoding="utf-8")
+    assert public_lake._verify_metadata_hash(cached) is False
+    _write_metadata(path=cached, source_url="https://example.com/cached.csv", source_name="toy")
+    assert public_lake._verify_metadata_hash(cached) is True
+    cached.write_text("a,b\n9,9\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Hash mismatch"):
+        public_lake._verify_metadata_hash(cached)
+
+    csv_path = tmp_path / "table.csv"
+    tab_path = tmp_path / "table.txt"
+    pipe_path = tmp_path / "table.idx"
+    json_path = tmp_path / "table.json"
+    bad_path = tmp_path / "table.bin"
+    pd.DataFrame({"a": [1], "b": [2]}).to_csv(csv_path, index=False)
+    tab_path.write_text("a\tb\n1\t2\n", encoding="utf-8")
+    pipe_path.write_text("a|b\n1|2\n", encoding="utf-8")
+    json_path.write_text('[{"a": 1, "b": 2}]', encoding="utf-8")
+    bad_path.write_bytes(b"bad")
+
+    for path in [csv_path, tab_path, pipe_path, json_path]:
+        assert public_lake._read_table_auto(path).shape == (1, 2)
+    with pytest.raises(ValueError, match="Unsupported table file type"):
+        public_lake._read_table_auto(bad_path)
+
+    html = """
+    <a href="#fragment">skip</a>
+    <a href="mailto:test@example.com">skip</a>
+    <a href="/files/fsds_2021q1.zip">zip</a>
+    <a href="/files/fsds_2021q1.zip">duplicate</a>
+    <a href="/files/readme.html">skip suffix</a>
+    <a href="/files/notes_2020q4.pdf">pdf</a>
+    """
+    monkeypatch.setattr(public_lake, "_fetch_html", lambda *args, **kwargs: html)
+    links = public_lake._discover_links("https://www.sec.gov/data/")
+    assert links["url"].tolist() == [
+        "https://www.sec.gov/files/fsds_2021q1.zip",
+        "https://www.sec.gov/files/notes_2020q4.pdf",
+    ]
+    filtered = public_lake._filter_link_frame(
+        links,
+        start_year=2021,
+        end_year=2021,
+        match="fsds",
+        limit_links=1,
+    )
+    assert filtered["basename"].tolist() == ["fsds_2021q1.zip"]
+    assert [day.isoformat() for day in public_lake._iter_business_days(date(2021, 1, 1), date(2021, 1, 4))] == [
+        "2021-01-01",
+        "2021-01-04",
+    ]
+    assert "/QTR2/master.20210405.idx" in public_lake._daily_master_index_url(date(2021, 4, 5))
+
+    no_hash_meta = tmp_path / "no_hash.csv"
+    no_hash_meta.write_text("a\n1\n", encoding="utf-8")
+    public_lake._metadata_path(no_hash_meta).write_text("{}", encoding="utf-8")
+    assert public_lake._verify_metadata_hash(no_hash_meta) is False
+
+
+def test_low_level_download_and_aaer_discovery_are_mockable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = public_lake._session("unit-test-agent")
+    assert session.headers["User-Agent"] == "unit-test-agent"
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(public_lake.time, "sleep", lambda seconds: sleeps.append(float(seconds)))
+    public_lake._LAST_REQUEST_AT = public_lake.time.monotonic()
+
+    class FakeResponse:
+        def __init__(
+            self,
+            *,
+            status_code: int = 200,
+            body: bytes = b"",
+            text: str = "",
+        ) -> None:
+            self.status_code = status_code
+            self._body = body
+            self.text = text
+            self.response = self
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def iter_content(self, chunk_size: int) -> list[bytes]:
+            return [self._body[:1], b"", self._body[1:]]
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise public_lake.requests.HTTPError(
+                    f"HTTP {self.status_code}", response=self
+                )
+
+    class FakeSession:
+        def __init__(self, responses: list[FakeResponse]) -> None:
+            self.responses = responses
+            self.headers: dict[str, str] = {}
+            self.calls: list[tuple[str, bool]] = []
+
+        def get(self, url: str, *, timeout: int, stream: bool = False) -> FakeResponse:
+            self.calls.append((url, stream))
+            return self.responses.pop(0)
+
+    retry_session = FakeSession(
+        [
+            FakeResponse(status_code=503),
+            FakeResponse(status_code=200, body=b"abc"),
+        ]
+    )
+    monkeypatch.setattr(public_lake, "_session", lambda user_agent: retry_session)
+    dest = public_lake._download_file(
+        "https://example.com/file.csv",
+        tmp_path / "file.csv",
+        source_name="toy",
+        max_retries=2,
+        backoff_seconds=0,
+        extra_metadata={"kind": "unit"},
+    )
+    assert dest.read_bytes() == b"abc"
+    assert json.loads(public_lake._metadata_path(dest).read_text())["kind"] == "unit"
+    assert retry_session.calls == [
+        ("https://example.com/file.csv", True),
+        ("https://example.com/file.csv", True),
+    ]
+    assert sleeps
+
+    html_session = FakeSession([FakeResponse(status_code=200, text="<html>ok</html>")])
+    monkeypatch.setattr(public_lake, "_session", lambda user_agent: html_session)
+    assert public_lake._fetch_html("https://example.com/page") == "<html>ok</html>"
+
+    html = """
+    <time datetime="2022-01-01">Jan 1</time>
+    <a href="/enforcement/accounting-auditing-enforcement-releases/aaer-1">
+      Alpha <span>Beta</span> Release
+    </a>
+    <time datetime="2022-01-01">Jan 1</time>
+    <a href="/enforcement/accounting-auditing-enforcement-releases/aaer-1">duplicate</a>
+    <a href="/enforcement/accounting-auditing-enforcement-releases/aaer-2">No date</a>
+    """
+    monkeypatch.setattr(public_lake, "_fetch_html", lambda *args, **kwargs: html)
+    releases = public_lake._extract_aaer_release_links("https://www.sec.gov/root/")
+    assert releases["basename"].tolist() == ["aaer-1", "aaer-2"]
+    assert releases.loc[0, "event_date"] == "2022-01-01"
+    assert releases.loc[0, "title"] == "Alpha  Beta  Release"
+    assert pd.isna(releases.loc[1, "event_date"])
+
+
+def test_table_reader_routes_cover_supported_suffixes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spaced = tmp_path / "spaced.txt"
+    xml_path = tmp_path / "table.xml"
+    xlsx_path = tmp_path / "table.xlsx"
+    comma_path = tmp_path / "comma.dat"
+    pipe_header = tmp_path / "pipe_header.txt"
+    comma_header = tmp_path / "comma_header.txt"
+
+    spaced.write_text("a  b\n1  2\n", encoding="utf-8")
+    xml_path.write_text("<root />", encoding="utf-8")
+    xlsx_path.write_bytes(b"not-a-real-xlsx")
+    comma_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    pipe_header.write_text("a|b\n1|2\n", encoding="utf-8")
+    comma_header.write_text("a,b\n1,2\n", encoding="utf-8")
+
+    monkeypatch.setattr(public_lake.pd, "read_xml", lambda path: pd.DataFrame({"a": [1]}))
+    monkeypatch.setattr(public_lake.pd, "read_excel", lambda path: pd.DataFrame({"a": [1]}))
+
+    assert public_lake._read_table_auto(spaced).to_dict("records") == [{"a": 1, "b": 2}]
+    assert public_lake._read_table_auto(xml_path).shape == (1, 1)
+    assert public_lake._read_table_auto(xlsx_path).shape == (1, 1)
+    assert public_lake._read_delimited_table(comma_path).to_dict("records") == [
+        {"a": 1, "b": 2}
+    ]
+    assert public_lake._read_header_columns(pipe_header) == ["a", "b"]
+    assert public_lake._read_header_columns(comma_header) == ["a", "b"]
+
+
+def test_fetch_source_assets_list_only_modes_do_not_touch_network_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    direct = fetch_source_assets(mode="sec-bulk", bronze_dir=tmp_path, list_only=True)
+    assert set(direct["status"]) == {"listed"}
+    assert not any(Path(path).exists() for path in direct["local_path"])
+
+    with pytest.raises(ValueError, match="requires start_date and end_date"):
+        fetch_source_assets(mode="comment-letters", bronze_dir=tmp_path, list_only=True)
+    daily = fetch_source_assets(
+        mode="comment-letters",
+        bronze_dir=tmp_path,
+        start_date="2021-01-01",
+        end_date="2021-01-04",
+        list_only=True,
+    )
+    assert daily["basename"].tolist() == ["master.20210101.idx", "master.20210104.idx"]
+
+    monkeypatch.setattr(
+        public_lake,
+        "_discover_links",
+        lambda *args, **kwargs: pd.DataFrame(
+            columns=["page_url", "url", "basename", "suffix"]
+        ),
+    )
+    empty = fetch_source_assets(mode="fsds", bronze_dir=tmp_path, list_only=True)
+    assert empty.empty
+    assert (tmp_path / "fsds" / "manifest.csv").exists()
+    with pytest.raises(ValueError, match="Unsupported source mode"):
+        fetch_source_assets(mode="unknown", bronze_dir=tmp_path, list_only=True)
+
+
+def test_fetch_source_assets_downloads_listing_and_refreshes_invalid_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bronze = tmp_path / "bronze"
+    downloaded: list[str] = []
+
+    def fake_download(
+        url: str,
+        dest: Path,
+        *,
+        source_name: str,
+        user_agent: str = public_lake.DEFAULT_USER_AGENT,
+        timeout: int = 120,
+        extra_metadata: dict[str, object] | None = None,
+        max_retries: int = 5,
+        backoff_seconds: float = 2.0,
+    ) -> Path:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(f"downloaded from {url}", encoding="utf-8")
+        _write_metadata(
+            path=dest,
+            source_url=url,
+            source_name=source_name,
+            extra=extra_metadata,
+        )
+        downloaded.append(dest.name)
+        return dest
+
+    monkeypatch.setattr(public_lake, "_download_file", fake_download)
+    monkeypatch.setattr(
+        public_lake,
+        "_extract_aaer_release_links",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "page_url": "https://www.sec.gov/aaer",
+                    "url": "https://www.sec.gov/aaer-1.html",
+                    "basename": "aaer-1.html",
+                    "suffix": ".html",
+                }
+            ]
+        ),
+    )
+
+    aaer_manifest = fetch_source_assets(mode="aaer", bronze_dir=bronze, list_only=False)
+    assert set(aaer_manifest["status"]) == {"downloaded"}
+    assert downloaded == ["aaer_listing.html", "aaer-1.html"]
+
+    page_frame = pd.DataFrame(
+        [
+            {
+                "page_url": "https://example.com/page",
+                "url": "https://example.com/toy.csv",
+                "basename": "toy.csv",
+                "suffix": ".csv",
+            }
+        ]
+    )
+    monkeypatch.setattr(public_lake, "_discover_links", lambda *args, **kwargs: page_frame)
+    monkeypatch.setitem(
+        public_lake.SOURCE_SPECS,
+        "toy-page",
+        public_lake.SourceSpec(name="toy-page", kind="page", page_url="https://example.com/page"),
+    )
+    stale = bronze / "toy-page" / "toy.csv"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("stale", encoding="utf-8")
+    manifest = fetch_source_assets(mode="toy-page", bronze_dir=bronze, list_only=False)
+    assert manifest["status"].tolist() == ["downloaded"]
+    assert stale.read_text(encoding="utf-8").startswith("downloaded from")
+
+    monkeypatch.setitem(
+        public_lake.SOURCE_SPECS,
+        "bad-kind",
+        public_lake.SourceSpec(name="bad-kind", kind="unknown-kind"),
+    )
+    with pytest.raises(ValueError, match="Unsupported source kind"):
+        fetch_source_assets(mode="bad-kind", bronze_dir=bronze, list_only=True)
+
+
+def test_duckdb_empty_source_and_csv_engine_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    con = _duckdb_connect(threads=1)
+    try:
+        public_lake._duckdb_source_or_empty(
+            con=con,
+            view_name="missing_source",
+            path=tmp_path / "missing.parquet",
+            empty_columns=[("issuer_cik", "VARCHAR"), ("n_rows", "BIGINT")],
+        )
+        empty = con.execute("SELECT * FROM missing_source").fetchdf()
+        assert list(empty.columns) == ["issuer_cik", "n_rows"]
+        assert empty.empty
+    finally:
+        con.close()
+
+    csv_path = tmp_path / "fallback.csv"
+    pd.DataFrame({"d": ["2021-01-01"], "value": [1], "drop_me": [2]}).to_csv(
+        csv_path, index=False
+    )
+
+    def fail_duckdb_read(*args: object, **kwargs: object) -> pd.DataFrame:
+        raise RuntimeError("planned duckdb csv failure")
+
+    monkeypatch.setattr(public_lake, "_duckdb_read_csv", fail_duckdb_read)
+    loaded = public_lake._read_csv_with_engine(
+        csv_path,
+        engine="duckdb",
+        usecols=["d", "value"],
+        date_cols=["d"],
+    )
+    assert loaded["d"].dt.year.tolist() == [2021]
+    assert list(loaded.columns) == ["d", "value"]
+
+
+def test_duckdb_table_io_helpers_copy_csv_parquet_and_validate_sources(tmp_path: Path) -> None:
+    csv_path = tmp_path / "source.csv"
+    pd.DataFrame({"a": [1, 2], "b": [3, 4]}).to_csv(csv_path, index=False)
+
+    selected = public_lake._duckdb_read_csv(csv_path, threads=1, columns=["a"])
+    assert selected.to_dict("records") == [{"a": 1}, {"a": 2}]
+
+    csv_gz = tmp_path / "copy.csv.gz"
+    public_lake._duckdb_copy_query_to_csv(
+        query="SELECT 1 AS a, 'x' AS b",
+        dest=csv_gz,
+        threads=1,
+    )
+    assert pd.read_csv(csv_gz).to_dict("records") == [{"a": 1, "b": "x"}]
+
+    parquet_dir = tmp_path / "partitioned_parquet"
+    public_lake._duckdb_copy_query_to_parquet(
+        query="SELECT 2021 AS source_year, 1 AS value",
+        dest=parquet_dir,
+        threads=1,
+        partition_by=("source_year",),
+    )
+    assert read_table(parquet_dir)["value"].tolist() == [1]
+
+    assert public_lake._duckdb_csv_source(csv_path).startswith("read_csv_auto('")
+    with pytest.raises(ValueError, match="requires at least one path"):
+        public_lake._duckdb_csv_source([])
+
+
+def test_build_public_lake_validates_config_and_notes_skip_is_lightweight(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    for kwargs, message in [
+        ({"engine": "bad"}, "engine must be"),
+        ({"storage_format": "bad"}, "storage_format must be"),
+        ({"notes_mode": "bad"}, "notes_mode must be"),
+        ({"engine": "pandas", "storage_format": "parquet"}, "requires engine='duckdb'"),
+        ({"fsds_batch_size": 0}, "must be positive"),
+        ({"notes_batch_size": 0}, "must be positive"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            build_public_lake(
+                bronze_dir=bronze,
+                silver_dir=silver,
+                gold_dir=gold,
+                as_of_date="2026-04-23",
+                **kwargs,
+            )
+
+    with pytest.raises(FileNotFoundError, match="submissions.zip"):
+        build_public_lake(
+            bronze_dir=bronze,
+            silver_dir=silver,
+            gold_dir=gold,
+            as_of_date="2026-04-23",
+        )
+
+    _write_submissions_zip(bronze / "sec-bulk" / "submissions.zip")
+    note_path = bronze / "notes" / "notes_1.zip"
+    _write_notes_zip(note_path, "0000000001-22-000001", "DebtTextBlock")
+    pd.DataFrame({"local_path": [str(note_path)]}).to_csv(
+        bronze / "notes" / "manifest.csv", index=False
+    )
+    outputs = build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        notes_mode="skip",
+    )
+    assert outputs["issuer_origin_panel"].exists()
+    assert not (silver / "note_summary.parquet").exists()
+    assert not (silver / "note_text").exists()
+    run_metadata = json.loads((silver / "public_lake_run_metadata.json").read_text())
+    assert run_metadata["notes_mode"] == "skip"
+
+
 def test_build_public_lake_writes_parquet_fsds_and_notes_summary(tmp_path: Path) -> None:
     bronze = tmp_path / "bronze"
     silver = tmp_path / "silver"
@@ -329,6 +755,101 @@ def test_fsds_parquet_batch_resume_skips_completed_batches(
     assert int(xbrl_summary["xbrl_fact_count"].sum()) == 2
 
 
+def test_legacy_manifest_archives_and_batch_helpers_cover_resume_guards(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    fsds_paths = [bronze / "fsds_1.zip", bronze / "fsds_2.zip"]
+    _write_fsds_zip(fsds_paths[0], "0000000001-22-000001", "Assets")
+    _write_fsds_zip(fsds_paths[1], "0000000001-22-000002", "Liabilities")
+    manifest = tmp_path / "manifest.csv"
+    pd.DataFrame(
+        {
+            "local_path": [
+                str(fsds_paths[0]),
+                str(tmp_path / "missing.zip"),
+                str(fsds_paths[1]),
+            ]
+        }
+    ).to_csv(manifest, index=False)
+
+    extracted = public_lake._extract_manifest_members(
+        manifest_csv=manifest,
+        staging_dir=tmp_path / "staging",
+        required_stem="num",
+        optional_stems=("sub",),
+    )
+    assert len(extracted["num"]) == 2
+    assert len(extracted["sub"]) == 2
+
+    outputs = public_lake._normalize_manifest_archives(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        normalizer_name="fsds",
+        engine="duckdb",
+        duckdb_threads=1,
+    )
+    assert set(outputs) == {"filing_xbrl_dim", "xbrl_fact"}
+    assert read_table(outputs["xbrl_fact"]).shape[0] == 2
+    assert not (silver / "._tmp_fsds").exists()
+
+    pd.DataFrame({"other": ["x"]}).to_csv(tmp_path / "no_local_path.csv", index=False)
+    assert public_lake._manifest_archive_paths(tmp_path / "no_local_path.csv") == []
+
+    state_dir = tmp_path / "state"
+    marker = state_dir / "batch_0000.done.json"
+    state_dir.mkdir()
+    assert public_lake._batch_marker_outputs_exist(marker) is False
+    marker.write_text("{bad json", encoding="utf-8")
+    assert public_lake._batch_marker_outputs_exist(marker) is False
+    marker.write_text(
+        json.dumps({"outputs": {"missing": str(tmp_path / "missing.parquet")}}),
+        encoding="utf-8",
+    )
+    assert public_lake._batch_marker_outputs_exist(marker) is False
+
+    assert public_lake._parquet_files(tmp_path / "missing_parts") == []
+    single = tmp_path / "single.parquet"
+    write_table(pd.DataFrame({"id": [1]}), single)
+    assert public_lake._parquet_files(single) == [single]
+    with pytest.raises(ValueError, match="requires at least one file"):
+        public_lake._parquet_source_from_files([])
+    assert public_lake._copy_parquet_query_from_parts(
+        parts_dir=tmp_path / "missing_parts",
+        dest=tmp_path / "out.parquet",
+        query="SELECT * FROM {source}",
+        threads=1,
+        memory_limit="128MB",
+        temp_directory=tmp_path / "duckdb_tmp",
+        max_temp_directory_size="1GB",
+    ) is False
+
+    duplicate_parts = tmp_path / "duplicate_parts"
+    write_table(pd.DataFrame({"adsh": ["a", "a"]}), duplicate_parts / "part.parquet")
+    with pytest.raises(ValueError, match="duplicate adsh"):
+        public_lake._assert_no_duplicate_parquet_key(
+            parts_dir=duplicate_parts,
+            key="adsh",
+            label="toy",
+            threads=1,
+            memory_limit="128MB",
+            temp_directory=tmp_path / "duckdb_tmp",
+            max_temp_directory_size="1GB",
+        )
+
+    empty_zip = tmp_path / "empty_num.zip"
+    with zipfile.ZipFile(empty_zip, "w") as zf:
+        zf.writestr("sub.txt", "adsh\nabc\n")
+    with pytest.raises(ValueError, match="num table"):
+        public_lake._extract_archive_members_batch(
+            archive_paths=[empty_zip],
+            staging_dir=tmp_path / "batch_staging",
+            required_stem="num",
+            optional_stems=("sub",),
+        )
+
+
 def test_notes_raw_mode_writes_note_text_parquet_dataset(tmp_path: Path) -> None:
     bronze = tmp_path / "bronze"
     silver = tmp_path / "silver"
@@ -396,6 +917,86 @@ def test_legacy_archive_normalizers_parse_decimal_suffix_dates(tmp_path: Path) -
         frame = read_table(path)
         parsed = pd.to_datetime(frame.loc[0, date_col], errors="coerce")
         assert parsed.date().isoformat() == "2011-12-31"
+
+
+def test_archive_normalizers_raise_clear_errors_on_missing_required_members(
+    tmp_path: Path,
+) -> None:
+    fsds_bad = tmp_path / "fsds_bad.zip"
+    notes_bad = tmp_path / "notes_bad.zip"
+    with zipfile.ZipFile(fsds_bad, "w") as zf:
+        zf.writestr("readme.txt", "not fsds")
+    with zipfile.ZipFile(notes_bad, "w") as zf:
+        zf.writestr("sub.txt", "adsh\nabc\n")
+
+    with pytest.raises(ValueError, match="sub/num"):
+        normalize_fsds_archive(archive_path=fsds_bad, silver_dir=tmp_path / "fsds_pandas")
+    with pytest.raises(ValueError, match="sub/num"):
+        normalize_fsds_archive(
+            archive_path=fsds_bad,
+            silver_dir=tmp_path / "fsds_duckdb",
+            engine="duckdb",
+            duckdb_threads=1,
+        )
+    with pytest.raises(ValueError, match="txt table"):
+        normalize_notes_archive(archive_path=notes_bad, silver_dir=tmp_path / "notes_pandas")
+    with pytest.raises(ValueError, match="txt table"):
+        normalize_notes_archive(
+            archive_path=notes_bad,
+            silver_dir=tmp_path / "notes_duckdb",
+            engine="duckdb",
+            duckdb_threads=1,
+        )
+
+
+def test_form_ap_and_pcaob_inspection_normalizers_standardize_fields(tmp_path: Path) -> None:
+    silver = tmp_path / "silver"
+    form_ap_csv = tmp_path / "FirmFilings.csv"
+    pd.DataFrame(
+        [
+            {
+                "Form Filing ID": "F1",
+                "Issuer CIK": 1,
+                "Issuer Name": "Alpha Beta Corp",
+                "Firm ID": "100",
+                "Firm Name": "Audit Firm",
+                "Engagement Partner ID": "P1",
+                "Engagement Partner Name": "Partner",
+                "Fiscal Period End Date": "2021-12-31",
+                "Report Date": "2022-02-28",
+                "Filing Date": "2022-03-01",
+                "Number of Participants": 2,
+                "Participant Percentage": 100.0,
+            }
+        ]
+    ).to_csv(form_ap_csv, index=False)
+
+    form_ap_path = public_lake.normalize_form_ap_csv(form_ap_csv=form_ap_csv, silver_dir=silver)
+    form_ap = read_table(form_ap_path)
+    assert form_ap.loc[0, "issuer_cik"] == "0000000001"
+    assert pd.Timestamp(form_ap.loc[0, "filing_date"]).date().isoformat() == "2022-03-01"
+
+    inspection_csv = tmp_path / "inspection.csv"
+    pd.DataFrame(
+        [
+            {
+                "Firm ID": "100",
+                "Publication Date": "2023-01-15",
+                "Inspection Year": 2022,
+                "Part I.A": "yes",
+                "Part I.B": "no",
+                "Inspection Cycle": "annual",
+                "Firm Name": "Audit Firm",
+            }
+        ]
+    ).to_csv(inspection_csv, index=False)
+    inspection_path = public_lake.normalize_pcaob_inspection_file(
+        inspection_path=inspection_csv,
+        silver_dir=silver,
+    )
+    inspection = pd.read_csv(inspection_path)
+    assert inspection.loc[0, "pcaob_firm_id"] == 100
+    assert inspection.loc[0, "firm_name"] == "Audit Firm"
 
 
 def test_xbrl_core_features_build_stable_ratios_and_safe_denominators() -> None:
@@ -470,6 +1071,144 @@ def test_xbrl_core_features_build_stable_ratios_and_safe_denominators() -> None:
     assert pd.isna(features.loc["zero-denom", "xbrl_ratio_leverage"])
 
 
+def test_xbrl_and_event_helpers_cover_empty_and_filter_branches(tmp_path: Path) -> None:
+    assert build_xbrl_core_features(pd.DataFrame({"tag": ["Assets"]})).empty
+    assert build_xbrl_core_features(pd.DataFrame({"adsh": ["a"], "tag": ["NotCore"]})).empty
+    assert build_xbrl_core_features(pd.DataFrame({"adsh": ["a"], "tag": ["Assets"]})).empty
+    assert build_xbrl_core_features(
+        pd.DataFrame(
+            {
+                "adsh": ["a"],
+                "tag": ["Assets"],
+                "value": [1.0],
+                "unit": ["EUR"],
+            }
+        )
+    ).empty
+    features = build_xbrl_core_features(
+        pd.DataFrame({"adsh": ["a"], "tag": ["Assets"], "value": [1.0]})
+    )
+    assert features.loc[0, "xbrl_coverage_assets"] == 1
+
+    filing = pd.DataFrame({"issuer_cik": ["0000000001"], "origin_date": ["2021-01-01"]})
+    unchanged = public_lake.add_xbrl_yoy_ratio_features(filing)
+    assert "xbrl_ratio_assets_yoy_change" not in unchanged.columns
+
+    assert public_lake._availability_date(2, "2026-04-23").dt.date.astype(str).tolist() == [
+        "2026-04-23",
+        "2026-04-23",
+    ]
+    optional_csv = tmp_path / "optional_dates.csv"
+    pd.DataFrame({"event_date": ["2022-01-01"], "value": [1]}).to_csv(optional_csv, index=False)
+    optional = public_lake._read_csv_with_optional_dates(optional_csv, ["event_date", "missing"])
+    assert optional["event_date"].dt.year.tolist() == [2022]
+
+    base = pd.DataFrame({"issuer_cik": ["0000000001"], "origin_date": ["2021-01-01"]})
+    assert public_lake._event_within_horizon(
+        base,
+        pd.DataFrame(),
+        date_col="event_date",
+        horizon_days=365,
+    ).tolist() == [0]
+    assert public_lake._event_within_horizon(
+        pd.DataFrame({"origin_date": ["2021-01-01"]}),
+        pd.DataFrame({"event_date": ["2021-02-01"]}),
+        date_col="event_date",
+        horizon_days=365,
+    ).tolist() == [0]
+    assert public_lake._event_within_horizon(
+        base,
+        pd.DataFrame(
+            {
+                "issuer_cik": ["0000000001"],
+                "event_date": ["2021-02-01"],
+                "correction_type": ["other"],
+            }
+        ),
+        date_col="event_date",
+        horizon_days=365,
+        event_type="amendment_10x_a",
+    ).tolist() == [0]
+    assert public_lake._event_within_horizon(
+        pd.DataFrame({"issuer_cik": ["0000000001"], "origin_date": [pd.NaT]}),
+        pd.DataFrame({"issuer_cik": ["0000000001"], "event_date": ["2021-02-01"]}),
+        date_col="event_date",
+        horizon_days=365,
+    ).tolist() == [0]
+
+
+def test_comment_threads_and_correction_events_nonempty_branches(tmp_path: Path) -> None:
+    silver = tmp_path / "silver"
+    filing_dim = tmp_path / "filing_dim.parquet"
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "0000000001",
+                    "accession": "upload-1",
+                    "filing_date": "2022-01-01",
+                    "report_date": "2021-12-31",
+                    "form": "UPLOAD",
+                    "items": "",
+                    "primary_doc_description": "",
+                },
+                {
+                    "issuer_cik": "0000000001",
+                    "accession": "corresp-1",
+                    "filing_date": "2022-02-01",
+                    "report_date": "2021-12-31",
+                    "form": "CORRESP",
+                    "items": "",
+                    "primary_doc_description": "",
+                },
+                {
+                    "issuer_cik": "0000000001",
+                    "accession": "amend-1",
+                    "filing_date": "2022-03-01",
+                    "report_date": "2021-12-31",
+                    "form": "10-K/A",
+                    "items": "",
+                    "primary_doc_description": "",
+                },
+                {
+                    "issuer_cik": "0000000001",
+                    "accession": "8k-1",
+                    "filing_date": "2022-04-01",
+                    "report_date": "2021-12-31",
+                    "form": "8-K",
+                    "items": "4.02",
+                    "primary_doc_description": "",
+                },
+                {
+                    "issuer_cik": "0000000001",
+                    "accession": "rev-1",
+                    "filing_date": "2022-05-01",
+                    "report_date": "2021-12-31",
+                    "form": "10-Q",
+                    "items": "",
+                    "primary_doc_description": "Revision note",
+                },
+            ]
+        ),
+        filing_dim,
+    )
+
+    comment_path = public_lake.build_comment_threads(filing_dim_csv=filing_dim, silver_dir=silver)
+    correction_path = public_lake.build_correction_events(
+        filing_dim_csv=filing_dim,
+        silver_dir=silver,
+    )
+    comment = pd.read_csv(comment_path)
+    correction = pd.read_csv(correction_path)
+    assert comment.loc[0, "upload_count"] == 1
+    assert comment.loc[0, "corresp_count"] == 1
+    assert set(correction["correction_type"]) == {
+        "amendment_10x_a",
+        "nonreliance_8k_402",
+        "revision_if_identifiable",
+    }
+
+
 def test_fetch_source_assets_uses_cached_files_without_force(
     tmp_path: Path, monkeypatch: object
 ) -> None:
@@ -532,6 +1271,42 @@ def test_aaer_matching_uses_strict_token_overlap(tmp_path: Path) -> None:
     assert pd.isna(apple_row["issuer_cik"]) or str(apple_row["issuer_cik"]) in {"", "nan"}
     assert str(int(pd.to_numeric(alpha_row["issuer_cik"]))).zfill(10) == "0000000002"
     assert alpha_row["aaer_match_method"] == "token_all"
+
+
+def test_aaer_normalizer_empty_listing_and_deprecated_arg_guard(tmp_path: Path) -> None:
+    bronze = tmp_path / "bronze" / "aaer"
+    silver = tmp_path / "silver"
+    bronze.mkdir(parents=True)
+    issuer_a = tmp_path / "issuer_a.parquet"
+    issuer_b = tmp_path / "issuer_b.parquet"
+    write_table(pd.DataFrame({"issuer_cik": ["1"], "entity_name": ["Alpha Corp"]}), issuer_a)
+    write_table(pd.DataFrame({"issuer_cik": ["2"], "entity_name": ["Beta Corp"]}), issuer_b)
+
+    with pytest.raises(ValueError, match="Pass only one"):
+        normalize_aaer_events(
+            aaer_bronze_dir=bronze,
+            silver_dir=silver,
+            issuer_dim_path=issuer_a,
+            issuer_dim_csv=issuer_b,
+        )
+
+    out = normalize_aaer_events(aaer_bronze_dir=bronze, silver_dir=silver)
+    empty = pd.read_csv(out)
+    assert empty.empty
+    assert list(empty.columns) == [
+        "release_url",
+        "release_title",
+        "event_date",
+        "issuer_cik",
+        "aaer_match_score",
+        "aaer_match_method",
+    ]
+
+    weak = public_lake._best_aaer_issuer_match(
+        "Alpha",
+        pd.DataFrame({"issuer_cik": ["0000000001"], "entity_tokens": [{"alpha", "corp"}]}),
+    )
+    assert weak["method"] == "unmatched"
 
 
 def test_gold_panel_period_semantics_annual_priority_and_fpi_year_state(tmp_path: Path) -> None:
@@ -775,8 +1550,8 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         engine="duckdb",
         duckdb_threads=1,
     )
-    pandas_panel = read_table(gold_pandas / "issuer_origin_panel.parquet")
-    duckdb_panel = read_table(gold_duckdb / "issuer_origin_panel.parquet")
+    pandas_panel = _sort_gold_for_compare(read_table(gold_pandas / "issuer_origin_panel.parquet"))
+    duckdb_panel = _sort_gold_for_compare(read_table(gold_duckdb / "issuer_origin_panel.parquet"))
     compare_cols = [
         "fiscal_year",
         "label_comment_thread_365",
@@ -800,6 +1575,166 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         duckdb_panel[compare_cols].reset_index(drop=True),
         check_dtype=False,
     )
+
+
+def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
+    tmp_path: Path,
+) -> None:
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "entity_name": "Alpha Beta Corp",
+                    "sic": 1234,
+                    "sic_description": "A",
+                    "entity_type": "operating",
+                }
+            ]
+        ),
+        silver / "issuer_dim.parquet",
+    )
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "accession": "a-2020",
+                    "accession_nodash": "a2020",
+                    "filing_date": "2021-03-01",
+                    "report_date": "2020-12-31",
+                    "acceptance_datetime": "2021-03-01",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "a.htm",
+                    "primary_doc_description": "10-K",
+                },
+                {
+                    "issuer_cik": "1",
+                    "accession": "a-2021",
+                    "accession_nodash": "a2021",
+                    "filing_date": "2022-03-01",
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": "2022-03-01",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "b.htm",
+                    "primary_doc_description": "10-K",
+                },
+            ]
+        ),
+        silver / "filing_dim.parquet",
+    )
+    for filename, cols in {
+        "comment_thread.csv.gz": [
+            "issuer_cik",
+            "thread_id",
+            "first_public_date",
+            "last_public_date",
+            "upload_count",
+            "corresp_count",
+            "filing_count",
+        ],
+        "correction_event.csv.gz": [
+            "issuer_cik",
+            "accession",
+            "public_date",
+            "report_date",
+            "correction_type",
+            "identified_from",
+        ],
+        "aaer_event.csv.gz": [
+            "release_url",
+            "release_title",
+            "event_date",
+            "issuer_cik",
+            "aaer_match_score",
+            "aaer_match_method",
+        ],
+    }.items():
+        pd.DataFrame(columns=cols).to_csv(silver / filename, index=False, compression="gzip")
+    write_table(
+        pd.DataFrame(
+            [
+                {"accession": "a-2020", "xbrl_fact_count": 2, "xbrl_unique_tags": 2, "xbrl_unique_units": 1},
+                {"accession": "a-2021", "xbrl_fact_count": 2, "xbrl_unique_tags": 2, "xbrl_unique_units": 1},
+            ]
+        ),
+        silver / "xbrl_fact_summary.parquet",
+    )
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "adsh": "a-2020",
+                    "tag": "Assets",
+                    "unit": "USD",
+                    "value": 100.0,
+                    "quarters": 4,
+                    "fact_date": "2020-12-31",
+                },
+                {
+                    "adsh": "a-2020",
+                    "tag": "Liabilities",
+                    "unit": "USD",
+                    "value": 40.0,
+                    "quarters": 4,
+                    "fact_date": "2020-12-31",
+                },
+                {
+                    "adsh": "a-2021",
+                    "tag": "Assets",
+                    "unit": "USD",
+                    "value": 120.0,
+                    "quarters": 4,
+                    "fact_date": "2021-12-31",
+                },
+                {
+                    "adsh": "a-2021",
+                    "tag": "Liabilities",
+                    "unit": "USD",
+                    "value": 60.0,
+                    "quarters": 4,
+                    "fact_date": "2021-12-31",
+                },
+            ]
+        ),
+        silver / "xbrl_core_fact.parquet",
+    )
+    write_table(
+        pd.DataFrame(
+            [
+                {"accession": "a-2020", "note_text_count": 1, "note_text_char_count": 5},
+                {"accession": "a-2021", "note_text_count": 2, "note_text_char_count": 10},
+            ]
+        ),
+        silver / "note_summary.parquet",
+    )
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "fiscal_period_end": "2021-12-31",
+                    "form_filing_id": "F1",
+                    "engagement_partner_id": "P1",
+                    "number_of_participants": 2,
+                }
+            ]
+        ),
+        silver / "form_ap_event.parquet",
+    )
+
+    with pytest.raises(ValueError, match="engine must be"):
+        build_gold_panels(silver_dir=silver, gold_dir=gold, as_of_date="2026-04-23", engine="bad")
+    build_gold_panels(silver_dir=silver, gold_dir=gold, as_of_date="2026-04-23", engine="pandas")
+    issuer = read_table(gold / "issuer_origin_panel.parquet")
+    panel = issuer.sort_values("fiscal_year").reset_index(drop=True)
+    assert panel.loc[1, "xbrl_ratio_assets_yoy_change"] == 0.2
+    assert panel.loc[1, "note_text_count"] == 2
+    assert panel.loc[1, "form_ap_filing_count"] == 1
 
 
 def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
@@ -961,8 +1896,8 @@ def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
         engine="duckdb",
     )
 
-    legacy_panel = read_table(gold_legacy / "issuer_origin_panel.parquet")
-    parquet_panel = read_table(gold_parquet / "issuer_origin_panel.parquet")
+    legacy_panel = _sort_gold_for_compare(read_table(gold_legacy / "issuer_origin_panel.parquet"))
+    parquet_panel = _sort_gold_for_compare(read_table(gold_parquet / "issuer_origin_panel.parquet"))
     compare_cols = [
         "xbrl_fact_count",
         "xbrl_unique_tags",
@@ -978,6 +1913,63 @@ def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
         parquet_panel[compare_cols].reset_index(drop=True),
         check_dtype=False,
     )
+
+
+def test_build_public_lake_csv_gz_path_extracts_form_ap_and_inspection_sources(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    _write_submissions_zip(bronze / "sec-bulk" / "submissions.zip")
+
+    form_ap_dir = bronze / "form-ap"
+    form_ap_dir.mkdir(parents=True)
+    firm_filings = pd.DataFrame(
+        [
+            {
+                "Form Filing ID": "F1",
+                "Issuer CIK": 1,
+                "Fiscal Period End Date": "2021-12-31",
+                "Filing Date": "2022-03-01",
+                "Engagement Partner ID": "P1",
+                "Number of Participants": 2,
+            }
+        ]
+    )
+    with zipfile.ZipFile(form_ap_dir / "FirmFilings.zip", "w") as zf:
+        zf.writestr("FirmFilings.csv", firm_filings.to_csv(index=False))
+
+    inspection_dir = bronze / "pcaob-inspections"
+    inspection_dir.mkdir(parents=True)
+    inspection_path = inspection_dir / "inspection.csv"
+    pd.DataFrame(
+        [
+            {
+                "Firm ID": 100,
+                "Publication Date": "2022-01-01",
+                "Inspection Year": 2021,
+                "Firm Name": "Audit Firm",
+            }
+        ]
+    ).to_csv(inspection_path, index=False)
+    pd.DataFrame({"local_path": [str(inspection_path)]}).to_csv(
+        inspection_dir / "manifest.csv",
+        index=False,
+    )
+
+    outputs = build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        storage_format="csv-gz",
+        engine="duckdb",
+    )
+
+    assert outputs["form_ap_event"].exists()
+    assert outputs["pcaob_inspection_event"].exists()
+    assert (gold / "issuer_origin_panel.parquet").exists()
 
 
 def test_public_lake_dag_fresh_build_and_resume(tmp_path: Path, monkeypatch: object) -> None:

@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -66,10 +67,35 @@ def test_sic_is_treated_as_categorical_feature() -> None:
     assert "sic" in categorical_cols
 
 
+def test_public_cascade_tree_preprocessor_preserves_numeric_missing_values() -> None:
+    panel = pd.DataFrame(
+        {
+            "sic": [1234, None, 5678],
+            "xbrl_ratio_leverage": [0.2, np.nan, 0.5],
+        }
+    )
+    preprocessor = _build_preprocessor(panel, ["xbrl_ratio_leverage", "sic"])
+    transformed = preprocessor.fit_transform(panel[["xbrl_ratio_leverage", "sic"]])
+    dense = transformed.toarray() if hasattr(transformed, "toarray") else transformed
+
+    assert np.isnan(np.asarray(dense)[:, 0].astype(float)).any()
+
+
 def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
     degenerate = _evaluate_binary(pd.Series([0, 0]).to_numpy(), pd.Series([0.1, 0.2]).to_numpy())
     assert pd.isna(degenerate["roc_auc"])
     assert pd.isna(degenerate["pr_auc"])
+    assert degenerate["brier_null"] == 0.0
+    assert pd.isna(degenerate["brier_skill_score"])
+    assert degenerate["bao_top_1pct_k"] == 0
+    assert degenerate["bao_top_1pct_ndcg"] == 0.0
+
+    informative = _evaluate_binary(
+        pd.Series([0, 1]).to_numpy(),
+        pd.Series([0.1, 0.9]).to_numpy(),
+    )
+    assert informative["brier_null"] == pytest.approx(0.25)
+    assert informative["brier_skill_score"] > 0
 
     x, y = _prepare_xy(
         pd.DataFrame({"feature": ["1", "bad"], "label": ["1", None]}),
@@ -381,6 +407,9 @@ model:
     predictions = read_table(result["predictions_table"])
     status = pd.read_csv(result["task_status_csv"])
     assert not metrics.empty
+    assert "brier_skill_score" in metrics.columns
+    assert "bao_top_1pct_ndcg" in metrics.columns
+    assert "bao_top_5pct_precision" in metrics.columns
     assert not predictions.empty
     assert "fit" in set(status["status"])
 
@@ -408,17 +437,19 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
         "__init__.py",
         "bridge.py",
         "benchmark.py",
-        "data_prep.py",
-        "public_cascade.py",
-        "public_lake.py",
-        "sample_dataset.py",
-        "table_io.py",
-    }
+            "data_prep.py",
+            "public_cascade.py",
+            "public_lake.py",
+            "ranking_metrics.py",
+            "sample_dataset.py",
+            "table_io.py",
+        }
     assert script_files == {
         "convert_raw_dataset.py",
         "fetch_public_data.py",
         "generate_sample_dataset.py",
         "monitor_public_lake.py",
+        "prepare_gvkey_cik_crosswalk.py",
         "run_bridge_probe.py",
         "run_benchmark.py",
         "run_data_prep.py",

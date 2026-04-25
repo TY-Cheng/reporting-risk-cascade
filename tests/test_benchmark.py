@@ -25,6 +25,7 @@ from src.benchmark import (
     stable_task_seed,
 )
 from src.data_prep import load_dataset
+from src.ranking_metrics import bao_top_fraction_metric, matlab_round_positive
 from src.sample_dataset import materialize_sample_dataset
 from src.table_io import read_table, write_table
 
@@ -338,8 +339,42 @@ def test_benchmark_metric_helpers_cover_degenerate_inputs() -> None:
     )
     assert pd.isna(metrics["roc_auc"])
     assert metrics["pr_auc"] == pytest.approx(0.0)
+    assert metrics["brier_null"] == 0.0
+    assert pd.isna(metrics["brier_skill_score"])
     assert metrics["top_1_precision"] == 0.0
     assert metrics["top_5_precision"] == 0.0
+    assert metrics["bao_top_1pct_k"] == 0
+    assert metrics["bao_top_1pct_ndcg"] == 0.0
+
+    informative_metrics = compute_metrics(
+        pd.Series([0, 1]),
+        pd.Series([0.1, 0.9]),
+        top_k=[1],
+    )
+    assert informative_metrics["brier_null"] == pytest.approx(0.25)
+    assert informative_metrics["brier_skill_score"] > 0
+
+
+def test_bao_top_fraction_metric_matches_public_matlab_evaluate_logic() -> None:
+    assert matlab_round_positive(2.5) == 3
+    y_true = pd.Series([0, 1, 0, 1, 0, 0, 1, 0, 0, 0])
+    score = pd.Series([0.1, 0.9, 0.2, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.0])
+
+    metrics = bao_top_fraction_metric(y_true, score, top_fraction=0.3)
+
+    assert metrics["k"] == 3
+    assert metrics["precision"] == pytest.approx(2 / 3)
+    assert metrics["sensitivity"] == pytest.approx(2 / 3)
+    assert metrics["specificity"] == pytest.approx(6 / 7)
+    assert metrics["bac"] == pytest.approx(((2 / 3) + (6 / 7)) / 2)
+    ideal_dcg = 1 + (1 / 1.584962500721156) + 0.5
+    dcg = 1 + (1 / 1.584962500721156)
+    assert metrics["ndcg"] == pytest.approx(dcg / ideal_dcg)
+
+    long_true = pd.Series([1, 1, 1] + [0] * 247)
+    long_score = pd.Series(list(reversed(range(250))))
+    rounded = bao_top_fraction_metric(long_true, long_score, top_fraction=0.01)
+    assert rounded["k"] == 3
 
 
 def test_benchmark_timing_and_summary_edge_branches(tmp_path: Path) -> None:

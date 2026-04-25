@@ -98,8 +98,8 @@ Audit dimensions:
 - Does it cite public-source documentation when making claims about SEC comment
   letters, FSDS/Notes availability, EDGAR first-public dates, PCAOB Form AP, PCAOB
   inspections, or AAER pages?
-- Does it make clear that AAER pages are a severity proxy rather than a complete
-  enforcement universe?
+- Does it make clear that AAER pages are a severity-tail proxy rather than a complete
+  enforcement universe or a stable prediction target?
 - Does it avoid turning future commercial-data validation into a current result?
 
 3. Terminology discipline
@@ -108,11 +108,11 @@ Flag and correct any misuse of these terms:
   unless the design truly identifies occurrence.
 - Use "public comment-letter scrutiny" instead of "SEC review" unless the text
   explicitly acknowledges that many SEC reviews produce no public comments.
-- Use "AAER / accounting-enforcement severity proxy" instead of "complete
-  enforcement universe."
-- Use "timing-sensitivity" or "proxy-visible label" for res_an* timing outputs;
-  do not call this paper-grade label maturation without external restatement filing
-  dates.
+- Use "AAER severity-tail proxy" instead of "complete enforcement universe,"
+  "enforcement prediction," or "fraud truth."
+- Use "label-observability sensitivity" or "timing-assumption sensitivity" for res_an*
+  timing outputs; do not call this paper-grade label maturation without external
+  restatement filing dates.
 - Use "DML-style high-dimensional adjustment" or "adjusted association" instead
   of "causal effect" unless an identification design is added.
 - Use "public cascade" for comment/amendment/8-K/AAER outcomes; do not collapse
@@ -171,7 +171,7 @@ Flag and correct any misuse of these terms:
 - Verify that core literatures are represented:
   - Dechow, Ge, Larson, and Sloan on misstatement prediction / F-score tradition.
   - Perols on fraud classifier comparison.
-  - Bao, Ke, Yu, and Zhang on ML fraud detection.
+  - Bao, Ke, Li, Yu, and Zhang on ML fraud detection.
   - Bertomeu, Cheynel, Floyd, and Pan on ML misstatement detection.
   - Barton, Burnett, Gunny, and Miller on occurrence versus detection / partial
     observability in restatement research.

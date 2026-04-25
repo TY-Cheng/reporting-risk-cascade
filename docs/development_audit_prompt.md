@@ -125,10 +125,10 @@ Audit dimensions:
 1. Paper-plan compliance
 - Are the execution invariants in paper_plan.md implemented?
 - Are res_an0, res_an1, res_an2, and res_an3 excluded from benchmark predictors?
-- Is proxy_sensitivity treated as timing-fragility evidence rather than paper-grade
-  label maturation?
-- Are unknown-timing positives counted and excluded from proxy-visible training
-  labels when configured?
+- Are res_an* timing outputs treated as label-observability sensitivity rather
+  than paper-grade label maturation?
+- Are unknown-timing positives counted, and are drop-observed versus imputed-lag
+  sensitivity scenarios clearly separated when configured?
 - Are public cascade labels based on first public event dates?
 - Are source_available_*, public_date_*, vintage_*, and as_of_date excluded from
   default public-cascade predictors?
@@ -140,7 +140,8 @@ Audit dimensions:
 - Check whether each label is observable at or after the correct origin.
 - Check whether any event after origin_date can enter predictors.
 - Check whether censoring is horizon-specific and task-specific.
-- Check whether AAER is treated only as a severity proxy, not a full enforcement universe.
+- Check whether AAER is treated only as a severity-tail proxy, not a full enforcement
+  universe or stable prediction target.
 - Check whether comment letters are treated as public comment-letter scrutiny, not
   full SEC review.
 - Check whether current-status numbers in docs are generated artifacts or hardcoded

@@ -310,7 +310,7 @@ development.
 
 ```bash
 just status
-just analysis study raw artifacts/study
+just task study raw artifacts/study
 just docs
 ```
 

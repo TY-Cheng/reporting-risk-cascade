@@ -289,6 +289,7 @@ def main() -> None:
             out_dir=bridge_probe_out,
             issuer_dim_path=issuer_dim,
             issuer_origin_panel_path=issuer_origin_panel,
+            crosswalk_path=crosswalk,
         )
         manifest["components"]["bridge_probe"] = {
             "status": bridge_summary.get("status", "unknown"),
