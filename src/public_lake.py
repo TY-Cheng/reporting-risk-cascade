@@ -3799,6 +3799,14 @@ def _build_gold_panels_duckdb(
             FROM filing_base_gold
             """
         )
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW filing_model_source_gold AS
+            SELECT *
+            FROM filing_windowed_gold
+            WHERE form IN ({annual_forms})
+            """
+        )
 
         _duckdb_source_or_empty(
             con=con,
@@ -4036,7 +4044,7 @@ def _build_gold_panels_duckdb(
                       AND hist.issuer_cik = f.issuer_cik
                       AND hist.event_date < f.origin_date
                 ), 0) AS current_issuer_prior_total_count
-            FROM filing_windowed_gold f
+            FROM filing_model_source_gold f
             LEFT JOIN LATERAL (
                 SELECT engagement_partner_id
                 FROM partner_issuer_engagement_norm_gold engagement
@@ -4094,7 +4102,7 @@ def _build_gold_panels_duckdb(
         has_note_summary = _create_duckdb_note_summary_view(con, silver_dir=silver_dir)
         state_hq_rows = _create_duckdb_state_hq_view(con, silver_dir=silver_dir)
 
-        filing_from = "filing_windowed_gold f"
+        filing_from = "filing_model_source_gold f"
         joins = [
             "LEFT JOIN form_ap_summary_gold form_ap USING (issuer_cik, fiscal_year)",
             "LEFT JOIN filing_partner_prior_gold partner_prior USING (accession)",
@@ -4401,7 +4409,7 @@ def _build_gold_panels_duckdb(
                 issuer_cik,
                 COALESCE(fiscal_year, try_cast(date_part('year', event_report_date) AS INTEGER))
                     AS fpi_year
-            FROM filing_labeled_gold
+            FROM filing_windowed_gold
             WHERE form IN ({fpi_forms})
               AND COALESCE(fiscal_year, try_cast(date_part('year', event_report_date) AS INTEGER))
                     IS NOT NULL
@@ -4458,19 +4466,19 @@ def _build_gold_panels_duckdb(
                 "SELECT count(*) FROM issuer_origin_gold WHERE issuer_hq_state_observed = 1"
             ).fetchone()[0]
         )
-        filing_rows = int(con.execute("SELECT count(*) FROM filing_windowed_gold").fetchone()[0])
+        filing_rows = int(con.execute("SELECT count(*) FROM filing_base_gold").fetchone()[0])
         _duckdb_copy_query_to_year_sharded_parquet_on_connection(
             con,
             query="""
                 SELECT
                     *,
                     try_cast(date_part('year', origin_date) AS INTEGER) AS _partition_year
-                FROM filing_labeled_gold
+                FROM filing_base_gold
             """,
             year_query="""
                 SELECT DISTINCT try_cast(date_part('year', origin_date) AS INTEGER)
                     AS _partition_year
-                FROM filing_windowed_gold
+                FROM filing_base_gold
                 ORDER BY _partition_year NULLS LAST
             """,
             dest=filing_path,
@@ -4492,6 +4500,9 @@ def _build_gold_panels_duckdb(
                 "state_hq_rows": state_hq_rows,
                 "issuer_hq_state_rows": issuer_state_hq_rows,
                 "filing_rows": filing_rows,
+                "filing_origin_panel_scope": "lightweight_filing_base_panel",
+                "filing_origin_panel_storage": "year_sharded_parquet_dataset",
+                "issuer_origin_panel_scope": "annual_modeling_panel_with_labels_features",
                 "issuer_origin_rows": issuer_rows,
             },
             indent=2,
@@ -4918,6 +4929,9 @@ def build_gold_panels(
                 "state_hq_rows": int(len(state_hq)),
                 "issuer_hq_state_rows": issuer_state_hq_rows,
                 "filing_rows": int(len(filing)),
+                "filing_origin_panel_scope": "full_labeled_featured_filing_panel",
+                "filing_origin_panel_storage": "single_parquet_file",
+                "issuer_origin_panel_scope": "annual_modeling_panel_with_labels_features",
                 "issuer_origin_rows": int(len(issuer_panel)),
             },
             indent=2,

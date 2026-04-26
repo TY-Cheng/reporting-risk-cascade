@@ -118,7 +118,7 @@ Bridge validation is mandatory for an integrated claim that the public cascade a
 
 - Bronze stores downloaded public files with source URL, timestamp, SHA256 hash, parser version, schema version, and as-of date.
 - Silver normalizes issuer, filing, XBRL, Notes, comment-thread, correction, Form AP, PCAOB inspection, and AAER proxy tables. Large Silver tables are Parquet-first.
-- Gold writes `issuer_origin_panel.parquet` and `filing_origin_panel.parquet`. The default path uses DuckDB SQL for XBRL core-tag pivoting, label-horizon joins, and Parquet output.
+- Gold writes `issuer_origin_panel.parquet` and `filing_origin_panel.parquet`. The default DuckDB path uses SQL for XBRL core-tag pivoting, label-horizon joins, and Parquet output on the annual issuer-year modeling panel. The full filing-origin panel is retained as a lightweight, year-sharded provenance panel rather than a fully labeled 20M-row modeling table.
 
 Required v1 sources are SEC submissions, SEC Financial Statement Data Sets (FSDS), SEC `UPLOAD` and `CORRESP`, 10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, PCAOB inspection datasets, and SEC AAER pages. The main public sample is domestic U.S. GAAP issuer-years from 2011-2023, with `2026-04-23` as the current reproducibility as-of date.
 

@@ -175,15 +175,16 @@ PCAOB inspections, and AAER severity-tail proxy events. Large Silver and Gold ta
 Parquet by default: `issuer_dim.parquet`, `filing_dim.parquet`,
 `form_ap_event.parquet`, `xbrl_fact_summary.parquet`, batch-sharded
 `xbrl_core_fact/`, `note_summary.parquet`, `issuer_origin_panel.parquet`, and
-`filing_origin_panel.parquet`. Parquet is the project default for tables that can
-grow past roughly 10MB because it avoids repeated gzip CSV decompression, keeps
-types stable, lets DuckDB project only needed columns, and is much faster to
-resume/read in the modeling workflow. The default DuckDB build also constructs
-the Gold filing/issuer panels in SQL and writes Parquet directly, including the
-XBRL core-tag pivot and label-horizon joins, so the workflow does not round-trip
-large intermediate panels through Pandas. Small diagnostics and human-readable
-summary/status files remain CSV/JSON/Markdown. Notes raw text is skipped unless
-`notes_mode="raw"` is requested.
+year-sharded `filing_origin_panel.parquet`. Parquet is the project default for
+tables that can grow past roughly 10MB because it avoids repeated gzip CSV
+decompression, keeps types stable, lets DuckDB project only needed columns, and
+is much faster to resume/read in the modeling workflow. The default DuckDB build
+constructs the annual `issuer_origin_panel.parquet` as the modeling panel with
+XBRL core-tag features and label-horizon joins. The full
+`filing_origin_panel.parquet` is kept as a lightweight filing-origin base panel
+for provenance and audit, not as a 20M-row fully labeled modeling table. Small
+diagnostics and human-readable summary/status files remain CSV/JSON/Markdown.
+Notes raw text is skipped unless `notes_mode="raw"` is requested.
 
 ## Primary Artifacts
 

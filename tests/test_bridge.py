@@ -180,6 +180,7 @@ def test_prepare_gvkey_cik_crosswalk_expands_ranges_and_filters_to_raw_years(
 def test_bridge_probe_uses_external_crosswalk_without_raw_identifiers(tmp_path: Path) -> None:
     raw_path = tmp_path / "raw.csv"
     crosswalk_path = tmp_path / "gvkey_cik_year.csv"
+    origin_panel_path = tmp_path / "issuer_origin_panel.parquet"
     out_dir = tmp_path / "bridge"
     pd.DataFrame(
         {
@@ -198,10 +199,20 @@ def test_bridge_probe_uses_external_crosswalk_without_raw_identifiers(tmp_path: 
             "match_method": ["wrds_link", "wrds_link"],
         }
     ).to_csv(crosswalk_path, index=False)
+    write_table(
+        pd.DataFrame(
+            {
+                "issuer_cik": ["0000320193", "0000789019"],
+                "fiscal_year": [2020, 2020],
+            }
+        ),
+        origin_panel_path,
+    )
 
     summary = run_bridge_probe(
         raw_data_path=raw_path,
         crosswalk_path=crosswalk_path,
+        issuer_origin_panel_path=origin_panel_path,
         out_dir=out_dir,
     )
     candidates = pd.read_csv(out_dir / "candidate_crosswalk.csv", dtype={"issuer_cik": str})
@@ -210,6 +221,8 @@ def test_bridge_probe_uses_external_crosswalk_without_raw_identifiers(tmp_path: 
     assert summary["status"] == "external_crosswalk_available"
     assert summary["candidate_source"] == "external_crosswalk"
     assert summary["candidate_crosswalk_rows"] == 3
+    assert summary["public_rows"] == 2
+    assert summary["public_overlap_raw_rows"] == 2
     assert set(candidates["provenance"]) == {"wrds"}
     assert int(coverage.loc[coverage["metric"].eq("matched_raw_rows"), "value"].iloc[0]) == 3
 

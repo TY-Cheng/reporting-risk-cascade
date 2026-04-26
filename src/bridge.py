@@ -388,6 +388,62 @@ def _public_identifier_frame(public: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+def _public_year_key_frame(public: pd.DataFrame) -> pd.DataFrame:
+    if public.empty:
+        return pd.DataFrame(columns=["issuer_cik", "_bridge_year"])
+
+    cik_col = _first_existing(public.columns, PUBLIC_CIK_COLS)
+    year_col = _first_existing(public.columns, ("fiscal_year", "data_year", "year", "fyear"))
+    if cik_col is None or year_col is None:
+        return pd.DataFrame(columns=["issuer_cik", "_bridge_year"])
+
+    keys = public[[cik_col, year_col]].copy()
+    keys["issuer_cik"] = keys[cik_col].map(_normalize_cik)
+    keys["_bridge_year"] = keys[year_col].map(_normalize_year)
+    keys = keys.loc[keys["issuer_cik"].notna() & keys["_bridge_year"].notna()].copy()
+    return keys[["issuer_cik", "_bridge_year"]].drop_duplicates()
+
+
+def _public_overlap_stats(candidates: pd.DataFrame, public: pd.DataFrame) -> Dict[str, object]:
+    empty = {
+        "public_overlap_candidate_rows": 0,
+        "public_overlap_raw_rows": 0,
+        "public_overlap_rate": 0.0,
+    }
+    if candidates.empty or public.empty or "issuer_cik" not in candidates.columns:
+        return empty
+
+    public_keys = _public_year_key_frame(public)
+    if public_keys.empty:
+        return empty
+
+    candidate_keys = candidates.copy()
+    candidate_keys["issuer_cik"] = candidate_keys["issuer_cik"].map(_normalize_cik)
+    if "_bridge_year" not in candidate_keys.columns:
+        year_source = _first_existing(candidate_keys.columns, CROSSWALK_YEAR_COLS)
+        candidate_keys["_bridge_year"] = (
+            candidate_keys[year_source].map(_normalize_year)
+            if year_source is not None
+            else pd.NA
+        )
+    candidate_keys = candidate_keys.loc[
+        candidate_keys["issuer_cik"].notna() & candidate_keys["_bridge_year"].notna()
+    ].copy()
+    if candidate_keys.empty:
+        return empty
+
+    overlap = candidate_keys.merge(public_keys, on=["issuer_cik", "_bridge_year"], how="inner")
+    raw_denominator = candidates["raw_row_id"].nunique() if "raw_row_id" in candidates else 0
+    raw_numerator = overlap["raw_row_id"].nunique() if "raw_row_id" in overlap else 0
+    return {
+        "public_overlap_candidate_rows": int(len(overlap)),
+        "public_overlap_raw_rows": int(raw_numerator),
+        "public_overlap_rate": float(raw_numerator / raw_denominator)
+        if raw_denominator
+        else 0.0,
+    }
+
+
 def _raw_identifier_frame(
     raw: pd.DataFrame,
     *,
@@ -650,6 +706,7 @@ def _write_candidate_outputs(
     public_rows: int,
     candidate_source: str,
     blocker: Optional[str] = None,
+    extra_summary: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     candidate_path = out_dir / "candidate_crosswalk.csv"
     candidates.to_csv(candidate_path, index=False)
@@ -692,6 +749,8 @@ def _write_candidate_outputs(
     }
     if blocker:
         summary["blocker"] = blocker
+    if extra_summary:
+        summary.update(extra_summary)
     summary_path = out_dir / "bridge_probe_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     return summary
@@ -746,6 +805,9 @@ def run_bridge_probe(
             year_col=year_col,
             target_col=target_col,
         )
+        public = _read_table_if_exists(issuer_origin_panel_path)
+        if public.empty:
+            public = _read_table_if_exists(issuer_dim_path)
         status = (
             "external_crosswalk_available"
             if not candidates.empty
@@ -760,11 +822,12 @@ def run_bridge_probe(
             year_col=year_col,
             target_col=target_col,
             raw_identifier_cols=raw_identifier_cols,
-            public_rows=0,
+            public_rows=int(len(public)),
             candidate_source="external_crosswalk",
             blocker="external crosswalk did not match raw gvkey-year rows"
             if candidates.empty
             else None,
+            extra_summary=_public_overlap_stats(candidates, public),
         )
 
     if not any(raw_identifier_cols.values()):

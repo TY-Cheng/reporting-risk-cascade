@@ -738,6 +738,12 @@ def test_build_public_lake_writes_parquet_fsds_and_notes_summary(tmp_path: Path)
     assert len(notes_markers) == 2
     run_metadata = json.loads((silver / "public_lake_run_metadata.json").read_text())
     assert run_metadata["duckdb_temp_directory"] == str(silver / "._duckdb_tmp")
+    gold_metadata = json.loads((gold / "gold_metadata.json").read_text())
+    assert gold_metadata["issuer_origin_panel_scope"] == (
+        "annual_modeling_panel_with_labels_features"
+    )
+    assert gold_metadata["filing_origin_panel_scope"] == "lightweight_filing_base_panel"
+    assert gold_metadata["filing_origin_panel_storage"] == "year_sharded_parquet_dataset"
     assert all("source_year=" not in str(path) for path in (silver / "xbrl_core_fact").rglob("*"))
 
 
