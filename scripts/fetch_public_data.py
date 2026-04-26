@@ -308,7 +308,7 @@ def main() -> None:
             args.config, args.duckdb_temp_directory, "duckdb_temp_directory"
         )
         duckdb_max_temp_size = _resolve_string_config(
-            args.config, args.duckdb_max_temp_size, "duckdb_max_temp_directory_size", "150GB"
+            args.config, args.duckdb_max_temp_size, "duckdb_max_temp_directory_size", "400GB"
         )
         storage_format = _resolve_storage_format(args.config, args.storage_format)
         notes_mode = _resolve_notes_mode(args.config, args.notes_mode)

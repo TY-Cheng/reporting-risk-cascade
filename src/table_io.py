@@ -35,7 +35,7 @@ def _duckdb_path_list(paths: Sequence[Path]) -> str:
 
 
 DEFAULT_DUCKDB_MEMORY_LIMIT = "10GB"
-DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE = "150GB"
+DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE = "400GB"
 
 
 def _duckdb_literal(value: str | Path) -> str:

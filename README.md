@@ -123,7 +123,7 @@ test and lint gate, builds the public lake, then runs the combined benchmark,
 public-cascade, and bridge-probe study workflow. Defaults are Mac-conservative:
 two outer model workers, four
 threads per model fit, two public-source fetch workers, DuckDB Parquet for the
-public-lake build, `10GB` DuckDB memory, `150GB` DuckDB temp spill, FSDS batches
+public-lake build, `10GB` DuckDB memory, `400GB` DuckDB temp spill, FSDS batches
 of four archives, and Notes batches of two archives.
 
 For a local smoke run after the raw benchmark Parquet or legacy CSV is present:
@@ -153,7 +153,7 @@ just full mode="full" dataset="raw" out_dir="artifacts/full" resume="1"
 Prefer named overrides when changing performance settings:
 
 ```bash
-just full mode="smoke" dataset="sample" out_dir="artifacts/full_smoke_sample" fetch_workers="2" model_jobs="2" model_threads="4" engine="duckdb" storage_format="parquet" notes_mode="summary" fresh_build="1" duckdb_memory_limit="10GB" duckdb_max_temp_size="150GB" fsds_batch_size="4" notes_batch_size="2"
+just full mode="smoke" dataset="sample" out_dir="artifacts/full_smoke_sample" fetch_workers="2" model_jobs="2" model_threads="4" engine="duckdb" storage_format="parquet" notes_mode="summary" fresh_build="1" duckdb_memory_limit="10GB" duckdb_max_temp_size="400GB" fsds_batch_size="4" notes_batch_size="2"
 ```
 
 The full public run downloads SEC/PCAOB source files and can take a long time.
@@ -166,7 +166,7 @@ captured.
 
 ```bash
 bash scripts/run_public_lake_full.sh --dry-run
-bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200 --fetch-workers 2 --engine duckdb --duckdb-threads 4 --duckdb-memory-limit 10GB --duckdb-max-temp-size 150GB --fsds-batch-size 4 --notes-batch-size 2 --storage-format parquet --notes-mode summary --fresh-build
+bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200 --fetch-workers 2 --engine duckdb --duckdb-threads 4 --duckdb-memory-limit 10GB --duckdb-max-temp-size 400GB --fsds-batch-size 4 --notes-batch-size 2 --storage-format parquet --notes-mode summary --fresh-build
 nohup bash scripts/run_public_lake_full.sh --mode full > artifacts/logs/public_lake_full/nohup.log 2>&1 &
 ```
 

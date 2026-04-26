@@ -10,7 +10,7 @@ lake:
   # Empty means build-lake resolves this to <silver_dir>/._duckdb_tmp,
   # keeping DuckDB spill files beside the public lake instead of OS temp.
   duckdb_temp_directory: ""
-  duckdb_max_temp_directory_size: "150GB"
+  duckdb_max_temp_directory_size: "400GB"
   storage_format: "parquet"
   notes_mode: "summary"
   fsds_batch_size: 4

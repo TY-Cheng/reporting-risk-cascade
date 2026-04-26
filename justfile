@@ -174,7 +174,7 @@ _fetch source="sec-bulk" extra="": _check-env
     uv run python scripts/fetch_public_data.py --mode "{{ source }}" {{ extra }}
 
 full *args: _check-env
-    @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="2"; model_threads="4"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="150GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
+    @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="2"; model_threads="4"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="400GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
     for arg in {{ args }}; do \
         case "$arg" in \
             mode=*) mode="${arg#mode=}" ;; \

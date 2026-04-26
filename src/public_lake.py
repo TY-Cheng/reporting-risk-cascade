@@ -3400,6 +3400,57 @@ def _duckdb_copy_query_to_parquet_on_connection(con: Any, *, query: str, dest: P
     )
 
 
+def _duckdb_copy_query_to_year_sharded_parquet_on_connection(
+    con: Any,
+    *,
+    query: str,
+    year_query: str,
+    dest: Path,
+) -> None:
+    """Write a large query as a directory of yearly Parquet shards."""
+
+    dest = Path(dest)
+    remove_table_path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    years = [row[0] for row in con.execute(year_query).fetchall()]
+    if not years:
+        empty_file = dest / "part_empty" / "data.parquet"
+        empty_file.parent.mkdir(parents=True, exist_ok=True)
+        con.execute(
+            f"""
+            COPY (
+                SELECT * EXCLUDE (_partition_year)
+                FROM ({query})
+                WHERE false
+            )
+            TO '{_duckdb_path(empty_file)}'
+            (FORMAT PARQUET, COMPRESSION ZSTD)
+            """
+        )
+        return
+
+    for year in years:
+        if year is None:
+            condition = "_partition_year IS NULL"
+            part_name = "part_year_null"
+        else:
+            condition = f"_partition_year = {int(year)}"
+            part_name = f"part_year_{int(year)}"
+        part_file = dest / part_name / "data.parquet"
+        part_file.parent.mkdir(parents=True, exist_ok=True)
+        con.execute(
+            f"""
+            COPY (
+                SELECT * EXCLUDE (_partition_year)
+                FROM ({query})
+                WHERE {condition}
+            )
+            TO '{_duckdb_path(part_file)}'
+            (FORMAT PARQUET, COMPRESSION ZSTD)
+            """
+        )
+
+
 def _duckdb_xbrl_core_features_query(path: Path) -> str:
     values = []
     for concept, tags in XBRL_CORE_TAGS.items():
@@ -4398,20 +4449,31 @@ def _build_gold_panels_duckdb(
         issuer_path = gold_dir / "issuer_origin_panel.parquet"
         _duckdb_copy_query_to_parquet_on_connection(
             con,
-            query="SELECT * FROM filing_labeled_gold",
-            dest=filing_path,
-        )
-        _duckdb_copy_query_to_parquet_on_connection(
-            con,
             query="SELECT * FROM issuer_origin_gold",
             dest=issuer_path,
         )
-        filing_rows = int(con.execute("SELECT count(*) FROM filing_labeled_gold").fetchone()[0])
         issuer_rows = int(con.execute("SELECT count(*) FROM issuer_origin_gold").fetchone()[0])
         issuer_state_hq_rows = int(
             con.execute(
                 "SELECT count(*) FROM issuer_origin_gold WHERE issuer_hq_state_observed = 1"
             ).fetchone()[0]
+        )
+        filing_rows = int(con.execute("SELECT count(*) FROM filing_windowed_gold").fetchone()[0])
+        _duckdb_copy_query_to_year_sharded_parquet_on_connection(
+            con,
+            query="""
+                SELECT
+                    *,
+                    try_cast(date_part('year', origin_date) AS INTEGER) AS _partition_year
+                FROM filing_labeled_gold
+            """,
+            year_query="""
+                SELECT DISTINCT try_cast(date_part('year', origin_date) AS INTEGER)
+                    AS _partition_year
+                FROM filing_windowed_gold
+                ORDER BY _partition_year NULLS LAST
+            """,
+            dest=filing_path,
         )
     finally:
         con.close()
