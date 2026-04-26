@@ -13,7 +13,7 @@ ENGINE="duckdb"
 DUCKDB_THREADS=4
 DUCKDB_MEMORY_LIMIT="10GB"
 DUCKDB_TEMP_DIRECTORY=""
-DUCKDB_MAX_TEMP_SIZE="50GB"
+DUCKDB_MAX_TEMP_SIZE="150GB"
 SKIP_SETUP=0
 STORAGE_FORMAT="parquet"
 NOTES_MODE="summary"
@@ -39,7 +39,7 @@ Options:
   --duckdb-threads N             DuckDB PRAGMA threads for build-lake. Default: 4.
   --duckdb-memory-limit SIZE     DuckDB memory_limit for build-lake. Default: 10GB.
   --duckdb-temp-directory PATH   DuckDB temp_directory. Default: silver-local temp dir.
-  --duckdb-max-temp-size SIZE    DuckDB max_temp_directory_size. Default: 50GB.
+  --duckdb-max-temp-size SIZE    DuckDB max_temp_directory_size. Default: 150GB.
   --storage-format parquet|csv-gz Heavy-table storage format. Default: parquet; csv-gz is legacy.
   --notes-mode summary|raw|skip   Notes extraction mode. Default: summary.
   --fsds-batch-size N            FSDS archive batch size for Parquet builds. Default: 4.

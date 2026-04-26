@@ -284,6 +284,14 @@ just full full raw artifacts/full
 
 `just check` is the data-free local quality gate: tests, lint, and strict docs build. `just full full raw artifacts/full` is the paper-facing clean run; it runs the test and lint gate before public-lake and model stages.
 
+If the public-lake build has already completed Silver normalization and failed
+only while writing Gold panels, resume from the DAG markers without a fresh
+build:
+
+```bash
+just full mode=full dataset=raw out_dir=artifacts/full resume=1
+```
+
 Component reruns:
 
 ```bash

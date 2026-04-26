@@ -174,7 +174,7 @@ _fetch source="sec-bulk" extra="": _check-env
     uv run python scripts/fetch_public_data.py --mode "{{ source }}" {{ extra }}
 
 full *args: _check-env
-    @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="2"; model_threads="4"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="50GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
+    @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="2"; model_threads="4"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="150GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
     for arg in {{ args }}; do \
         case "$arg" in \
             mode=*) mode="${arg#mode=}" ;; \
@@ -189,6 +189,7 @@ full *args: _check-env
             notes_mode=*) notes_mode="${arg#notes_mode=}" ;; \
             fresh_build=*) fresh_build="${arg#fresh_build=}" ;; \
             force_fetch=*) force_fetch="${arg#force_fetch=}" ;; \
+            resume=*) resume="${arg#resume=}" ;; \
             duckdb_memory_limit=*) duckdb_memory_limit="${arg#duckdb_memory_limit=}" ;; \
             duckdb_temp_directory=*) duckdb_temp_directory="${arg#duckdb_temp_directory=}" ;; \
             duckdb_max_temp_size=*) duckdb_max_temp_size="${arg#duckdb_max_temp_size=}" ;; \
@@ -282,6 +283,7 @@ full *args: _check-env
     lake_args=""; \
     if [ "$fresh_build" = "1" ] || [ "$fresh_build" = "true" ]; then lake_args="$lake_args --fresh-build"; fi; \
     if [ "$force_fetch" = "1" ] || [ "$force_fetch" = "true" ]; then lake_args="$lake_args --force"; fi; \
+    if [ "$resume" = "1" ] || [ "$resume" = "true" ]; then lake_args="$lake_args --resume"; fi; \
     bash scripts/run_public_lake_full.sh \
         --mode "$mode" \
         --as-of-date "$as_of_date" \
