@@ -4,98 +4,23 @@ Working title:
 
 **From Restatements to Public Review and Correction: Label Observability and the Public Reporting-Risk Cascade**
 
-!!! abstract "How to use this page"
-    This page defines the paper's research design, implementation contract, and
-    evidence gates for treating the public-cascade result as manuscript evidence.
+This paper studies how reporting-risk prediction changes when the outcome is aligned with what is observable at a filing origin. Traditional firm-year misstatement benchmarks are useful, but their labels are detected after the fact and often combine reporting risk with discovery, disclosure delay, and selective public visibility. The project therefore treats the legacy `gvkey x data_year` panel as a diagnostic benchmark rather than as the sole research object.
 
-[Jump to the readiness matrix](#readiness-matrix){ .md-button .md-button--primary }
-[Open deferred future work](future_work.md){ .md-button }
+The main empirical object is a filing-native public reporting-risk cascade built from SEC and PCAOB public data. The estimand is the risk, measured at the filing origin, that an issuer subsequently enters a public review-and-correction process: comment-letter scrutiny, amended filings, Item 4.02 non-reliance disclosures, and rare severity-tail [Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) matches. The design is public-data-first, reproducible, and explicit about the bridge required to compare this public cascade with legacy detected-misstatement labels.
 
-<div class="grid cards" markdown>
+## Research Question and Contribution
 
--   :material-scale-balance: __Measurement redesign__
+The paper asks whether a filing-origin, **pre-disclosure reporting-risk state** can be measured more transparently than a static detected-restatement label. The benchmark layer tests how sensitive traditional prediction is to label observability and detection timing. The public cascade layer tests whether public accounting, disclosure, auditor, and oversight features predict later public scrutiny and correction.
 
-    ---
+The intended contribution is a measurement redesign, not a claim that one classifier dominates prior fraud-prediction work.
 
-    The contribution is to redesign the outcome and timing problem, not to rank
-    classifiers on a different estimand.
+- Static detected-misstatement labels are timing-contaminated: they mix occurrence, discovery, and public reporting lag.
+- The repo defines a filing-origin public reporting-risk estimand based only on information visible at or before `origin_date`.
+- The public cascade is expected to be related to, but not identical with, legacy detected-misstatement labels.
+- Peer models and metrics are used for compatibility checks; comparisons provide metric-compatible ranking evidence, not same-estimand leaderboard claims.
+- Credible bridge-based overlap validation is required before any integrated old-benchmark/public-cascade claim.
 
--   :material-timetable: __Benchmark discipline__
-
-    ---
-
-    The old `gvkey x data_year` panel is kept as a benchmark layer, but it must
-    respect label observability, time ordering, drift, and missingness diagnostics.
-
--   :material-file-search-outline: __Public cascade__
-
-    ---
-
-    The main paper moves to first-public-date SEC and PCAOB signals: comment
-    scrutiny, amendment, and 8-K Item 4.02 correction. Matched
-    [Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases)
-    events are a severity-tail proxy, not a core prediction endpoint.
-
--   :material-bridge: __Overlap validation__
-
-    ---
-
-    The bridge is the gate for any integrated old-benchmark/public-cascade claim.
-    It blocks Experiment 6 and construct validation, not the runnable public-data
-    measurement pipeline.
-
-</div>
-
-=== "This paper is"
-
-    - A timing-aware benchmark paper about why naive restatement prediction can mislead.
-    - A public-data measurement paper about the reporting-risk public review-and-correction cascade.
-    - A reproducible empirical study with explicit readiness gates and blocker states.
-
-=== "This paper is not"
-
-    - Not a generic fraud-detector leaderboard.
-    - Not a claim that AAER pages define the full enforcement universe.
-    - Not an AAER or enforcement-prediction paper in the current v1 evidence state.
-    - Not a causal paper about why firms misstate.
-
-## Abstract Spine
-
-This paper asks how accounting reporting risk should be measured when the
-observable labels are delayed public outcomes rather than contemporaneous states.
-Existing benchmarks often score models against ex post restatement or enforcement
-indicators, which can mix underlying reporting risk with discovery, reporting lag,
-and selective public visibility. We therefore reframe the task as estimating a
-filing-origin, **pre-disclosure reporting-risk state**: the risk that a filing
-will subsequently enter an observable public review-and-correction cascade.
-
-- **Problem.** Detected restatements and fraud outcomes are delayed, selective, and
-  unevenly matured, so naive firm-year labels can make predictive performance look
-  stronger or more stable than the measurement process warrants.
-- **Measurement redesign.** The legacy `gvkey x data_year` restatement benchmark is
-  retained as a diagnostic layer, but timing coverage, missingness regimes, concept
-  drift, and label-maturation limits are made explicit rather than hidden behind a
-  single static outcome.
-- **Public-data estimand.** The main object is a filing-native SEC/PCAOB cascade
-  built from comment-letter scrutiny, amended filings, Item 4.02 non-reliance
-  disclosures, and AAER severity-tail descriptors, using only information visible
-  at the filing origin.
-- **Empirical contribution.** The public lake and cascade models test whether
-  public accounting, disclosure, auditor, and oversight signals, including
-  [eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl)
-  ratios, predict later public scrutiny and correction events.
-- **Comparison boundary.** We do not claim leaderboard superiority over prior
-  fraud-prediction papers, because the estimand differs. Instead, the paper
-  provides metric-compatible ranking evidence and transfers peer model families
-  into the repo-native benchmark layer first. Transfer to the filing-origin
-  public-cascade task is a staged follow-on analysis. With the farr candidate
-  bridge available, bridge-based overlap validation can now test whether the public cascade is
-  related to, but not identical with, legacy detected-misstatement labels; a WRDS bridge remains
-  preferable for final institutional validation.
-- **Boundary.** The design can support evidence for a public reporting-risk signal.
-  It does not by itself establish fraud truth, causal identification, stable AAER
-  severity-tail modeling, or completed validation against the legacy benchmark until the
-  `gvkey-CIK-year` bridge is validated and overlap results are rerun.
+### Design Overview
 
 ```mermaid
 flowchart LR
@@ -116,349 +41,92 @@ flowchart LR
     J -. "if validation remains incomplete" .-> L["Public-cascade measurement result<br/>reportable without fraud-truth claim"]
 ```
 
-## Research Positioning
+## Prior Literature and Positioning
 
-Operationally, the paper combines two evidence layers:
+The closest literature provides model families, metrics, and construct anchors. It does not provide a one-to-one leaderboard because the target differs: prior fraud and restatement studies often predict detected ex post misconduct labels, while this paper predicts subsequent public review-and-correction events from a filing-origin information set.
 
-- **Benchmark layer:** the old `gvkey x data_year` restatement dataset, used to show
-  that traditional pooled and naive-label evaluation is unstable.
-- **Public cascade layer:** SEC and PCAOB public data, used to construct a filing-native
-  public review and correction process.
+| Stream | Canonical anchors | Typical models and metrics | Role in this paper |
+| --- | --- | --- | --- |
+| Detected misstatement and fraud prediction | [Dechow, Ge, Larson, and Sloan (2011)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=997483); [Perols (2011)](https://doi.org/10.2308/ajpt-50009); [Bao, Ke, Li, Yu, and Zhang (2020)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2670703); [Bertomeu, Cheynel, Floyd, and Pan (2021)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3496297), "Using Machine Learning to Detect Misstatements" | Logistic/F-score models, SVM, decision trees, bagging, stacking, neural nets, and tree ensembles; AUC, classification rates, lift, variable importance, and top-fraction ranking metrics | Supplies the benchmark peer suite: Dechow-style scores, a Perols-style legacy model zoo, Bao-style top-fraction balanced accuracy and NDCG, and Bertomeu-style XGBoost feature importance. |
+| Partial observability and hidden misconduct | [Barton, Burnett, Gunny, and Miller (2024)](https://pubsonline.informs.org/doi/10.1287/mnsc.2022.4627); [Dyck, Morse, and Zingales (2024)](https://link.springer.com/article/10.1007/s11142-022-09738-5) | Occurrence/detection separation, hidden misconduct estimation, likelihood and coefficient evidence | Motivates the estimand shift; these models are not PR-AUC comparators for the current pipeline. |
+| SEC comment-letter and disclosure-review research | [Cassell, Cunningham, and Myers (2013)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1951445); [Bozanic, Dietrich, and Johnson (2018)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2989164); [Brown, Tian, and Tucker (2018)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2551451); the [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) | Regression-style evidence on comment receipt, remediation, and disclosure response | Establishes public comment-letter scrutiny as economically meaningful; this paper embeds it as one public-cascade outcome rather than the sole endpoint. This stream supplies regression-style evidence rather than direct ranking-score comparators. |
+| Public regulatory and structured-data sources | [SEC Item 4.02 guidance](https://www.sec.gov/about/divisions-offices/division-corporation-finance/financial-reporting-manual/frm-topic-4); [SEC AAER pages](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases); [PCAOB Form AP](https://pcaobus.org/oversight/standards/implementation-resources-PCAOB-standards-rules/form-ap-auditor-reporting-certain-audit-participants); [SEC Inline eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl) | Public filing events, audit-participant data, oversight data, and standardized financial facts | Supplies the filing-native public lake and reproducible feature construction. AAER is a severity-tail descriptor, not a complete enforcement universe. |
 
-The old benchmark panel is retained. It is stored as Parquet after local CSV conversion
-and used as a benchmark and validation layer.
-The public lake is the paper's main measurement innovation.
+The comparison boundary is central. The paper does not claim same-estimand superiority over prior fraud-prediction studies. It transfers peer model families and scoring language into the repo-native benchmark layer, reports Bao-compatible top-fraction metrics, and uses the bridge to test construct overlap when a credible `gvkey-CIK-year` mapping is available. Metric-compatible comparison is therefore evidence about ranking behavior under a shared scoring language, not evidence that the tasks share the same estimand.
 
-## Evidence State and Decision Gate
+The intended contribution is therefore empirical and conceptual: align the prediction target to the observable public process, retain the legacy benchmark as a disciplined diagnostic, and report where the public cascade agrees or disagrees with detected-misstatement labels.
 
-The project is deliberately staged into three evidence states.
+## Measurement Design
 
-1. **Benchmark evidence available**
+### Legacy Benchmark Labels
 
-- The raw `gvkey x data_year` benchmark panel supports benchmark prediction, drift diagnostics, and
-  missingness analysis.
-- Because the raw benchmark panel has no public restatement filing dates and `res_an*` is sparse on
-  same-row positives, the benchmark can show timing fragility but cannot claim paper-grade
-  label maturation in the current raw benchmark layer.
+The legacy benchmark panel uses `gvkey`, `data_year`, and `misstatement firm-year`. It remains the appropriate place to test whether traditional restatement prediction is sensitive to timing, drift, and missingness.
 
-2. **Public cascade evidence available**
+Benchmark label modes:
 
-- The current full-run public gold panel exists and supports public event labels plus
-  non-metadata feature families.
-- The current readiness level is `xbrl_ratio_baseline`: core
-  [eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl)
-  ratio features are present and built only from facts visible at the filing origin.
-- Metadata-only cascade results remain useful baselines, but they are no longer the only
-  public-cascade evidence in the current snapshot.
+- `naive`: the observed `misstatement firm-year` label without detection-timing adjustment.
+- `proxy_drop_observed`: a stress test that uses sparse same-row `res_an*` timing proxies and excludes positives without usable timing evidence.
+- `proxy_imputed_lag`: a timing-assumption grid that assigns unknown positives documented one-, two-, three-, or five-year detection lags.
+- `external_timing`: the paper-grade benchmark maturation target, available only if validated public restatement or detection dates are supplied.
 
-3. **Integration evidence pending gate**
+The benchmark claim is deliberately limited. `res_an0`, `res_an1`, `res_an2`, and `res_an3` are timing proxies only and never enter predictors. `proxy_drop_observed` is a coverage stress test, not proof that excluded positives are false negatives. The output `timing_coverage.csv` must report same-row timing coverage, unknown positives, retained-positive share, and class-balance changes.
 
-- The old benchmark and public cascade become one integrated paper only if the bridge probe
-  yields interpretable overlap coverage and the XBRL cascade produces non-metadata signal.
-- This integration gate is the `gvkey-CIK-year` evidence gate.
-- If the bridge cannot support credible overlap validation, the project should split into a
-  benchmark critique paper and a public cascade measurement paper.
+### Public Review-and-Correction Labels
 
-## Prior Literature and Intended Contribution
+The public cascade is a multi-label outcome system, not a deterministic hierarchy.
 
-### Closest Literature
+- `label_comment_thread_365`: public comment-letter scrutiny, measured from the first public EDGAR date of the comment-thread sequence.
+- `label_amendment_365`: broad amendment/friction signal, including administrative amendments, filing friction, and potentially material corrections.
+- `label_8k_402_365`: Item 4.02 non-reliance and material-correction proxy.
+- `label_aaer_proxy_730`: rare AAER severity-tail descriptor, fit only as robustness when positives are sufficient.
 
-This project builds on adjacent literatures rather than claiming that every component
-event is new. The gap is that the closest studies are usually organized around one
-outcome family at a time, while this paper treats scrutiny and correction as a
-filing-origin public reporting-risk cascade, with AAER matches retained only as a
-severity-tail descriptor.
+A later-stage positive does not mechanically force an earlier-stage label. Comment letters, amendments, 8-K Item 4.02 events, and AAER matches remain separate binary fields; co-occurrence and conditional rates are descriptive outputs.
 
-1. Detected misstatement and fraud prediction benchmarks.
+### Timing and Censoring Rules
 
-- [Dechow, Ge, Larson, and Sloan (2011, *Contemporary Accounting Research*)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=997483),
-  "Predicting Material Accounting Misstatements," is the canonical F-score benchmark
-  that turns alleged SEC misstatements into a firm-year prediction problem.
-- [Perols (2011, *AUDITING: A Journal of Practice & Theory*)](https://doi.org/10.2308/ajpt-50009),
-  "Financial Statement Fraud Detection: An Analysis of Statistical and Machine Learning
-  Algorithms," compares statistical and machine-learning classifiers for financial
-  statement fraud detection.
-- [Bao, Ke, Li, Yu, and Zhang (2020, *Journal of Accounting Research*)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2670703),
-  "Detecting Accounting Fraud in Publicly Traded U.S. Firms Using a Machine Learning
-  Approach," shows that ensemble learning on theory-motivated raw accounting numbers can
-  outperform older fraud-prediction benchmarks.
-- [Bertomeu, Cheynel, Floyd, and Pan (2021, *Review of Accounting Studies*)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3496297),
-  "Using Machine Learning to Detect Misstatements," shows that machine learning can use
-  accounting, audit, market, and governance variables to detect and interpret patterns
-  associated with ongoing misstatements.
+All public labels are anchored on first public dates. In the current v1 panel, `filing_origin_panel.origin_date = filing_date`, and `issuer_origin_panel.origin_date` is the selected annual filing date for the issuer-year. No event released after `origin_date` may enter predictors.
 
-These papers are the benchmark peer group. Their strength is predictive modeling; the
-limitation this paper emphasizes is not that their models are uninteresting, but that a
-detected restatement or fraud label mixes reporting risk with discovery, disclosure lag,
-and selective public visibility.
+Coverage-state fields document source availability and public vintages:
 
-2. Partial observability and hidden misconduct.
+- `source_available_*`
+- `public_date_*`
+- `vintage_*`
+- `as_of_date`
 
-- [Barton, Burnett, Gunny, and Miller (2024, *Management Science*)](https://pubsonline.informs.org/doi/10.1287/mnsc.2022.4627),
-  "The Importance of Separating the Probability of Committing and Detecting Misstatements
-  in the Restatement Setting," argues that observed restatements combine occurrence and
-  detection, so traditional restatement models are clouded by partial observability.
-- [Dyck, Morse, and Zingales (2024, *Review of Accounting Studies*)](https://link.springer.com/article/10.1007/s11142-022-09738-5),
-  "How Pervasive Is Corporate Fraud?", estimates a hidden component of corporate fraud and
-  reinforces the point that detected events are not the same object as underlying misconduct.
+These fields are excluded from default predictors. Censoring is horizon-specific: 365-day outcomes use `censored_365`, and AAER 730-day robustness uses `censored_730`.
 
-This strand motivates the paper's measurement redesign: the target should be aligned to
-what is observable at a defined forecast origin, rather than silently treating later
-detection as a contemporaneous state.
+### Claim Boundaries
 
-3. SEC comment-letter and disclosure-review studies.
+The public-cascade design supports evidence about a public reporting-risk state. It does not by itself establish latent fraud truth, causal identification, or a stable enforcement-prediction result. Comment letters are public scrutiny signals, not the full SEC review universe. AAER pages are severity-tail public releases, not the complete enforcement population.
 
-- [Cassell, Cunningham, and Myers (2013, *The Accounting Review*)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1951445),
-  "Reviewing the SEC's Review Process: 10-K Comment Letters and the Cost of Remediation,"
-  studies which firms receive SEC 10-K comment letters, the extent of comments, and
-  remediation costs.
-- [Bozanic, Dietrich, and Johnson (2018, *Journal of Financial Economics*)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2989164),
-  "SEC Comment Letters and Firm Disclosure," studies disclosure consequences of the SEC
-  comment-letter process.
-- [Brown, Tian, and Tucker (2018, *Contemporary Accounting Research*)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2551451),
-  "The Spillover Effect of SEC Comment Letters on Qualitative Corporate Disclosure," shows
-  that SEC review can affect disclosure behavior even among firms not directly receiving
-  a comment letter.
-- The [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin)
-  makes comment letters and company responses public through EDGAR after review completion,
-  which creates a public-date scrutiny signal but not a complete record of all private SEC
-  review activity.
+Bridge validation is mandatory for an integrated claim that the public cascade and the old benchmark measure related but non-identical constructs. Without that validation, the public-cascade result remains a public-data measurement result rather than a validated fraud/restatement overlap paper.
 
-This literature establishes that comment letters are economically meaningful public
-scrutiny signals. The present paper differs by using comment-thread scrutiny as one stage
-in a broader ex ante cascade rather than as the only object of interest.
-
-4. Public disclosure and regulatory-process measurement.
-
-- [SEC Financial Reporting Manual Topic 4](https://www.sec.gov/about/divisions-offices/division-corporation-finance/financial-reporting-manual/frm-topic-4)
-  describes Item 4.02 Form 8-K non-reliance disclosures, which are used here as a public
-  correction signal.
-- [SEC Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases)
-  pages provide a public severity-tail proxy, not the full latent enforcement
-  universe.
-- [PCAOB Form AP and AuditorSearch](https://pcaobus.org/oversight/standards/implementation-resources-PCAOB-standards-rules/form-ap-auditor-reporting-certain-audit-participants)
-  provide public audit-participant information, while PCAOB inspection data add public
-  oversight history.
-- [SEC structured data / XBRL](https://www.sec.gov/spotlight/xbrl.shtml) makes standardized
-  filing facts usable for reproducible financial-ratio features.
-
-These sources supply the observable public signals. The paper's cascade is therefore an
-empirical measurement design, not a claim that any single public signal is a complete
-misconduct label or that sparse AAER matches can support an enforcement-prediction claim.
-
-### Peer-Comparable Boundary
-
-The closest peers either predict detected fraud or misstatement labels, study SEC
-comment-letter scrutiny, study restatement and 8-K correction events, or analyze
-enforcement and oversight outcomes after the fact. The intended contribution is to connect
-the review and correction pieces at the filing origin: given only information visible when
-a filing enters the public record, estimate whether it later enters a public scrutiny or
-correction process, and separately describe whether rare severity-tail AAER matches occur.
-
-The cascade should be described as a risk-exposure funnel, not as a deterministic hierarchy.
-Comment threads are relatively frequent public scrutiny signals; amendments are broad
-filing-friction signals that include administrative amendments as well as possible
-corrections; Item 4.02 non-reliance filings are rarer, higher-severity material-correction
-signals; AAER matches are severity-tail descriptors. The empirical tasks remain separate
-binary outcomes, so a later-stage positive does not mechanically force an earlier-stage label.
-
-### Peer Models and Metric Comparability
-
-Peer comparison should separate three objects: the label being predicted, the model family,
-and the scoring rule. Matching a scoring rule is not the same as claiming the same estimand.
-
-| Literature stream | Typical outcome | Typical models | Reported performance language | Repo comparison status |
-| --- | --- | --- | --- | --- |
-| Dechow, Ge, Larson, and Sloan F-score | Detected material misstatement firm-years | Logistic models that convert accounting and market variables into an F-score | Score/lift-style fraud-risk sorting and classification comparisons | The benchmark peer suite implements a fixed-coefficient Dechow F-score baseline only when mappings pass the full-quality gate, plus a separately named fold-local `dechow_variable_logit`; current outputs are peer-compatible, not original-sample replication. |
-| Perols fraud-detection model comparison | Detected fraud or non-fraud firm-years | Statistical and machine-learning classifiers, including logistic-style and tree/neural/SVM-style models | Classification accuracy, sensitivity, specificity, error tradeoffs, and AUC-style discrimination | The benchmark peer suite now includes a legacy model zoo with logit, entropy tree, bagging, linear SVM, stacking, and MLP variants; full mode uses equal undersampling for Perols-style models and reports calibration warnings. |
-| Bao, Ke, Li, Yu, and Zhang ensemble-learning fraud prediction | Detected accounting fraud labels | Ensemble machine learning on theory-motivated raw accounting numbers | AUC plus top-N-percent ranking metrics: precision, sensitivity, specificity, balanced accuracy, and NDCG@k | Bao-style ranking metrics are implemented and tested for benchmark and public-cascade outputs. They are metric-comparable, not outcome-equivalent. The legacy benchmark defaults to `bao_inspired_tree_ensemble`; `bao_style_ensemble` is used only when raw-number input compatibility and mapping quality pass explicit gates. |
-| Bertomeu, Cheynel, Floyd, and Pan misstatement detection | Ongoing or detected misstatement states | Interpretable machine-learning classifiers using accounting, audit, market, and governance variables | Predictive discrimination plus variable-importance and economic interpretation | The benchmark peer suite includes `bertomeu_style_xgb` with grouped feature-importance outputs, but not a full original-covariate replication. |
-| Barton, Burnett, Gunny, and Miller partial-observability restatement design | Separate occurrence and detection components | Partial-observability / structural-style restatement models | Identification, likelihood, and coefficient interpretation rather than a PR-AUC horse race | partial-observability models are not a PR-AUC comparator for the current pipeline; they motivate the measurement redesign. |
-| SEC comment-letter papers | Comment-letter receipt, comment intensity, remediation, or disclosure response | Determinants and consequence regressions, often logit/OLS-style designs with controls and fixed effects | Coefficients, odds ratios or marginal effects, significance, and fit diagnostics | Comment-letter papers are regression evidence. The repo can add analogous public-scrutiny regressions, but PR-AUC is not their native metric. |
-
-The comparison plan is therefore tiered. First, keep Bao-compatible ranking metrics in every
-predictive table because those metrics are reproducible from public code and useful for rare
-event ranking. Second, use the implemented benchmark peer suite as a legacy-model appendix
-with Dechow-style logistic scores and a small model zoo on the old benchmark labels. Third,
-transfer selected peer families to public-cascade tasks only after the current benchmark-only
-PR1 evidence is stable. Fourth, use comment-letter and partial-observability papers as
-construct and research-design comparators unless a separate regression or structural module is
-explicitly added.
-
-### Intended Contribution
-
-The intended contribution is not another horse race claiming that one classifier beats
-another. The contribution is a measurement redesign.
-
-- We move from a static detected-restatement classifier to a lag-aware benchmark that
-  makes label-observability and detection-timing assumptions explicit.
-- We move from a single ex post outcome to a filing-native public review-and-correction
-  cascade with distinct outcomes for scrutiny, amendment, and non-reliance; AAER matches
-  are retained as severity-tail descriptive evidence.
-- We move from pooled prediction to shelf-life analysis through rolling windows, feature
-  drift, and regime diagnostics.
-- For comparability with Bao, Ke, Li, Yu, and Zhang (2020), model outputs report
-  top-1% through top-5% ranking metrics matching their public `evaluate.m` logic:
-  `k = round(n * topN)`, top-k precision, top-k sensitivity, top-k specificity,
-  Bao-style top-fraction balanced accuracy, and binary-relevance NDCG@k. This is a
-  ranking metric at fixed inspection budgets, not a default 0.5 probability-threshold
-  balanced-accuracy claim.
-- We move from treating missingness as pure nuisance to testing whether opacity regimes are
-  economically informative.
-- We separate what is publicly observable and reproducible from what remains latent or only
-  partially observed.
-
-### Expected Evidence and Contribution Boundaries
-
-If the empirical results support the design, the paper's expected contribution
-boundaries are:
-
-- naive restatement prediction likely overstates or distorts performance once
-  label-observability and detection-timing assumptions are made explicit
-- public scrutiny and correction events are related to old restatement labels but are not the
-  same construct
-- shorter rolling windows may outperform expanding windows, implying that reporting-risk
-  models have limited shelf-life
-- missingness density and missingness regimes may remain associated with risk after
-  high-dimensional adjustment
-- a public-data-only pipeline can produce a more transparent, reproducible, and regulator-
-  facing reporting-risk measure than a static detected-restatement label alone
-
-These are empirical possibilities, not guaranteed outcomes. The implementation and reporting
-must remain diagnostic rather than target-seeking.
-
-## Execution Invariants
-
-These rules are binding implementation constraints, not narrative preferences.
-
-- All public cascade labels use the **first public date** observable in EDGAR, PCAOB, or
-  the relevant public source.
-- In v1, `filing_origin_panel.origin_date = filing_date`; `issuer_origin_panel.origin_date`
-  is the selected annual filing date for the issuer-year origin.
-- No event released after `origin_date` may enter predictors.
-- `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` are coverage state
-  fields. They are not default predictors.
-- `missing_*` and `raw_missing_*` are ordinary missingness signals and may enter
-  Experiment 3.
-- `res_an0` to `res_an3` are timing proxies only. They never enter benchmark predictors.
-- Censoring is horizon-specific: 365-day tasks use `censored_365`; 730-day tasks use
-  `censored_730`.
-- SEC EDGAR access must respect the current 10 requests/second limit and use retry/backoff
-  for network failures.
-
-Official source constraints used by this plan:
-
-- SEC FSDS currently spans January 2009 through March 2026 and notes a December 2024
-  reprocessing, so bronze manifests must retain download timestamp, SHA256, parser version,
-  schema version, and as-of date:
-  <https://www.sec.gov/data-research/sec-markets-data/financial-statement-data-sets>
-- SEC EDGAR fair-access guidance states the 10 requests/second ceiling:
-  <https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data>
-- SEC AAER pages are severity-tail proxies, not a complete enforcement universe:
-  <https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases>
-- PCAOB downloadable inspection datasets begin with annually inspected firms in 2018 and
-  triennially inspected firms in 2019, so inspection features are a later-window ablation:
-  <https://pcaobus.org/news-events/news-releases/news-release-detail/pcaob-makes-available-new-downloadable-datasets-featuring-pcaob-inspection-findings-from-audit-firm-inspection-reports>
-- SEC ticker/CIK files are useful candidate mappings but are not guaranteed for accuracy or
-  scope:
-  <https://www.sec.gov/about/webmaster-frequently-asked-questions>
-
-## Research Questions
-
-1. How much do naive pooled restatement models overstate or distort predictive
-   performance once label observability, detection-timing assumptions, and time ordering
-   are made explicit?
-2. Does misstatement-risk prediction decay over regulatory regimes and calendar time?
-3. Do pre-origin opacity and missingness regimes predict later public scrutiny or
-   correction, rather than only legacy detected-restatement labels?
-4. Can public SEC/PCAOB data identify a pre-disclosure reporting-risk state before
-   comment letters, amendments, or 8-K Item 4.02 disclosures?
-5. How do old restatement labels align with the public review-and-correction cascade in
-   the overlapping sample?
-
-## Data Architecture
+## Data and Feature Construction
 
 ### Legacy Benchmark Panel
 
-`data/raw_dataset_misstatement.parquet`
+`data/raw_dataset_misstatement.parquet` is the old benchmark layer.
 
-- Grain: `gvkey x data_year`
-- Coverage: 2001-2019
-- Role: benchmark layer for traditional restatement prediction
-- Known limitation: no `CIK`, `ticker`, `PERMNO`, restatement filing date, detector
-  identity, or full public filing history
+- Grain: `gvkey x data_year`.
+- Coverage: 2001-2019.
+- Required fields: `gvkey`, `data_year`, `misstatement firm-year`, `res_an0` to `res_an3`, `missing_*` flags, and accounting/audit/governance/market/industry predictors.
+- Limitation: no CIK, ticker, PERMNO, restatement filing date, detector identity, or complete public filing history.
 
-Required columns:
+### Public SEC/PCAOB Lake
 
-- identifiers: `gvkey`, `data_year`
-- outcome: `misstatement firm-year`
-- timing proxies: `res_an0`, `res_an1`, `res_an2`, `res_an3`
-- missingness flags: all `missing_*` fields
-- feature blocks: accounting, audit, governance, market, and industry variables
+`data/public_lake/` is organized as bronze, silver, and gold.
 
-### Public Data Lake
+- Bronze stores downloaded public files with source URL, timestamp, SHA256 hash, parser version, schema version, and as-of date.
+- Silver normalizes issuer, filing, XBRL, Notes, comment-thread, correction, Form AP, PCAOB inspection, and AAER proxy tables. Large Silver tables are Parquet-first.
+- Gold writes `issuer_origin_panel.parquet` and `filing_origin_panel.parquet`. The default path uses DuckDB SQL for XBRL core-tag pivoting, label-horizon joins, and Parquet output.
 
-`data/public_lake/`
+Required v1 sources are SEC submissions, SEC Financial Statement Data Sets (FSDS), SEC `UPLOAD` and `CORRESP`, 10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, PCAOB inspection datasets, and SEC AAER pages. The main public sample is domestic U.S. GAAP issuer-years from 2011-2023, with `2026-04-23` as the current reproducibility as-of date.
 
-- Bronze: raw downloaded files plus source URL, download timestamp, SHA256 hash, parser
-  version, schema version, and as-of date.
-- Silver: normalized filing, issuer, XBRL, note, comment-thread, filing-friction,
-  correction-event, amendment-annotation, proxy-governance, Form AP, PCAOB inspection,
-  auditor-status, and AAER proxy tables. Large Silver tables are Parquet-first to avoid
-  repeated gzip CSV decompression and dtype inference.
-- Gold: model-ready `issuer_origin_panel.parquet` and `filing_origin_panel.parquet`;
-  DuckDB builds the default Gold path in SQL, including XBRL core-tag feature
-  pivoting and label-horizon joins, then writes Parquet directly. Small
-  diagnostics remain CSV/JSON/Markdown.
+### Bridge and External Validation Inputs
 
-Required public sources for v1:
+The integration bridge is `data/external/gvkey_cik_year.csv`. Required fields are `gvkey`, `issuer_cik`, a single year or start/end years, and provenance fields such as source, version, extraction date, match method, and match score.
 
-- SEC `submissions.zip` for issuer and filing history.
-- SEC FSDS 2011-2023 for compact XBRL numeric features.
-- SEC `UPLOAD` and `CORRESP` filings for public comment-letter scrutiny.
-- SEC `10-K/A` and `10-Q/A` for amendment labels.
-- SEC 8-K Item 4.02 for non-reliance correction labels.
-- PCAOB Form AP for auditor, firm, and partner monitoring features.
-- SEC AAER pages for severity-tail descriptive proxy events only.
-
-Public-free source priority for the current paper:
-
-- P0 CIK-spine sources with no security bridge: SEC submissions and filing history,
-  `NT 10-K`/`NT 10-Q`, 8-K Items 3.01, 4.01, 4.02, and 5.02, `DEF 14A`/proxy timing,
-  comment-thread depth, SEC XBRL/Notes, PCAOB Form AP, and PCAOB inspection datasets.
-- P1 paper-compatible extensions after P0 is stable: proxy content fields for
-  governance, audit-fee, ownership, and related-party snapshots; PCAOB RASR/Form 2/Form 3
-  and public enforcement status; issuer-CIK aggregates from SEC Insider Transactions; and
-  ALFRED/FRED real-time macro-vintage regime controls.
-- Deferred main-paper sources: 13F, FTD, individual-security market-structure data, broad
-  EDGAR-log attention layers, SCAC, and GDELT. These are useful extensions, but they add
-  security bridges, attention/media estimands, source gaps, or parsing scope that can
-  dilute the filing-native reporting-risk cascade.
-
-Public sample:
-
-- Main years: 2011-2023
-- Issuers: domestic U.S. GAAP issuers
-- Exclusions: FPI/IFRS main sample excluded in v1
-- As-of date for current reproducibility: 2026-04-23
-- Current full-gold state: `issuer_origin_rows = 205,832`; 2011-2023 domestic main sample
-  has about 90,451 issuer-year rows.
-- Current caution: `label_aaer_proxy_730` has only 20 positives in the domestic
-  2011-2023 main sample. AAER is therefore a feasibility/severity-tail signal, not a
-  stable performance claim.
-
-### Bridge Plan
-
-`data/external/gvkey_cik_year.csv`
-
-Required fields:
-
-- `gvkey`
-- `issuer_cik`
-- `start_year` and `end_year`, or a single `data_year`/`fiscal_year`
-- provenance fields such as source, version, extraction date, match method, and match score
-
-Preparation command:
+Preparation commands:
 
 ```bash
 set -a; source .env; set +a
@@ -467,653 +135,169 @@ uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --out data/external/gvkey_cik_year.csv
 ```
 
-Public candidate bridge route while WRDS access is pending:
+Public candidate route while WRDS access is pending:
 
 ```bash
 bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
-```
-
-This route exports `farr::gvkey_ciks`, records `source=farr_gvkey_ciks`, expands
-the date ranges to annual `gvkey-CIK-year` rows, and then runs the bridge probe.
-It is acceptable as a provenance-tagged candidate bridge for coverage and
-multiplicity analysis, but WRDS remains the preferred institutional source when
-available.
-
-Public support route for AAER overlap and geography controls:
-
-```bash
 bash scripts/prepare_farr_support_data.sh --install-missing
 ```
 
-This exports `farr::aaer_dates`, `farr::aaer_firm_year`, and `farr::state_hq`.
-The AAER exports are diagnostic anchors: they test whether legacy benchmark
-positives and public-cascade scores overlap with Bao-style AAER firm-years, but
-they do not redefine the main public labels. `farr::state_hq` is treated as a
-date-bounded headquarters-state metadata control in the public issuer-origin
-panel when the external CSV is available.
+`farr::gvkey_ciks` is now the working high-coverage candidate bridge. It must be reported with coverage and multiplicity tables and should not be described as WRDS-verified. `farr::aaer_firm_year` and `farr::aaer_dates` are external AAER validation anchors; `farr::state_hq` is a date-bounded headquarters-state metadata control.
 
-Default v1 bridge route:
+If no usable external crosswalk exists, the bridge probe must report `raw_identifier_blocker` rather than infer links from benchmark identifiers alone.
 
-- Run a bridge probe before any overlap validation; it is a coverage and
-  multiplicity audit, not an automatic validation pass.
-- With no external crosswalk, the expected output is `raw_identifier_blocker`
-  because the raw benchmark has no CIK, ticker, company name, CUSIP, or PERMNO
-  columns.
-- With `farr::gvkey_ciks`, the expected output is
-  `external_crosswalk_available`; this is now the working candidate bridge
-  while WRDS access is pending.
-- If stronger raw-side or WRDS identifiers are added later, replace the farr
-  candidate with an institutionally verified provenance-tagged bridge.
-- Do not treat public ticker/CIK files as authoritative; SEC states they are not guaranteed
-  for accuracy or scope.
-- Emit `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, and
-  `unmatched_raw_characteristics.csv` before any overlap validation.
-- Fail loudly on silent many-to-many joins. Ambiguous mappings remain reported blockers or
-  multiplicity rows, not guessed links.
-- No overlap model is allowed unless a non-empty, provenance-tagged candidate or external
-  crosswalk exists.
-- The bridge does not block running or reporting the public review-and-correction
-  measurement result, but it is a P0 integrated-paper blocker for old-benchmark overlap,
-  construct-validation, and any claim that the public cascade has been validated against
-  legacy fraud/restatement labels.
+### Feature Families
 
-## Label Ontology
+Feature families use the same filtered issuer-year sample for fair ablations. Tree models with native missing-value handling retain numeric `np.nan`; non-tree adapters use fold-internal imputation only when required. Label, censoring, identifier, source-availability, public-date, and vintage columns are excluded by default.
 
-### Old Benchmark Labels
+Core feature groups:
 
-- `naive`: observed `misstatement firm-year` without correcting for detection timing.
-- `proxy_drop_observed`: a coverage stress test using only observable `res_an*` proxy flags
-  and excluding positive rows without any usable timing proxy. This is not evidence that
-  the excluded positives are false negatives.
-- `proxy_imputed_lag`: a timing-assumption sensitivity grid that assigns unknown positive
-  rows a detection year using scenario lags such as 1, 2, 3, and 5 years, plus an empirical
-  lag distribution from the sparse `res_an*`-visible positives.
-- `external_timing`: paper-grade maturation only if external restatement filing or public
-  detection dates are supplied and validated.
+- Metadata: SIC, form, entity type, filing size, XBRL flags, prior filing count, days since prior filing, and headquarters-state controls when available.
+- Filing friction and public history: current-cycle NT status and amendment friction, plus strictly pre-origin rolling counts and recency for prior NT filings, comment threads, amendments, and 8-K instability items.
+- XBRL: `xbrl_ratio_*` and `xbrl_coverage_*` features from controlled core tags, including size, leverage, profitability, working capital, receivables, inventory, cash, debt, operating cash flow, and year-over-year revenue/assets changes.
+- Auditor and oversight: PCAOB Form AP fields, engagement-partner exposure, and PCAOB inspection features in their public source windows.
+- Note opacity: note count, note character count, note-tag coverage, and tag entropy as a disclosure breadth measure.
 
-### Benchmark Timing-Sensitivity Algorithm
-
-`res_an0` to `res_an3` are not treated as a verified label-maturation system. The raw
-panel shape shows that most positive firm-years do not have same-row `res_an*` timing
-flags, so this path is a codebook-dependent sensitivity proxy. The drop-observed variant
-is deliberately labeled a stress test because deleting most positives changes class balance
-and may introduce sample-selection bias.
-
-```text
-For each benchmark row:
-  label_naive = misstatement firm-year
-
-  if misstatement firm-year == 1 and an external public detection year is available:
-    timing_claim_status = external_timing
-    detection_year = external_detection_year
-
-  else if misstatement firm-year == 1 and a usable res_an* proxy is present:
-    timing_claim_status = proxy_drop_observed or proxy_imputed_lag
-    detection_year_proxy = data_year + proxy_lag
-
-  else if misstatement firm-year == 1 and no timing evidence is available
-       and label_mode == proxy_drop_observed:
-    exclude the positive row from proxy-visible training labels,
-    count it in timing_coverage.csv,
-    and report retained-positive share and resulting class balance
-
-  else if misstatement firm-year == 1 and no timing evidence is available
-       and label_mode == proxy_imputed_lag:
-    assign detection_year_proxy under a documented lag scenario
-    and report the scenario separately
-
-  proxy-visible training positive:
-    1 only when detection_year_proxy <= train_origin_year
-    where train_origin_year = test_year - 1
-```
-
-Benchmark outputs must include `timing_coverage.csv` and a summary field
-`timing_claim_status` with allowed values `external_timing`, `proxy_drop_observed`,
-`proxy_imputed_lag`, or `blocked`. The main benchmark claim is therefore: traditional
-restatement benchmarks are under-identified without public detection timing, and reported
-performance is sensitive to timing and observability assumptions. It is not that label
-maturation has been fully solved in the raw benchmark panel, and a metric collapse under
-`proxy_drop_observed` must not be described as proof of look-ahead bias by itself.
-
-### Public Cascade Labels
-
-Stage 0: source availability state.
-
-- `source_available_*`
-- `public_date_*`
-- `vintage_*`
-- `as_of_date`
-
-These fields document what could have been known; they are coverage metadata, not default
-predictive features.
-
-Stage 1: pre-disclosure reporting-risk state.
-
-- This is the latent risk score estimated from pre-origin public features.
-- It is not claimed to be true latent fraud occurrence.
-
-Stage 2: public comment-letter scrutiny.
-
-- label: `label_comment_thread_365`
-- timing: first public EDGAR date of the comment-letter thread
-- caveat: public comment letters are not the full SEC review universe
-
-Stage 3: public correction ladder.
-
-- label: `label_amendment_365`
-- label: `label_8k_402_365`
-- amendment and non-reliance are separate outcomes
-- `label_amendment_365` is a broad amendment/friction signal. The baseline definition
-  includes administrative amendments such as delayed Part III proxy inclusions or exhibit
-  updates, as well as potentially material corrections.
-- Amendment annotations are reproducible diagnostics, not silent relabeling. Candidate
-  fields include `amendment_admin_part_iii`, `amendment_nonadmin_financial`,
-  `amendment_mixed_content`, and `amendment_annotation_note`.
-- Classification priority is conservative: if a single `10-K/A` or `10-Q/A` triggers both
-  administrative Part III/proxy conditions and non-administrative financial-correction
-  conditions, classify it as non-admin and set
-  `amendment_annotation_note = mixed_content_classified_as_nonadmin`.
-- `label_8k_402_365` is the core non-reliance/material-correction proxy.
-- revision-only restatements are not forced into 8-K Item 4.02
-
-Stage 4: AAER severity-tail descriptor.
-
-- label: `label_aaer_proxy_730`
-- caveat: AAER pages are severity-tail proxies, not a complete enforcement universe
-- AAER is descriptive/robustness evidence in v1, not a headline prediction task
-- if positives are too sparse for stable folds, skip model fitting and report the blocker;
-  consider 1095-day and 1825-day descriptive robustness only after a nonzero public proxy
-  table is available
-
-### Outcome Semantics
-
-The public cascade is a multi-label setting:
-
-- Comment thread, amendment, 8-K Item 4.02, and AAER proxy are independent binary fields.
-- A single issuer-year may be positive in multiple tasks.
-- A Stage 3 positive does not force `label_comment_thread_365 = 1`; no artificial label
-  completion is allowed.
-- Co-occurrence, conditional event rates, and calibration by task are reported separately.
-  AAER enters the main text as severity-tail description unless sparse-positive robustness
-  checks become stable enough to report.
-
-## Public Cascade Feature Contract
-
-Feature families must use the same filtered issuer-year sample for fair ablations. For
-tree models with native missing-value handling, numeric missing values are preserved as
-`np.nan` so missingness can remain predictive. Explicit `missing_*`, `raw_missing_*`, and
-`xbrl_coverage_*` fields remain ordinary predictors when pre-origin. Categorical missing
-values are encoded as an explicit missing category when one-hot encoding is required.
-Fold-internal imputation is used only for model classes or encoders that require complete
-inputs; rows are not dropped family-by-family unless the task horizon is censored.
-
-Metadata family:
-
-- `sic`, `form`, `entity_type`
-- filing size and XBRL flags available at the origin filing
-- prior filing count and days since previous filing
-- fiscal-year and issuer-history descriptors that are observable at `origin_date`
-
-Filing-friction family:
-
-- Current reporting-cycle filing friction includes `NT 10-K`/`NT 10-Q` status, NT reason
-  codes when available, delay days from the applicable filing deadline, after-hours
-  acceptance, date-of-change indicators, document/exhibit counts, and same-cycle amendment
-  churn visible by `origin_date`.
-- This family stores level features for the current origin/reporting cycle. Rolling counts
-  of prior NT filings and other prior events belong to the public-history family.
-
-Public-history family:
-
-- Rolling windows are anchored on `origin_date`, not fiscal-year end. Use 365, 1,095, and
-  1,825 calendar-day lookbacks with the right endpoint strictly before `origin_date`, unless
-  the feature is part of the origin filing metadata visible at acceptance.
-- Include rolling counts and recency for prior NT filings, comment threads, amendments,
-  8-K Item 4.02 disclosures, and 8-K instability items 3.01, 4.01, and 5.02.
-- Comment-thread depth is part of this family: compute `thread_rounds`, `upload_count`,
-  `corresp_count`, `filing_count`, and multi-round-review indicators from public
-  `UPLOAD`/`CORRESP` sequences.
-
-XBRL family:
-
-- v1 must include core ratio features prefixed `xbrl_ratio_` and coverage fields prefixed
-  `xbrl_coverage_`.
-- Minimum ratio families: size, leverage, profitability, working-capital intensity,
-  receivables intensity, inventory intensity, cash intensity, debt intensity,
-  operating-cash-flow intensity, and year-over-year revenue/assets change when lagged facts
-  are available.
-- Supporting aggregates such as `xbrl_fact_count`, `xbrl_unique_tags`, and
-  `xbrl_unique_units` remain useful but are not enough for a submission-ready feature-family
-  ablation.
-- Standard tags must come from a controlled list in code or config; ad hoc tag mining is not
-  allowed in model code.
-- Do not use financial-statement facts filed after `origin_date`.
-
-Public cascade readiness levels:
-
-- `metadata_baseline`: only metadata and issuer-history features are non-empty; this is a
-  smoke/readiness result, not feature-family evidence.
-- `xbrl_ratio_baseline` or XBRL ratio baseline: at least one `xbrl_ratio_*` feature is
-  present and visible at origin; this establishes the first non-metadata empirical baseline.
-- `auditor_form_ap_ablation`: Form AP fields are non-empty in the applicable post-2017
-  source window.
-- `oversight_pcaob_later_window_ablation`: PCAOB inspection fields are non-empty in the
-  2018/2019+ later window.
-- `filing_history_enriched`: filing-friction and public-history families contain nonzero
-  pre-origin NT, comment-depth, amendment-history, and 8-K instability features.
-- P1 families such as proxy content, auditor-firm public status, insider pressure, and
-  macro-vintage context are reported as incremental extensions, not required P0 evidence.
-
-Auditor family:
-
-- Form AP fields available by source vintage: form filing count, unique partners, average
-  participant count, and partner/firm identifiers only when public by `origin_date`.
-- 2011-2016 auditor-family ablations must explicitly report Form AP unavailability rather
-  than treating unavailable source state as ordinary missingness.
-- Partner-level prior correction exposure is a P0 auditor feature when engagement partner
-  IDs are public by `origin_date`: for each current issuer-partner engagement, count prior
-  public 8-K Item 4.02 and non-admin amendment events among the same partner's other
-  issuers, excluding the current issuer and any event released on or after `origin_date`.
-  The paper may connect this to auditor-contagion literature, but the implemented feature is
-  a lagged public exposure measure, not a causal contagion claim.
-
-Oversight family:
-
-- PCAOB inspection features are a later-window ablation because downloadable inspection
-  datasets begin in 2018/2019.
-- Prior filing-count style variables may remain in oversight only if they describe
-  pre-origin monitoring exposure rather than source availability.
-- PCAOB RASR/Form 2/Form 3 and public enforcement status are P1 auditor-firm public-status
-  features. They may enter only after firm identifiers, report public dates, and Form AP
-  joins are validated.
-
-Proxy-governance family:
-
-- `DEF 14A`, `DEFA14A`, and related proxy filings use their own EDGAR public dates. They
-  cannot be backfilled into an earlier annual-filing `origin_date`.
-- P0 features are filing-native proxy timing and Part III incorporation indicators. P1
-  features parse public proxy content into governance, audit-fee, ownership, and
-  related-party snapshots.
-
-Note-opacity family:
-
-- Note count, note character count, unique note-tag count, and year-over-year note
-  coverage/length changes are P0 summary features.
-- Tag entropy is defined as
-  `tag_entropy = -sum_i(p_i * log(p_i))`, where
-  `p_i = count(tag_i) / sum_j count(tag_j)` over note-section tags present for the
-  issuer-period in the Notes data.
-- Higher tag entropy means disclosure is spread across more note-tag categories. It is a
-  breadth/dispersion measure, not mechanically "more opaque"; the paper interprets its sign
-  empirically alongside note absence, coverage gaps, and abnormal year-over-year changes.
-
-Insider-pressure family:
-
-- SEC Insider Transactions are P1 because they are issuer-CIK structured data, but they are
-  not a headline task family. Candidate features are 90-day and 365-day pre-origin
-  transaction counts, net-sale intensity, Form 4 amendment density, C-suite/director/10%
-  holder activity, and Rule 10b5-1 flags when present in the source vintage.
-- Insider features use filing/public dates from the SEC source and never trade dates alone
-  when the filing date is later.
-
-Macro-vintage context family:
-
-- ALFRED/FRED macro controls are P1 regime features for concept-drift interpretation. Values
-  must be the vintage observable as of `origin_date`; revised current values are forbidden.
-- Use a small fixed list, such as recession indicator, VIX, BBB OAS, industrial production,
-  unemployment, and short-rate/term-spread controls, to avoid turning Experiment 2 into a
-  macro-forecasting exercise.
-
-Excluded by default:
-
-- `source_available_*`, `public_date_*`, `vintage_*`, `items`, raw descriptions, identifiers,
-  and all label/censor columns.
+P1/P2 extensions include proxy-governance content, SEC insider-pressure features, macro-vintage controls, auditor-firm public-status fields, and broader security/attention layers. They are useful extensions, not required for the current v1 paper claim.
 
 ## Empirical Design
 
-### Experiment 1: Label Observability and Detection-Timing Sensitivity
+### Evaluation Metrics
 
-Goal:
+Predictive tables report PR-AUC, ROC-AUC, Brier score, Brier Skill Score, expected calibration error, top-50/100/200 precision, and Bao-style top-fraction metrics. Bao-style metrics follow the inspection-budget logic used in Bao, Ke, Li, Yu, and Zhang: top-fraction precision, sensitivity, specificity, balanced accuracy, and binary-relevance NDCG@k. Calibration metrics are diagnostic under class imbalance and resampling.
 
-- quantify how sensitive traditional restatement evaluation is to detection-timing
-  observability and unknown-positive timing assumptions.
+### Experiment 1: Label Observability and Detection Timing
 
-Design:
+**Purpose.** Quantify how sensitive traditional restatement evaluation is to timing coverage and unknown-positive assumptions.
 
-- dataset: old benchmark panel, stored as Parquet after local CSV conversion
-- models: XGBoost classifier with controlled hyperparameters
-- train windows: expanding, rolling 5-year, rolling 7-year, rolling 10-year
-- test slices: annual out-of-time slices
-- labels: naive, `proxy_drop_observed`, and `proxy_imputed_lag`
-- required timing coverage report: positive total, same-row `res_an*` coverage, unknown-timing
-  positives, retained-positive share, class-balance change, `res_an0` to `res_an3`
-  cross-tab, and `timing_claim_status`
-- imputed-lag scenarios: fixed 1-year, 2-year, 3-year, and 5-year lags, plus the empirical
-  lag distribution implied by the sparse `res_an*`-visible positives
+**Design.** Run annual out-of-time benchmark backtests across expanding, rolling 5-year, rolling 7-year, and rolling 10-year windows. Compare `naive`, `proxy_drop_observed`, and `proxy_imputed_lag` labels.
 
-Metrics:
+**Outputs.** `rolling_metrics.csv`, `rolling_predictions.parquet`, `timing_coverage.csv`, `timing_summary.json`, `timing_claim_status`, and window summaries.
 
-- PR-AUC
-- ROC-AUC
-- Brier score
-- prior-baseline Brier score and Brier Skill Score,
-  `BSS = 1 - Brier_model / Brier_prior`
-- expected calibration error
-- Top-50, Top-100, Top-200, and Top-500 precision
-- retained and dropped positive counts for each training split
-- positive-rate change under each timing scenario
-
-Diagnostic interpretation:
-
-- compare naive, drop-observed, and imputed-lag metrics to quantify label-observability
-  sensitivity; do not frame a drop-observed performance decline as proof of look-ahead bias
-  because deleting most positives changes the estimand and can induce sample-selection
-  bias.
-- paper-grade label maturation requires external public detection dates. Until then,
-  Experiment 1 is a benchmark-validity diagnostic, not a corrected fraud-prediction result.
+**Interpretation.** This is a benchmark-validity diagnostic. A decline under `proxy_drop_observed` should be interpreted as timing-observability sensitivity, not as proof of look-ahead bias by itself.
 
 ### Experiment 2: Concept Drift and Model Shelf-Life
 
-Goal:
+**Purpose.** Estimate whether reporting-risk models trained in one regime remain useful in later regimes.
 
-- estimate whether a model trained in one regime remains useful in later regimes.
+**Design.** Compare rolling and expanding windows over test years; track feature-family importance; report pre/post diagnostics around major regulatory and data-regime breakpoints.
 
-Design:
+**Outputs.** Annual metrics, window summaries, structural-break diagnostics, and feature-family importance.
 
-- compare expanding and rolling-window performance over test years
-- track feature-family importance over time
-- run pre/post breakpoint diagnostics around 2005, 2010, and 2017
-
-Structural-break specification:
-
-- primary objects: annual PR-AUC, Brier Skill Score, and feature-family importance shares
-- v1 statistic: pre/post mean shift and trend-interaction diagnostics by breakpoint
-- no Andrews sup-Wald or formal coefficient-stability claim unless implemented and tested
-
-Outputs:
-
-- rolling metrics by test year
-- window-summary table
-- structural-break diagnostics table
-- feature-family importance table
-
-Diagnostic interpretation:
-
-- use the diagnostics to identify model shelf-life and retraining-window sensitivity; do not
-  infer structural causality from predictive drift alone.
+**Interpretation.** The experiment supports model shelf-life and retraining-window evidence. It does not establish structural causality from predictive drift alone.
 
 ### Experiment 3: Opacity and Public Review/Correction Risk
 
-Goal:
+**Purpose.** Test whether pre-origin opacity and missingness profiles predict later public scrutiny or correction.
 
-- test whether pre-origin opacity and missingness profiles predict later public scrutiny
-  and correction events.
-
-Design:
-
-- build Missing Profile Vectors from `missing_*` flags and high-missing raw variables
-- fit candidate cluster counts
-- compare opacity regimes by public cascade event rates and missingness intensity
-- estimate DML-style high-dimensional adjustment on the public issuer-origin panel
-- retain old-benchmark `misstatement firm-year` analysis as a legacy diagnostic only, not
-  the main test of strategic silence
-
-DML PLR specification:
+**Design.** Construct missingness-density and missing-profile indicators; estimate DML-style partially linear regressions on public labels:
 
 ```text
+Primary Y:
+  label_comment_thread_365
+  label_amendment_365
+  label_8k_402_365
+
 D = missingness_density_score
-  = mean(pre-origin missingness and opacity indicators available at filing origin)
-
-Primary Y choices:
-  Y = label_comment_thread_365
-  Y = label_amendment_365   # broad amendment/friction outcome
-  Y = label_8k_402_365      # material non-reliance correction proxy
-
-Legacy diagnostic Y:
-  Y = misstatement firm-year
-
-X = all pre-origin metadata, XBRL, filing-friction, public-history, proxy, auditor,
-    oversight, note-opacity, and calendar controls
-    excluding D, missingness flags used to build D, labels, censoring fields,
-    public_date_*, source_available_*, vintage_*, identifiers, and origin/date keys
-
-Partially linear regression:
-  Y = theta * D + g(X) + epsilon
-  D = m(X) + nu
-
-Nuisance functions:
-  tree-based learners with cross-fitting; LightGBM is preferred when available,
-  HistGradientBoosting is the CPU-safe fallback.
+X = pre-origin metadata, XBRL, filing-friction, public-history, auditor, oversight,
+    note-opacity, and calendar controls
 ```
 
-Interpretation rule:
+The old `misstatement firm-year` outcome remains a legacy diagnostic only.
 
-- describe `theta` as adjusted association or high-dimensional adjustment evidence, not a
-  causal effect, unless a stronger disclosure shock is added later.
-- if public-cascade outcomes and legacy misstatement outcomes disagree, treat the conflict
-  as evidence about occurrence/detection observability rather than as a failure of the
-  public-cascade estimand.
+**Outputs.** Missing-profile clusters, public-label PLR spec results, nuisance-model metadata, and diagnostic benchmark-side DML outputs.
+
+**Interpretation.** Coefficients are adjusted associations, not causal effects. Disagreement between public-cascade outcomes and legacy misstatement outcomes is evidence about observability and detection, not automatic evidence that either construct is wrong.
 
 ### Experiment 4: Public Cascade Construction
 
-Goal:
+**Purpose.** Demonstrate that public data can support a defensible review-and-correction cascade.
 
-- demonstrate that public data can support a defensible public review-and-correction
-  cascade.
+**Design.** Build the public lake from SEC/PCAOB sources; construct labels from first public dates; report source coverage, event rates, censoring, and task readiness.
 
-Design:
+**Outputs.** Source coverage tables, event-rate tables, censoring summaries, public-lake metadata, and task-positive counts.
 
-- build the public lake from SEC/PCAOB sources
-- construct event labels using first public dates only
-- report coverage by fiscal year and source family
-- keep comment letters, amendments, 8-K Item 4.02, and AAER severity-tail matches separate;
-  AAER is descriptive evidence, not a core prediction endpoint
-
-Outputs:
-
-- source coverage table
-- public cascade event-rate table
-- censoring table
-- event timing summaries
-- task readiness table, including zero-positive blockers
+**Interpretation.** This experiment validates the measurement surface. AAER remains descriptive severity-tail evidence unless robust positive counts are available.
 
 ### Experiment 5: Public Cascade Prediction
 
-Goal:
+**Purpose.** Estimate the pre-disclosure public reporting-risk state from public features.
 
-- estimate the pre-disclosure reporting-risk state from public data.
+**Design.** Use `issuer_origin_panel` to predict comment-thread scrutiny, broad amendment/friction, and 8-K Item 4.02 outcomes. Run feature-family ablations over metadata, XBRL, auditor, oversight, and all-feature sets. Skip task/family/window fits with one-class train or test labels.
 
-Design:
+**Outputs.** `public_cascade_metrics.csv`, `public_cascade_predictions.parquet`, `public_cascade_task_status.csv`, `public_cascade_summary.md`, and `public_opacity_dml.csv`.
 
-- dataset: `issuer_origin_panel`
-- headline tasks: comment thread, broad amendment/friction, and 8-K 4.02
-- amendment is reported as a broad filing-friction outcome; 8-K Item 4.02 is the core
-  material-correction proxy
-- severity-tail descriptor: AAER proxy; fit only as robustness if positives are sufficient
-  across train/test folds
-- feature families: metadata, XBRL, filing-friction, public-history, proxy-governance,
-  auditor, oversight, note-opacity, macro-vintage context, insider-pressure, all
-- train windows: expanding, rolling 5-year, rolling 7-year, rolling 10-year
-- skip task-family-window fits when training or test labels have fewer than two classes
-- metadata-only outputs must report `metadata_baseline` readiness and cannot be cited as
-  XBRL/auditor/oversight feature-family evidence
-- the current full-run public-cascade snapshot reports nonzero `xbrl_ratio_*` feature
-  counts and should be treated as the first `xbrl_ratio_baseline` evidence state
-
-Metrics:
-
-- PR-AUC
-- ROC-AUC
-- Brier score
-- prior-baseline Brier score and Brier Skill Score,
-  `BSS = 1 - Brier_model / Brier_prior`
-- task-level positive rates
-- feature-family ablations
-- co-occurrence and calibration summaries across task labels
-
-Diagnostic interpretation:
-
-- compare feature families across headline tasks only for non-degenerate task folds; if
-  AAER proxy is sparse or zero-positive in a split, report it as a severity-tail blocker
-  rather than a failed model.
+**Interpretation.** Full public-cascade claims require non-metadata features. `metadata_baseline` is a readiness state; `xbrl_ratio_baseline` is the first non-metadata empirical baseline. Sparse AAER folds are blockers, not failed headline models.
 
 ### Experiment 6: Old Benchmark and Public Cascade Overlap
 
-Goal:
+**Purpose.** Test whether legacy detected-misstatement labels and public review-and-correction labels measure related but non-identical constructs.
 
-- show whether the old restatement benchmark and the public cascade measure related but
-  non-identical constructs.
-- treat this as the integrated-paper blocker: without a credible `gvkey-CIK-year` bridge,
-  the paper cannot claim validated overlap between legacy misstatement labels and the
-  public review-and-correction estimand.
+**Design.** Run the bridge probe, report coverage and multiplicity, then test event-time concentration and risk-score alignment in the mapped sample.
 
-Design:
+**Outputs.** `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, `unmatched_raw_characteristics.csv`, overlap panels, ranking alignment tables, and event-time figures.
 
-- first run the public-only bridge probe
-- if the raw benchmark panel lacks CIK/ticker/name/CUSIP, emit `raw_identifier_blocker` and stop
-- if candidate identifiers exist, build a provenance-tagged candidate bridge and report
-  coverage and join multiplicity before modeling
-- test whether old positives are followed by public cascade events
-- test whether benchmark risk scores predict public cascade labels
-- test whether public cascade risk scores predict old restatement labels
-- build event-time plots around old restatement firm-years
+**Interpretation.** This is the integrated-paper gate. A farr bridge can support candidate overlap analysis; WRDS remains preferred before final manuscript claims.
 
-Outputs:
-
-- crosswalk coverage table
-- multiplicity and ambiguous-match blocker reports
-- `bridge_probe_summary.json`
-- `coverage_report.csv`
-- `multiplicity_report.csv`
-- `unmatched_raw_characteristics.csv`
-- overlap panel
-- risk-score alignment table
-- event-time distribution figure
-
-## Tables and Figures
-
-Main tables:
-
-- Table 1: sample construction, source coverage, and public-lake availability.
-- Table 2: label-observability and detection-timing sensitivity evaluation.
-- Table 3: concept-drift and retraining-window comparison.
-- Table 4: opacity regimes and public review/correction risk.
-- Table 5: public cascade event rates, censoring, and task readiness.
-- Table 6: public-cascade prediction by task and feature family.
-- Table 7: old-label/public-cascade overlap validation.
-
-Main figures:
-
-- Figure 1: old misstatement positive-rate collapse and public cascade event rates.
-- Figure 2: model shelf-life and rolling PR-AUC decay.
-- Figure 3: public review-and-correction cascade with AAER severity-tail overlay.
-- Figure 4: feature-family importance drift.
-- Figure 5: missingness-regime risk profile.
-- Figure 6: event-time distribution around old restatement firm-years.
-
-## Implementation Architecture
-
-Production modules:
-
-- `src/benchmark.py`: old benchmark model, timing-sensitivity diagnostics, drift,
-  missingness diagnostics, and legacy timing-observability stress tests.
-- `src/public_lake.py`: public bronze/silver/gold data lake and cascade labels.
-- `src/public_cascade.py`: public review/correction prediction and feature-family ablations.
-- `src/bridge.py`: public-only bridge feasibility probe, coverage reports, and multiplicity
-  diagnostics.
-
-Production scripts:
-
-- `scripts/run_benchmark.py`: run only the old benchmark component.
-- `scripts/run_public_cascade.py`: run only the public cascade component.
-- `scripts/run_bridge_probe.py`: run only the public bridge coverage probe.
-- `scripts/run_study.py`: run the combined paper workflow.
-- `scripts/run_public_lake_full.sh`: staged full public-lake download/build job.
-- `scripts/monitor_public_lake.py`: disk, manifest, row-count, and memory monitoring.
-
-Current combined workflow:
-
-```bash
-just status
-just full full raw artifacts/full
-```
-
-`just check` is the data-free local quality gate. `just full` runs the test and
-lint gate before the data/model stages. Component recipes such as
-`just task benchmark raw artifacts/benchmark`, `just task bridge raw artifacts/bridge_probe`,
-and `just task study raw artifacts/study` are follow-up rerun/debug entries, not the
-paper-facing clean-run default.
-
-Planned modules:
-
-- `src/study.py`: final table and figure input assembly.
-- `src/features.py`: optional future home for expanded XBRL tag and ratio definitions.
-
-Workflow follow-up:
-
-- `just status` is read-only and must not run `uv sync`.
-- `just setup` is the environment-sync entrypoint.
-- `just check` owns tests, lint, and strict docs build; data-producing `task`
-  recipes should not rerun lint implicitly.
-- Public-lake v1.1 should retain bronze manifests, support resume/idempotent rebuilds, and
-  use DuckDB or Polars for large FSDS/Notes parsing to avoid full pandas materialization.
-
-## Readiness Matrix
+## Evidence Gates
 
 | Component | Current status | Gate before paper claim |
 | --- | --- | --- |
-| Experiment 1 benchmark | benchmark evidence available; current timing claim is observability sensitivity only; code now emits `proxy_drop_observed` and `proxy_imputed_lag` grid rows | `timing_coverage.csv`, retained-positive share, imputed-lag grid, and external timing required for paper-grade maturation |
-| Experiment 2 drift | preliminary diagnostics | validated breakpoint diagnostics over annual PR-AUC/Brier Skill Score and feature-family shares |
-| Experiment 3 opacity | benchmark-side DML remains legacy diagnostic; public-label DML is implemented on the issuer-origin panel | public-label PLR spec for `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` |
-| Experiment 4 public lake | full-run gold snapshot available | source coverage, task positives, censoring, and reproducibility manifest refreshed for manuscript tables |
-| Experiment 5 public cascade | current full-run snapshot is `xbrl_ratio_baseline`; AAER remains sparse | `xbrl_ratio_*` and `xbrl_coverage_*` columns present with tag coverage, non-degenerate core tasks, and AAER framed as feasibility only |
-| Experiment 6 bridge overlap | farr `gvkey_ciks` is a high-coverage candidate; integrated validation still needs rerun and quality reporting | overlap coverage, multiplicity reports, no silent joins, and WRDS-preferred crosswalk for final paper claims |
+| Benchmark timing | implemented as observability sensitivity | report `timing_coverage.csv`, retained positives, and imputed-lag scenarios; external timing required for paper-grade maturation |
+| Concept drift | implemented as rolling-window diagnostics | validate annual PR-AUC, Brier Skill Score, feature-importance drift, and breakpoint summaries |
+| Opacity | public-label DML implemented | public-label PLR results must use `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` as primary outcomes |
+| Public lake | full public lake path implemented | refreshed source coverage, row counts, censoring, and reproducibility metadata |
+| Public cascade | current full-run state is `xbrl_ratio_baseline` | non-degenerate comment-thread, amendment, and 8-K Item 4.02 tasks; AAER framed as severity-tail evidence |
+| Bridge overlap | farr `gvkey_ciks` is a high-coverage candidate | coverage, multiplicity, no silent many-to-many joins, and WRDS-preferred validation before final integrated claims |
 
-## Acceptance Criteria
+Data integrity gates:
 
-Data integrity:
+- No post-`origin_date` event enters predictors.
+- No `res_an*` column enters benchmark predictors.
+- `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` stay outside default predictors.
+- Censoring masks are horizon-specific.
+- Crosswalk coverage and multiplicity are reported before overlap validation.
 
-- no `res_an*` field enters benchmark predictors
-- timing-sensitivity labels never use detection information after `train_origin_year`
-- unknown-timing positives are counted in `timing_coverage.csv`; if excluded under
-  `proxy_drop_observed`, retained-positive share and class-balance change are reported
-- imputed-lag sensitivity scenarios are labeled as assumptions, not recovered truth
-- no event released after `origin_date` enters public cascade predictors
-- rolling public-history features use `origin_date`, not fiscal-year end, as the right
-  endpoint and exclude same-day future events unless the value is origin-filing metadata
-  visible at acceptance
-- mixed-content amendments that trigger both Part III/proxy and financial-correction rules
-  are classified as non-admin and record `mixed_content_classified_as_nonadmin`
-- censoring masks are applied per horizon
-- source availability is recorded as state, not treated as ordinary missingness
-- crosswalk coverage is reported before overlap validation
-- missing-crosswalk runs report `raw_identifier_blocker`; farr-candidate runs
-  report `external_crosswalk_available` plus coverage and multiplicity tables
+Empirical sufficiency gates:
 
-Empirical sufficiency:
+- Benchmark outputs non-empty rolling metrics, timing coverage, and missingness diagnostics.
+- Public cascade covers fiscal years 2011-2023 in the full panel.
+- Comment-thread, amendment, and 8-K Item 4.02 tasks have nonzero positives.
+- `xbrl_ratio_*` and `xbrl_coverage_*` features are present for non-metadata public-cascade evidence.
+- zero-positive or sparse AAER robustness tasks are skipped and reported as severity-tail blockers.
 
-- benchmark produces non-empty rolling metrics and missingness-regime outputs
-- benchmark summary reports `timing_claim_status`
-- opacity analysis reports public-cascade outcomes as the main `Y`; legacy misstatement
-  `Y` is appendix/diagnostic only
-- public cascade full panel covers fiscal years 2011-2023
-- comment-thread, amendment, and 8-K Item 4.02 labels have nonzero positives
-- filing-friction and public-history families are non-overlapping: current-cycle NT/header
-  level features stay in filing-friction, while rolling counts and recency of prior
-  NT/comment/amendment/8-K events stay in public-history
-- zero-positive or sparse AAER robustness tasks are skipped and reported as severity-tail
-  blockers, not failed headline models
-- feature-family ablations are not metadata-only in the full public run; `xbrl_ratio_*`
-  features establish the first non-metadata baseline
-- overlap validation reports both alignment and non-equivalence between old labels and public
-  cascade labels before any integrated-paper construct claim
+Paper-readiness gates:
 
-Paper-readiness:
+- Claims remain measurement and decision-useful prediction claims, not causal proof of fraud occurrence.
+- AAER is described as a severity-tail descriptive proxy.
+- Comment letters are described as public scrutiny, not complete SEC review.
+- Bridge validation is mandatory for the integrated old-benchmark/public-cascade paper claim.
 
-- claims are framed as measurement and decision-useful prediction, not causal proof of fraud
-  occurrence
-- AAER is described as a severity-tail descriptive proxy only
-- public comment letters are described as public scrutiny only, not full SEC review
-- bridge validation is treated as mandatory for the integrated old-benchmark/public-cascade
-  paper, even though it is not mandatory for running the public-data measurement pipeline
-- Future-work extensions are kept out of the main contribution unless the base paper is stable
+## Execution Contract
+
+Use `just` as the stable command surface.
+
+```bash
+just check
+just full full raw artifacts/full
+```
+
+`just check` is the data-free local quality gate: tests, lint, and strict docs build. `just full full raw artifacts/full` is the paper-facing clean run; it runs the test and lint gate before public-lake and model stages.
+
+Component reruns:
+
+```bash
+just task benchmark raw artifacts/benchmark
+just task cascade raw artifacts/public_cascade
+just task bridge raw artifacts/bridge_probe
+just task study raw artifacts/study
+```
+
+Public-lake operations:
+
+```bash
+bash scripts/run_public_lake_full.sh --dry-run
+bash scripts/run_public_lake_full.sh --mode smoke --storage-format parquet --notes-mode summary --fresh-build
+```
+
+The repo-local contract is intentionally narrow: `status` is read-only, `setup` syncs the external uv environment, `check` owns tests/lint/docs, and data-producing `task` recipes do not rerun lint implicitly.

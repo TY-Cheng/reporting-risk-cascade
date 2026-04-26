@@ -296,28 +296,42 @@ def test_readme_home_explains_project_and_workflow() -> None:
 
 def test_paper_plan_documents_required_research_spine() -> None:
     plan = _read("docs/paper_plan.md")
+    headings = [
+        line
+        for line in plan.splitlines()
+        if line.startswith("# ") or line.startswith("## ")
+    ]
+    assert headings == [
+        "# Research Design",
+        "## Research Question and Contribution",
+        "## Prior Literature and Positioning",
+        "## Measurement Design",
+        "## Data and Feature Construction",
+        "## Empirical Design",
+        "## Evidence Gates",
+        "## Execution Contract",
+    ]
     required_phrases = [
-        "Abstract Spine",
+        "Research Question and Contribution",
         "filing-origin, **pre-disclosure reporting-risk state**",
-        "Public-data estimand",
-        "Comparison boundary",
-        "do not claim leaderboard superiority",
+        "filing-origin public reporting-risk estimand",
+        "not same-estimand leaderboard claims",
         "metric-compatible ranking evidence",
         "peer model families",
         "bridge-based overlap validation",
         "legacy detected-misstatement labels",
-        "It does not by itself establish fraud truth, causal identification",
-        "Operationally, the paper combines two evidence layers",
+        "does not by itself establish latent fraud truth, causal identification",
+        "Design Overview",
         "pre-disclosure reporting-risk state",
         "gvkey-CIK-year",
-        "Label Observability and Detection-Timing Sensitivity",
+        "Label Observability and Detection Timing",
         "Concept Drift and Model Shelf-Life",
         "Opacity and Public Review/Correction Risk",
         "Public Cascade Prediction",
         "Old Benchmark and Public Cascade Overlap",
         "[Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases)",
-        "[eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl)",
-        "comment_thread_365",
+        "[SEC Inline eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl)",
+        "label_comment_thread_365",
         "label_8k_402_365",
         "label_aaer_proxy_730",
         "broad amendment/friction signal",
@@ -328,41 +342,42 @@ def test_paper_plan_documents_required_research_spine() -> None:
     ]
     for phrase in required_phrases:
         assert phrase in plan
+    assert "grid cards" not in plan
+    assert "How to use this page" not in plan
+    assert "This paper is" not in plan
 
 
 def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
     plan = _read("docs/paper_plan.md")
     required_phrases = [
-        "Execution Invariants",
-        "Evidence State and Decision Gate",
-        "benchmark evidence available",
-        "Public cascade evidence available",
-        "current full-run snapshot is `xbrl_ratio_baseline`",
-        "Integration evidence pending gate",
-        "Benchmark Timing-Sensitivity Algorithm",
+        "Measurement Design",
+        "Evidence Gates",
+        "Benchmark timing",
+        "Public cascade",
+        "current full-run state is `xbrl_ratio_baseline`",
+        "Bridge overlap",
+        "Legacy Benchmark Labels",
         "timing_coverage.csv",
         "timing_claim_status",
         "proxy_drop_observed",
         "proxy_imputed_lag",
         "flowchart LR",
         "Public-label opacity DML",
-        "metric collapse under",
+        "not as proof of look-ahead bias by itself",
         "public-label PLR spec",
-        "train_origin_year = test_year - 1",
-        "Diagnostic interpretation",
         "D = missingness_density_score",
-        "Partially linear regression",
-        "Public Cascade Feature Contract",
+        "Data integrity gates",
         "xbrl_ratio_*",
-        "XBRL ratio baseline",
-        "Outcome Semantics",
-        "Bridge Plan",
+        "xbrl_ratio_baseline",
+        "Claim Boundaries",
+        "Bridge and External Validation Inputs",
         "bridge_probe_summary.json",
         "coverage_report.csv",
         "raw_identifier_blocker",
-        "Readiness Matrix",
-        "10 requests/second",
+        "Evidence Gates",
         "zero-positive or sparse AAER robustness tasks",
+        "just check",
+        "just full full raw artifacts/full",
     ]
     for phrase in required_phrases:
         assert phrase in plan
@@ -373,8 +388,7 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
 def test_paper_plan_documents_prior_literature_and_intended_contribution() -> None:
     plan = _read("docs/paper_plan.md")
     required_phrases = [
-        "Prior Literature and Intended Contribution",
-        "Peer-Comparable Boundary",
+        "Prior Literature and Positioning",
         "Dechow, Ge, Larson, and Sloan",
         "Perols",
         "Bao, Ke, Li, Yu, and Zhang",
@@ -384,18 +398,17 @@ def test_paper_plan_documents_prior_literature_and_intended_contribution() -> No
         "Cassell, Cunningham, and Myers",
         "Bozanic, Dietrich, and Johnson",
         "Brown, Tian, and Tucker",
-        "risk-exposure funnel",
+        "not same-estimand leaderboard claims",
         "does not mechanically force an earlier-stage label",
-        "Peer Models and Metric Comparability",
-        "Dechow F-score baseline",
+        "Dechow-style scores",
         "legacy model zoo",
-        "Bao-style ranking metrics",
-        "metric-comparable, not outcome-equivalent",
-        "partial-observability models are not a PR-AUC comparator",
-        "Comment-letter papers are regression evidence",
+        "Bao-style top-fraction balanced accuracy",
+        "Metric-compatible",
+        "not PR-AUC comparators",
+        "regression-style evidence",
         "Using Machine Learning to Detect Misstatements",
-        "The intended contribution is not another horse race",
-        "Expected Evidence and Contribution Boundaries",
+        "The intended contribution is a measurement redesign",
+        "Peer models and metrics are used for compatibility checks",
     ]
     for phrase in required_phrases:
         assert phrase in plan
