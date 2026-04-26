@@ -4,9 +4,9 @@ Working title:
 
 **From Restatements to Public Review and Correction: Label Observability and the Public Reporting-Risk Cascade**
 
-This paper studies how reporting-risk prediction changes when the outcome is aligned with what is observable at a filing origin. Traditional firm-year misstatement benchmarks are useful, but their labels are detected after the fact and often combine reporting risk with discovery, disclosure delay, and selective public visibility. The project therefore treats the legacy `gvkey x data_year` panel as a diagnostic benchmark rather than as the sole research object.
+Traditional misstatement and restatement benchmarks label firm-years after misconduct is detected, disclosed, or made publicly visible. These labels are useful, but they mix the underlying reporting problem with discovery probability, disclosure delay, and selective observability. This paper asks whether reporting-risk prediction can be reframed at the filing origin: using only information publicly visible when a filing is made, can we rank issuers by their subsequent entry into an observable review-and-correction process?
 
-The main empirical object is a filing-native public reporting-risk cascade built from SEC and PCAOB public data. The estimand is the risk, measured at the filing origin, that an issuer subsequently enters a public review-and-correction process: comment-letter scrutiny, amended filings, Item 4.02 non-reliance disclosures, and rare severity-tail [Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) matches. The design is public-data-first, reproducible, and explicit about the bridge required to compare this public cascade with legacy detected-misstatement labels.
+The paper's main empirical object is a filing-native public reporting-risk cascade built from SEC and PCAOB data. The cascade measures four public outcomes: SEC comment-letter scrutiny within 365 days, amended-filing or filing-friction events within 365 days, Item 4.02 non-reliance disclosures within 365 days, and rare severity-tail [Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) matches within 730 days. The contribution is not a new classifier or a claim of leaderboard superiority over prior fraud-prediction models. It is a redesign of the estimand, from ex post detected misstatement to filing-origin public reporting-risk. The legacy `gvkey x data_year` benchmark remains in the paper as a diagnostic layer for timing sensitivity, label observability, concept drift, and missingness, while the public cascade is the primary measurement and prediction target.
 
 ## Research Question and Contribution
 
@@ -81,6 +81,18 @@ The public cascade is a multi-label outcome system, not a deterministic hierarch
 - `label_aaer_proxy_730`: rare AAER severity-tail descriptor, fit only as robustness when positives are sufficient.
 
 A later-stage positive does not mechanically force an earlier-stage label. Comment letters, amendments, 8-K Item 4.02 events, and AAER matches remain separate binary fields; co-occurrence and conditional rates are descriptive outputs.
+
+The public cascade therefore answers a different question from the legacy
+benchmark. The legacy benchmark asks whether a firm-year is eventually observed
+as a detected misstatement. The public cascade asks whether, from the filing
+origin, public information ranks issuers that will later enter observable review
+or correction channels. This is a prediction problem, but the target is public
+review-and-correction risk rather than latent fraud truth.
+
+These labels are not alternative names for fraud. They are public observability
+states: regulatory scrutiny (`comment_thread`), filing correction or friction
+(`amendment`), material non-reliance (`8k_402`), and rare public enforcement-tail
+evidence (`aaer_proxy`).
 
 ### Timing and Censoring Rules
 
@@ -166,6 +178,24 @@ P1/P2 extensions include proxy-governance content, SEC insider-pressure features
 
 Predictive tables report PR-AUC, ROC-AUC, Brier score, Brier Skill Score, expected calibration error, top-50/100/200 precision, and Bao-style top-fraction metrics. Bao-style metrics follow the inspection-budget logic used in Bao, Ke, Li, Yu, and Zhang: top-fraction precision, sensitivity, specificity, balanced accuracy, and binary-relevance NDCG@k. Calibration metrics are diagnostic under class imbalance and resampling.
 
+`Prevalence` is the positive-class rate in the evaluated sample. It is the
+natural random-ranking baseline for PR-AUC: when positives are rare, a PR-AUC
+that looks numerically small can still represent meaningful lift over the base
+rate. ROC-AUC has a fixed random baseline near 0.5 and can therefore look much
+larger than PR-AUC in rare-event settings. The paper interprets PR-AUC together
+with prevalence and top-fraction metrics rather than as an absolute accuracy
+scale.
+
+Prediction experiments use annual out-of-time evaluation, not random
+cross-validation. For a given test year, the training set contains only earlier
+years, with either an expanding window or rolling 5-, 7-, and 10-year windows.
+This split design is stricter than random cross-validation for filing-origin
+questions because it prevents future observations from entering the training
+fold. Cross-fitting appears separately in Double / Debiased Machine Learning
+(DML) opacity diagnostics, where nuisance models are fit on folds to estimate
+adjusted associations; it is not the train/test split used for the headline
+prediction tables.
+
 ### Experiment 1: Label Observability and Detection Timing
 
 **Purpose.** Quantify how sensitive traditional restatement evaluation is to timing coverage and unknown-positive assumptions.
@@ -190,7 +220,7 @@ Predictive tables report PR-AUC, ROC-AUC, Brier score, Brier Skill Score, expect
 
 **Purpose.** Test whether pre-origin opacity and missingness profiles predict later public scrutiny or correction.
 
-**Design.** Construct missingness-density and missing-profile indicators; estimate DML-style partially linear regressions on public labels:
+**Design.** Construct missingness-density and missing-profile indicators; estimate Double / Debiased Machine Learning (DML) partially linear regressions on public labels:
 
 ```text
 Primary Y:
@@ -203,7 +233,10 @@ X = pre-origin metadata, XBRL, filing-friction, public-history, auditor, oversig
     note-opacity, and calendar controls
 ```
 
-The old `misstatement firm-year` outcome remains a legacy diagnostic only.
+The old `misstatement firm-year` outcome remains a legacy diagnostic only. In
+this setting, DML is used to ask whether opacity remains associated with public
+review or correction after flexibly adjusting for high-dimensional controls. It
+is not the main prediction model and it is not a causal design by itself.
 
 **Outputs.** Missing-profile clusters, public-label PLR spec results, nuisance-model metadata, and diagnostic benchmark-side DML outputs.
 
@@ -277,12 +310,37 @@ Paper-readiness gates:
 
 Use `just` as the stable command surface.
 
+Quality gate:
+
 ```bash
 just check
-just full full raw artifacts/full
 ```
 
-`just check` is the data-free local quality gate: tests, lint, and strict docs build. `just full full raw artifacts/full` is the paper-facing clean run; it runs the test and lint gate before public-lake and model stages.
+`just check` is the data-free local quality gate: tests, lint, and strict docs
+build.
+
+Data engineering plus core experiments:
+
+```bash
+just full mode=full dataset=raw out_dir=artifacts/full fresh_build=0 resume=1
+```
+
+This is the paper-facing core run. It runs setup, tests, and lint; builds or
+resumes the public lake; writes Silver and Gold public-lake artifacts; then runs
+the benchmark, public-cascade, and bridge-probe study components. Peer comparison
+is deliberately not part of the default `just full` path, because the peer suite
+is a heavier benchmark-only compatibility layer.
+
+Peer-compatible literature suite:
+
+```bash
+just task study raw artifacts/full_with_peer \
+  extra="--peer-comparison-mode full --parallel-jobs 2 --model-threads 4 --seed-policy task-isolated"
+```
+
+This reruns the study layer against the completed public lake and adds the PR1
+peer suite: Dechow-family, Perols-family, Bao-inspired, and Bertomeu-style
+benchmark models plus the full peer metrics contract.
 
 If the public-lake build has already completed Silver normalization and failed
 only while writing Gold panels, resume from the DAG markers without a fresh
@@ -299,6 +357,7 @@ just task benchmark raw artifacts/benchmark
 just task cascade raw artifacts/public_cascade
 just task bridge raw artifacts/bridge_probe
 just task study raw artifacts/study
+just task study raw artifacts/study_peer_light extra="--peer-comparison-mode light"
 ```
 
 Public-lake operations:
@@ -308,4 +367,7 @@ bash scripts/run_public_lake_full.sh --dry-run
 bash scripts/run_public_lake_full.sh --mode smoke --storage-format parquet --notes-mode summary --fresh-build
 ```
 
-The repo-local contract is intentionally narrow: `status` is read-only, `setup` syncs the external uv environment, `check` owns tests/lint/docs, and data-producing `task` recipes do not rerun lint implicitly.
+The repo-local contract is intentionally narrow: `status` is read-only, `setup`
+syncs the external uv environment, `check` owns tests/lint/docs, `full` owns the
+restartable data-engineering plus core-study path, and `task study ... extra=...`
+is the explicit entrypoint for peer comparisons or other study-layer variants.
