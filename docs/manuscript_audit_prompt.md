@@ -47,6 +47,15 @@ Evidence hierarchy for claims:
 4. Do not search SaaS pricing pages or perform a live data-budget review unless
    the user explicitly asks for that separate task.
 
+Claim-strength ladder:
+- reportable finding: directly supported by current generated artifacts and safe
+  to use in the main text.
+- candidate evidence: useful and artifact-backed, but dependent on candidate_farr,
+  sparse labels, or another stated validation limit.
+- diagnostic only: useful for motivation, design checks, or appendices, but not a
+  standalone paper claim.
+- not supported: absent, contradicted, or too speculative for the current paper.
+
 Core manuscript thesis to preserve:
 The paper is a measurement redesign, not a model leaderboard. It combines:
 - a benchmark layer using the old gvkey x data_year restatement CSV to diagnose
@@ -64,16 +73,24 @@ fully integrated merged panel.
 Files to read first:
 1. reporting-risk-cascade/docs/paper_plan.md
 2. reporting-risk-cascade/README.md
-3. reporting-risk-cascade/docs/future_work.md
-4. reporting-risk-cascade-manuscript manuscript source files, including any .tex, .md, .bib,
+3. reporting-risk-cascade/docs/results_snapshot.md
+4. reporting-risk-cascade/docs/future_work.md
+5. reporting-risk-cascade-manuscript manuscript source files, including any .tex, .md, .bib,
    tables, figure captions, appendices, and notes.
-5. Generated artifacts only if the manuscript makes empirical claims tied to them,
+6. Generated artifacts only if the manuscript makes empirical claims tied to them,
    such as benchmark_summary.md, public_cascade_summary.md,
    bridge_probe_summary.json, rolling_metrics.csv, timing_coverage.csv, or
    public_cascade_metrics.csv.
+7. If artifacts/full_with_peer exists, inspect the peer-enabled result set before
+   judging manuscript claims: study_summary.md, study_run_manifest.json,
+   legacy_model_family_metrics.csv, public_model_family_metrics.csv,
+   public_model_family_task_status.csv, construct_overlap_summary.md,
+   label_contingency_lift.csv, public_score_legacy_ranking.csv,
+   reciprocal_alignment.csv, and event_time_concentration.csv.
 
 If reporting-risk-cascade-manuscript is empty or incomplete, report that as a manuscript-readiness
-blocker and provide a proposed manuscript skeleton. Do not invent results.
+blocker and provide a proposed manuscript skeleton based on paper_plan.md and
+results_snapshot.md. Do not invent results.
 
 Audit dimensions:
 
@@ -154,6 +171,32 @@ Flag and correct any misuse of these terms:
   complete latent misstatement occurrence.
 - Check whether artifact-backed claims distinguish readiness diagnostics from
   submission-ready findings.
+- Classify each empirical claim using the claim-strength ladder above.
+- Treat public-lake scale, public-cascade readiness, and annual out-of-time
+  ranking of public review-and-correction risk as reportable findings when they
+  are supported by current artifacts.
+- Check whether PR-AUC is reported with the relevant prevalence/base-rate, and
+  whether top-k precision or lift is framed as screening evidence rather than a
+  calibrated decision rule.
+- Check whether screening claims discuss asymmetric costs and false negatives
+  for regulatory or audit use, without inventing a utility model.
+- Check whether predictor text and outcome text are kept separate. Predictor
+  text must come from documents with public filing date <= origin_date; any
+  amendment, 8-K Item 4.02, comment-letter, or other outcome-side text filed
+  after origin_date is future information.
+- Treat feature-family results as feature fusion, not XBRL dominance, unless the
+  artifact shows XBRL or another family clearly dominates the common-sample run.
+- Check whether feature-family comparisons use a common-sample design or clearly
+  disclose when coverage differences affect the comparison.
+- Treat public-label peer transfer as model-family transfer and metric-language
+  alignment, not original-paper replication or leaderboard superiority.
+- Treat candidate-level construct-overlap, reciprocal risk-score alignment, and
+  event-time concentration as candidate evidence while validation_tier remains
+  candidate_farr.
+- Do not let a single-fold 2020 8k_402 result replace model-family or
+  feature-family averages as the headline.
+- Treat null public-opacity DML p-values as evidence against a strong strategic-silence claim;
+  this is a current-run limitation.
 
 6. Identification and inference discipline
 - Flag any causal language unless a real identification design is present.
@@ -163,6 +206,18 @@ Flag and correct any misuse of these terms:
   restrictions not defended in the manuscript.
 - Flag any public-cascade prediction result described as "detecting fraud" rather
   than estimating reporting-risk or public scrutiny/correction risk.
+- Ensure the manuscript separates regulatory/disclosure risk from unpriced market risk
+  or market inefficiency. If market variables are absent, do not allow
+  claims about market pricing. If market variables appear as pre-origin public
+  signals, require the specific variable and artifact to be cited.
+- Check whether public comment-letter scrutiny is described as endogenous scrutiny
+  or propensity to be reviewed where appropriate, not latent fraud or
+  complete misreporting risk.
+- Interpret feature importance as predictive association, not as structural
+  drivers, causal determinants, or proof that a mechanism is true.
+- Treat concept drift as an economic finding only when the manuscript names a
+  dated regime/event and gives a short mechanism. Otherwise, drift evidence is
+  diagnostic only.
 - Check whether limitations acknowledge partial observability, detection delay,
   right censoring, and public-source incompleteness.
 
@@ -177,6 +232,13 @@ Flag and correct any misuse of these terms:
     observability in restatement research.
   - SEC/PCAOB public-data source documentation when source availability or timing
     rules are discussed.
+- Check whether the manuscript explicitly positions against the comment-letter prediction literature.
+  Predicting comment threads is not novel by itself; the
+  novelty must come from the filing-origin estimand, cascade structure, or
+  reproducible public-data design.
+- Check whether institutional details for SEC comment letters, 8-K Item 4.02,
+  XBRL, Form AP, AAER, and first-public-date construction are accurate and
+  supported by public documentation or appropriate literature.
 - Flag uncited claims, stale claims, and suspicious author-year mismatches.
 - If live web verification is needed, use primary sources only and state which
   claims were verified externally.
@@ -189,6 +251,9 @@ Flag prose that sounds generic, overclaimed, or machine-written. Watch for:
 - repetitive "we contribute by" lists without economic logic
 - vague phrases such as "novel framework", "leveraging advanced AI", "robust
   insights", "comprehensive analysis", or "state-of-the-art" without evidence
+- red-flag phrases such as "outperforms", "superior to", "first to show",
+  "opens the black box", and "to the best of our knowledge" when used to inflate
+  contribution or result claims
 - defensive prose that reads like a response memo rather than a paper
 - bloated transition paragraphs that restate the same claim
 - excessive slash terms and jargon clusters
@@ -210,6 +275,38 @@ mechanism-driven.
   layers, public cascade labels, and bridge gate?
 - Does the paper avoid overfitting its framing to "AI" when the actual contribution
   is accounting measurement and reproducible public-data design?
+
+10. Current results and selling-point discipline
+- Does the manuscript lead with public review-and-correction risk, filing-origin
+  observability, and measurement redesign rather than classifier novelty?
+- Does it use the public lake scale and typed artifact chain as reproducibility
+  evidence, without sounding like engineering marketing?
+- Does it state that comment-thread and amendment outcomes are the broad stable
+  public signals, while 8-K Item 4.02 is rarer but sharper?
+- Does it use the bridge evidence to argue related-but-non-identical constructs,
+  not equivalence between legacy misstatement labels and public labels?
+- Does it keep AAER as severity-tail support and avoid stable enforcement
+  prediction language?
+- Does it report peer-compatible model families as a check on accounting ML
+  comparability, not as a claim of superiority over prior studies?
+- Does it avoid burying the strongest limitation: current integrated evidence is
+  candidate-level until a WRDS-quality bridge is supplied?
+- Does it distinguish static snapshot numbers from live artifact evidence when
+  quoting current results?
+
+11. Referee robustness check
+- What is the economic insight beyond another misstatement classifier?
+- Why is public comment-letter scrutiny a valid selected public outcome rather
+  than full SEC review?
+- How does the paper distinguish latent misreporting risk from endogenous
+  scrutiny or propensity to be reviewed?
+- What decision changes for regulators, auditors, investors, or researchers if
+  they can observe a filing-origin public reporting-risk score?
+- Why is public-data-first a scientific information-set design rather than a
+  budget compromise?
+- Does the benchmark layer remain a diagnostic for timing, drift, missingness,
+  and peer-compatible metrics rather than a direct accuracy contest against the
+  public cascade?
 
 Output format:
 
@@ -234,13 +331,14 @@ For each finding, include:
 
 Then provide:
 - a terminology ledger: approved term, forbidden/unsafe term, required caveat
-- a claim-to-evidence ledger: claim, needed artifact/citation, status
-- a public-data support ledger: data source, public/private status, manuscript
-  claim supported, caveat
+- a claim-to-evidence + claim-strength table: claim, artifact or citation,
+  strength category, caveat, manuscript placement
+- a short public-data support ledger: data source, public/private status, claim
+  supported, caveat
 - a citation audit: missing, weak, or mismatched references
 - a bridge-gate assessment: whether the manuscript honestly separates benchmark,
   public cascade, and overlap validation
-- five example rewrites of the worst prose if manuscript text exists
+- example rewrites only for severe prose issues or claim-boundary violations
 - a prioritized revision plan with no more than 10 items
 
 Constraints:
