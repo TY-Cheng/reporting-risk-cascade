@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Results Snapshot
 
 !!! warning "Static snapshot"

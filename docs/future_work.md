@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Deferred Extensions
 
 This page records the research program after the current benchmark plus public
@@ -15,14 +20,14 @@ not become an engineering omnibus before the measurement spine is stable.
 
 <div class="grid cards" markdown>
 
--   :material-text-box-search-outline: __Multimodal cascade__
+- :material-text-box-search-outline: __Multimodal cascade__
 
     ---
 
     Add filing text only after the structured public cascade and lead-time baselines
     are stable.
 
--   :material-finance: __Attention and market layers__
+- :material-finance: __Attention and market layers__
 
     ---
 
@@ -31,14 +36,14 @@ not become an engineering omnibus before the measurement spine is stable.
     Transactions are a narrower P1 issuer-CIK extension in the current paper plan,
     not part of this security-level expansion.
 
--   :material-account-network-outline: __Auditor and oversight network__
+- :material-account-network-outline: __Auditor and oversight network__
 
     ---
 
     Expand Form AP and PCAOB structure into network-style monitoring exposure only
     after issuer-auditor joins are reliable.
 
--   :material-alert-decagram-outline: __Richer detector labels__
+- :material-alert-decagram-outline: __Richer detector labels__
 
     ---
 
@@ -73,11 +78,11 @@ not become an engineering omnibus before the measurement spine is stable.
 
 Working title:
 
-**Narrative and Monitoring Signals in the Public Reporting-Risk Cascade**
+__Narrative and Monitoring Signals in the Public Reporting-Risk Cascade__
 
 Alternative title:
 
-**Occurrence, Detection, Disclosure: A Multimodal Graph of Corporate Reporting Risk**
+__Occurrence, Detection, Disclosure: A Multimodal Graph of Corporate Reporting Risk__
 
 ### Research Question
 

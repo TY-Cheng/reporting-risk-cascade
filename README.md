@@ -113,13 +113,15 @@ Peer-compatible model-family transfer:
 
 ```bash
 just task study raw artifacts/full_with_peer \
-  extra="--peer-comparison-mode full --parallel-jobs 2 --model-threads 4 --seed-policy task-isolated"
+  extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
 ```
 
 This reruns the study layer against the completed public lake and adds the
 legacy benchmark peer suite plus the public-label peer transfer suite on
 `issuer_origin_panel.parquet`. The public peer suite covers `comment_thread`,
 `amendment`, and `8k_402`; `aaer_proxy` remains a sparse severity-tail status.
+Use `--peer-target public` to refresh public-label peer outputs without rerunning
+the legacy benchmark peer suite.
 
 Component reruns:
 

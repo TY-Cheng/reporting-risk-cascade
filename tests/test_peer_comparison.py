@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -157,6 +158,15 @@ def test_mapping_quality_enum_and_budget_guard(monkeypatch: pytest.MonkeyPatch) 
     validate_parallel_budget(parallel_jobs=1, model_threads=1)
     with pytest.raises(ValueError, match="parallel budget exceeds available cores"):
         validate_parallel_budget(parallel_jobs=2, model_threads=1)
+
+
+def test_median_imputer_keeps_empty_features_without_warning() -> None:
+    frame = pd.DataFrame({"all_missing": [None, None], "observed": [1.0, 2.0]})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        transformed = pc._median_imputer().fit_transform(frame)
+    assert transformed.shape == (2, 2)
+    assert not any("Skipping features without any observed values" in str(w.message) for w in caught)
 
 
 def test_peer_comparison_light_mode_writes_pr1_artifacts(tmp_path: Path) -> None:

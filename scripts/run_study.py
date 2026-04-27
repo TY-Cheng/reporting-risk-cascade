@@ -41,6 +41,29 @@ def _resolve_project_path(value: str | Path | None, *, default: Path) -> Path:
     return REPO_ROOT / path
 
 
+def _existing_or_skipped_component(
+    *,
+    should_run: bool,
+    out_dir: Path,
+    summary_name: str,
+    manifest_name: str,
+) -> dict[str, str]:
+    if should_run:
+        return {"status": "pending"}
+    manifest_path = out_dir / manifest_name
+    if manifest_path.exists():
+        component = {
+            "status": "existing",
+            "out_dir": str(out_dir),
+            "manifest_json": str(manifest_path),
+        }
+        summary_path = out_dir / summary_name
+        if summary_path.exists():
+            component["summary_md"] = str(summary_path)
+        return component
+    return {"status": "skipped"}
+
+
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
@@ -145,6 +168,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Run PR1 benchmark peer-compatible comparison suite",
     )
+    parser.add_argument(
+        "--peer-target",
+        choices=["legacy", "public", "both"],
+        default=None,
+        help=(
+            "Peer suite target. Use public with --peer-comparison-mode full to refresh "
+            "public-label peer transfer without rerunning legacy peer outputs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -229,7 +261,16 @@ def main() -> None:
     inputs = cfg.get("inputs", {})
     outputs = cfg.get("outputs", {})
     peer_cfg = dict(cfg.get("peer_comparison", {}))
+    if args.parallel_jobs is not None:
+        peer_cfg["parallel_jobs"] = args.parallel_jobs
+    if args.model_threads is not None:
+        peer_cfg["model_threads"] = args.model_threads
     peer_mode = args.peer_comparison_mode or str(peer_cfg.get("mode", "none"))
+    peer_target = args.peer_target or str(peer_cfg.get("target", "both"))
+    if peer_target not in {"legacy", "public", "both"}:
+        raise ValueError("peer target must be one of: legacy, public, both")
+    run_legacy_peer = peer_mode != "none" and peer_target in {"legacy", "both"}
+    run_public_peer = peer_mode == "full" and peer_target in {"public", "both"}
 
     raw_data_arg = args.raw_data or args.raw_csv
     raw_csv = _resolve_project_path(
@@ -272,10 +313,18 @@ def main() -> None:
             "benchmark": {"status": "skipped" if args.skip_benchmark else "pending"},
             "public_cascade": {"status": "skipped" if args.skip_public_cascade else "pending"},
             "bridge_probe": {"status": "skipped" if args.skip_bridge_probe else "pending"},
-            "peer_comparison": {"status": "skipped" if peer_mode == "none" else "pending"},
-            "public_peer_comparison": {
-                "status": "pending" if peer_mode == "full" else "skipped"
-            },
+            "peer_comparison": _existing_or_skipped_component(
+                should_run=run_legacy_peer,
+                out_dir=peer_comparison_out,
+                summary_name="peer_comparison_summary.md",
+                manifest_name="peer_comparison_manifest.json",
+            ),
+            "public_peer_comparison": _existing_or_skipped_component(
+                should_run=run_public_peer,
+                out_dir=public_peer_comparison_out,
+                summary_name="public_model_family_summary.md",
+                manifest_name="public_model_family_manifest.json",
+            ),
             "construct_overlap": {
                 "run_status": "skipped" if args.skip_construct_overlap else "pending",
                 "validation_tier": "none",
@@ -292,6 +341,9 @@ def main() -> None:
             "model_threads": args.model_threads,
             "seed_policy": args.seed_policy,
             "peer_comparison_mode": peer_mode,
+            "peer_target": peer_target,
+            "peer_parallel_jobs": int(peer_cfg.get("parallel_jobs", 1)),
+            "peer_model_threads": int(peer_cfg.get("model_threads", 1)),
         },
     }
 
@@ -312,7 +364,7 @@ def main() -> None:
             "out_dir": str(benchmark_out),
         }
 
-    if peer_mode != "none":
+    if run_legacy_peer:
         if not raw_csv.exists():
             raise FileNotFoundError(f"peer comparison raw table not found: {raw_csv}")
         peer_summary = run_peer_comparison(
@@ -349,7 +401,7 @@ def main() -> None:
             "out_dir": str(public_cascade_out),
         }
 
-    if peer_mode == "full":
+    if run_public_peer:
         if not issuer_origin_panel.exists():
             raise FileNotFoundError(
                 "public peer comparison issuer_origin_panel not found. Build the public lake first "

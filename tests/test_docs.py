@@ -67,7 +67,8 @@ def test_project_identity_uses_reporting_risk_cascade_name() -> None:
 
     assert pyproject["project"]["name"] == "reporting-risk-cascade"
     assert "# Reporting Risk Cascade" in readme
-    assert home.strip() == '--8<-- "README.md:docs-home"'
+    assert home.strip().endswith('--8<-- "README.md:docs-home"')
+    assert "hide:" in home
     assert "reproducible research workspace" in readme
     assert "reporting-risk-cascade-manuscript" in env_example
 
@@ -156,6 +157,7 @@ def test_ci_workflow_is_clean_checkout_safe() -> None:
     assert "run: just _ruff" not in ci
     assert "scripts/run_study.py" in ci
     assert "--peer-comparison-mode light" in ci
+    assert "--peer-target legacy" in ci
     assert "--skip-benchmark" in ci
     assert "--skip-public-cascade" in ci
     assert "--skip-bridge-probe" in ci
@@ -222,7 +224,8 @@ def test_farr_bridge_scripts_are_documented_and_provenance_tagged() -> None:
 
 def test_docs_home_is_the_readme_snippet_only() -> None:
     home = _read("docs/index.md")
-    assert home.strip() == '--8<-- "README.md:docs-home"'
+    assert home.strip().endswith('--8<-- "README.md:docs-home"')
+    assert "hide:" in home
 
 
 def test_results_snapshot_exposes_current_main_artifact_results() -> None:
@@ -334,6 +337,7 @@ def test_readme_home_explains_project_and_workflow() -> None:
         "SEC Form 8-K",
         "just full full raw artifacts/full",
         "just task study raw",
+        "--peer-target public",
     ]
     for phrase in required_phrases:
         assert phrase in home
@@ -358,32 +362,37 @@ def test_paper_plan_documents_required_research_spine() -> None:
     ]
     required_phrases = [
         "Research Question and Contribution",
-        "filing-origin, **pre-disclosure reporting-risk state**",
+        "**Core question.**",
+        "**Timing contamination.**",
+        "**Main contribution.**",
+        "**Construct claim.**",
+        "**Evidence requirement.**",
         "filing-origin public reporting-risk estimand",
         "not same-estimand superiority claims",
         "metric-compatible ranking evidence",
-        "peer model families",
+        "Peer models and metrics",
         "bridge-based overlap validation",
         "legacy detected-misstatement labels",
-        "as a detected misstatement",
+        "ex post detected misconduct",
         "review-and-correction risk rather than latent fraud truth",
         "does not by itself establish latent fraud truth, causal identification",
         "positive-class rate",
         "random-ranking baseline for PR-AUC",
         "annual out-of-time evaluation",
-        "stricter than random cross-validation",
         "Cross-fitting appears separately",
         "Double / Debiased Machine Learning (DML)",
         "not alternative names for fraud",
         "Design Overview",
-        "pre-disclosure reporting-risk state",
+        "```mermaid",
+        "flowchart LR",
+        "pre-disclosure public reporting-risk state",
         "gvkey-CIK-year",
         "Label Observability and Detection Timing",
         "Concept Drift and Model Shelf-Life",
         "Opacity and Public Review/Correction Risk",
         "Public Cascade Prediction",
         "Old Benchmark and Public Cascade Overlap",
-        "[Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases)",
+        "[SEC Accounting and Auditing Enforcement Releases](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases)",
         "[SEC Inline eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl)",
         "label_comment_thread_365",
         "label_8k_402_365",
@@ -399,10 +408,17 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "just full full raw artifacts/full",
         "artifacts/full_with_peer",
         "--peer-comparison-mode full",
+        "--peer-target both",
         "repository home page",
     ]
     for phrase in required_phrases:
         assert phrase in plan
+    for experiment in range(1, 7):
+        block = plan.split(f"### Experiment {experiment}:", maxsplit=1)[1].split(
+            "### Experiment " if experiment < 6 else "## Evidence Gates", maxsplit=1
+        )[0]
+        for anchor in ["**Purpose.**", "**Design.**", "**Outputs.**", "**Interpretation.**"]:
+            assert anchor in block
     assert "grid cards" not in plan
     assert "How to use this page" not in plan
     assert "This paper is" not in plan
@@ -424,7 +440,7 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
         "proxy_imputed_lag",
         "flowchart LR",
         "Public-label opacity DML",
-        "not as proof of look-ahead bias by itself",
+        "not proof of look-ahead bias by itself",
         "public-label PLR spec",
         "D = missingness_density_score",
         "Data integrity gates",
@@ -439,10 +455,11 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
         "validation_tier = candidate_farr",
         "raw_identifier_blocker",
         "Evidence Gates",
-        "zero-positive or sparse AAER robustness tasks",
+        "Zero-positive or sparse AAER robustness tasks",
         "just check",
         "just full full raw artifacts/full",
         "--peer-comparison-mode full",
+        "--peer-target public",
         "repository home page",
     ]
     for phrase in required_phrases:

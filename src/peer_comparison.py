@@ -326,10 +326,14 @@ def _apply_undersample_equal(
     return X.iloc[chosen].copy(), y_arr[chosen]
 
 
+def _median_imputer() -> SimpleImputer:
+    return SimpleImputer(strategy="median", keep_empty_features=True)
+
+
 def _linear_pipeline(*, class_weight: Optional[str], max_iter: int) -> Pipeline:
     return Pipeline(
         steps=[
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", _median_imputer()),
             ("scale", StandardScaler()),
             (
                 "model",
@@ -346,7 +350,7 @@ def _linear_pipeline(*, class_weight: Optional[str], max_iter: int) -> Pipeline:
 def _tree_pipeline(*, seed: int, max_depth: int, class_weight: Optional[str]) -> Pipeline:
     return Pipeline(
         steps=[
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", _median_imputer()),
             (
                 "model",
                 DecisionTreeClassifier(
@@ -377,7 +381,7 @@ def _bagged_pipeline(
     )
     return Pipeline(
         steps=[
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", _median_imputer()),
             (
                 "model",
                 BaggingClassifier(
@@ -410,10 +414,10 @@ def _xgb_model(*, seed: int, n_estimators: int, max_depth: int, n_jobs: int) -> 
 
 
 def _svm_pipeline(*, seed: int) -> Pipeline:
-    svm = LinearSVC(class_weight="balanced", max_iter=2000, random_state=seed)
+    svm = LinearSVC(class_weight="balanced", max_iter=5000, random_state=seed, tol=1e-3)
     return Pipeline(
         steps=[
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", _median_imputer()),
             ("scale", StandardScaler()),
             ("model", CalibratedClassifierCV(svm, cv=3)),
         ]
@@ -423,7 +427,7 @@ def _svm_pipeline(*, seed: int) -> Pipeline:
 def _mlp_pipeline(*, seed: int) -> Pipeline:
     return Pipeline(
         steps=[
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", _median_imputer()),
             ("scale", StandardScaler()),
             (
                 "model",
@@ -457,7 +461,7 @@ def _stacking_pipeline(*, seed: int) -> Pipeline:
     ]
     return Pipeline(
         steps=[
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", _median_imputer()),
             ("scale", StandardScaler()),
             (
                 "model",
@@ -710,7 +714,7 @@ def _dechow_fixed_predict(
     X_train: pd.DataFrame,
     X_test: pd.DataFrame,
 ) -> np.ndarray:
-    imputer = SimpleImputer(strategy="median")
+    imputer = _median_imputer()
     train = pd.DataFrame(
         imputer.fit_transform(X_train),
         columns=X_train.columns,

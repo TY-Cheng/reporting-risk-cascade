@@ -379,7 +379,7 @@ def _public_dml_matrix(
     if not parts:
         return np.zeros((len(work), 1), dtype=float), ["constant_control"]
     X = pd.concat(parts, axis=1)
-    imputer = SimpleImputer(strategy="median")
+    imputer = SimpleImputer(strategy="median", keep_empty_features=True)
     return imputer.fit_transform(X), used
 
 

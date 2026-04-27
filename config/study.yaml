@@ -23,8 +23,9 @@ bridge:
 
 peer_comparison:
   mode: "none"
-  parallel_jobs: 1
-  model_threads: 1
+  target: "both"
+  parallel_jobs: 4
+  model_threads: 2
   memory_profile: "local_mac_conservative"
   light_timeout_seconds: 90
 

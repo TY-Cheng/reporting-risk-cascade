@@ -114,4 +114,5 @@ jobs:
             --skip-benchmark \
             --skip-public-cascade \
             --skip-bridge-probe \
-            --peer-comparison-mode light
+            --peer-comparison-mode light \
+            --peer-target legacy
