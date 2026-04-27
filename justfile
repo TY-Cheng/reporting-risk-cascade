@@ -33,16 +33,20 @@ _test-core:
     uv run pytest -q \
         tests/test_benchmark.py \
         tests/test_bridge.py \
+        tests/test_construct_overlap.py \
         tests/test_data_prep.py \
         tests/test_docs.py \
         tests/test_peer_comparison.py \
         tests/test_public_cascade_interfaces.py \
+        tests/test_public_peer_comparison.py \
         tests/test_table_io_sample.py \
         --cov=src.benchmark \
         --cov=src.bridge \
+        --cov=src.construct_overlap \
         --cov=src.data_prep \
         --cov=src.peer_comparison \
         --cov=src.public_cascade \
+        --cov=src.public_peer_comparison \
         --cov=src.ranking_metrics \
         --cov=src.sample_dataset \
         --cov=src.table_io \

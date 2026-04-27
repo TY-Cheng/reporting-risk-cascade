@@ -122,7 +122,7 @@ def _peer_raw_full_mapping(tmp_path: Path) -> Path:
     return raw
 
 
-def test_mapping_quality_enum_and_budget_guard() -> None:
+def test_mapping_quality_enum_and_budget_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     assert aggregate_mapping_quality(pd.DataFrame()) == "skipped"
     assert (
         aggregate_mapping_quality(
@@ -153,6 +153,10 @@ def test_mapping_quality_enum_and_budget_guard() -> None:
         )
     with pytest.raises(ValueError, match="parallel budget exceeds available cores"):
         validate_parallel_budget(parallel_jobs=10_000, model_threads=10_000)
+    monkeypatch.setenv("PEER_MAX_WORKERS", "1")
+    validate_parallel_budget(parallel_jobs=1, model_threads=1)
+    with pytest.raises(ValueError, match="parallel budget exceeds available cores"):
+        validate_parallel_budget(parallel_jobs=2, model_threads=1)
 
 
 def test_peer_comparison_light_mode_writes_pr1_artifacts(tmp_path: Path) -> None:

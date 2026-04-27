@@ -6,7 +6,7 @@ Working title:
 
 Traditional misstatement and restatement benchmarks label firm-years after misconduct is detected, disclosed, or made publicly visible. These labels are useful, but they mix the underlying reporting problem with discovery probability, disclosure delay, and selective observability. This paper asks whether reporting-risk prediction can be reframed at the filing origin: using only information publicly visible when a filing is made, can we rank issuers by their subsequent entry into an observable review-and-correction process?
 
-The paper's main empirical object is a filing-native public reporting-risk cascade built from SEC and PCAOB data. The cascade measures four public outcomes: SEC comment-letter scrutiny within 365 days, amended-filing or filing-friction events within 365 days, Item 4.02 non-reliance disclosures within 365 days, and rare severity-tail [Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) matches within 730 days. The contribution is not a new classifier or a claim of leaderboard superiority over prior fraud-prediction models. It is a redesign of the estimand, from ex post detected misstatement to filing-origin public reporting-risk. The legacy `gvkey x data_year` benchmark remains in the paper as a diagnostic layer for timing sensitivity, label observability, concept drift, and missingness, while the public cascade is the primary measurement and prediction target.
+The paper's main empirical object is a filing-native public reporting-risk cascade built from SEC and PCAOB data. The cascade measures four public outcomes: SEC comment-letter scrutiny within 365 days, amended-filing or filing-friction events within 365 days, Item 4.02 non-reliance disclosures within 365 days, and rare severity-tail [Accounting and Auditing Enforcement Releases (AAER)](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) matches within 730 days. The contribution is not a new classifier or a claim that one model family dominates prior fraud-prediction studies. It is a redesign of the estimand, from ex post detected misstatement to filing-origin public reporting-risk. The legacy `gvkey x data_year` benchmark remains in the paper as a diagnostic layer for timing sensitivity, label observability, concept drift, and missingness, while the public cascade is the primary measurement and prediction target.
 
 ## Research Question and Contribution
 
@@ -17,7 +17,7 @@ The intended contribution is a measurement redesign, not a claim that one classi
 - Static detected-misstatement labels are timing-contaminated: they mix occurrence, discovery, and public reporting lag.
 - The repo defines a filing-origin public reporting-risk estimand based only on information visible at or before `origin_date`.
 - The public cascade is expected to be related to, but not identical with, legacy detected-misstatement labels.
-- Peer models and metrics are used for compatibility checks; comparisons provide metric-compatible ranking evidence, not same-estimand leaderboard claims.
+- Peer models and metrics are used for compatibility checks; comparisons provide metric-compatible ranking evidence, not same-estimand superiority claims.
 - Credible bridge-based overlap validation is required before any integrated old-benchmark/public-cascade claim.
 
 ### Design Overview
@@ -43,7 +43,7 @@ flowchart LR
 
 ## Prior Literature and Positioning
 
-The closest literature provides model families, metrics, and construct anchors. It does not provide a one-to-one leaderboard because the target differs: prior fraud and restatement studies often predict detected ex post misconduct labels, while this paper predicts subsequent public review-and-correction events from a filing-origin information set.
+The closest literature provides model families, metrics, and construct anchors. It does not provide a one-to-one performance comparison because the target differs: prior fraud and restatement studies often predict detected ex post misconduct labels, while this paper predicts subsequent public review-and-correction events from a filing-origin information set.
 
 | Stream | Canonical anchors | Typical models and metrics | Role in this paper |
 | --- | --- | --- | --- |
@@ -75,10 +75,10 @@ The benchmark claim is deliberately limited. `res_an0`, `res_an1`, `res_an2`, an
 
 The public cascade is a multi-label outcome system, not a deterministic hierarchy.
 
-- `label_comment_thread_365`: public comment-letter scrutiny, measured from the first public EDGAR date of the comment-thread sequence.
-- `label_amendment_365`: broad amendment/friction signal, including administrative amendments, filing friction, and potentially material corrections.
-- `label_8k_402_365`: Item 4.02 non-reliance and material-correction proxy.
-- `label_aaer_proxy_730`: rare AAER severity-tail descriptor, fit only as robustness when positives are sufficient.
+- `label_comment_thread_365`: public comment-letter scrutiny, measured from the first public EDGAR date of the comment-thread sequence; source: [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) and public EDGAR correspondence.
+- `label_amendment_365`: broad amendment/friction signal, including administrative amendments, filing friction, and potentially material corrections; source: [SEC EDGAR filing access](https://www.sec.gov/edgar/search-and-access) and amended filing form metadata.
+- `label_8k_402_365`: Item 4.02 non-reliance and material-correction proxy; source: [SEC Form 8-K](https://www.sec.gov/files/form8-k.pdf), Item 4.02.
+- `label_aaer_proxy_730`: rare AAER severity-tail descriptor, fit only as robustness when positives are sufficient; source: [SEC Accounting and Auditing Enforcement Releases](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) and `farr::aaer_*` support data.
 
 A later-stage positive does not mechanically force an earlier-stage label. Comment letters, amendments, 8-K Item 4.02 events, and AAER matches remain separate binary fields; co-occurrence and conditional rates are descriptive outputs.
 
@@ -266,11 +266,11 @@ is not the main prediction model and it is not a causal design by itself.
 
 **Purpose.** Test whether legacy detected-misstatement labels and public review-and-correction labels measure related but non-identical constructs.
 
-**Design.** Run the bridge probe, report coverage and multiplicity, then test event-time concentration and risk-score alignment in the mapped sample.
+**Design.** Run the bridge probe, report coverage and multiplicity, then test event-time concentration and reciprocal risk-score alignment in the mapped sample. The current implementation uses farr `gvkey_ciks` as a high-coverage candidate bridge; WRDS remains the preferred final validation source.
 
-**Outputs.** `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, `unmatched_raw_characteristics.csv`, overlap panels, ranking alignment tables, and event-time figures.
+**Outputs.** `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, `unmatched_raw_characteristics.csv`, `construct_overlap/label_contingency_lift.csv`, `construct_overlap/public_score_legacy_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, `construct_overlap/event_time_concentration.csv`, and AAER severity-tail support tables.
 
-**Interpretation.** This is the integrated-paper gate. A farr bridge can support candidate overlap analysis; WRDS remains preferred before final manuscript claims.
+**Interpretation.** This is the integrated-paper gate. The farr bridge supports candidate overlap validation; WRDS remains preferred before final manuscript claims.
 
 ## Evidence Gates
 
@@ -278,10 +278,10 @@ is not the main prediction model and it is not a causal design by itself.
 | --- | --- | --- |
 | Benchmark timing | implemented as observability sensitivity | report `timing_coverage.csv`, retained positives, and imputed-lag scenarios; external timing required for paper-grade maturation |
 | Concept drift | implemented as rolling-window diagnostics | validate annual PR-AUC, Brier Skill Score, feature-importance drift, and breakpoint summaries |
-| Opacity | public-label DML implemented | public-label PLR results must use `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` as primary outcomes |
+| Opacity | public-label DML implemented; refresh summary is separate from construct overlap | public-label PLR results must use `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` as primary outcomes |
 | Public lake | full public lake path implemented | refreshed source coverage, row counts, censoring, and reproducibility metadata |
 | Public cascade | current full-run state is `xbrl_ratio_baseline` | non-degenerate comment-thread, amendment, and 8-K Item 4.02 tasks; AAER framed as severity-tail evidence |
-| Bridge overlap | farr `gvkey_ciks` is a high-coverage candidate | coverage, multiplicity, no silent many-to-many joins, and WRDS-preferred validation before final integrated claims |
+| Bridge overlap | farr candidate overlap implemented | coverage, multiplicity, reciprocal alignment, no silent many-to-many joins, and WRDS-preferred validation before final integrated claims |
 
 Data integrity gates:
 
@@ -290,6 +290,7 @@ Data integrity gates:
 - `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` stay outside default predictors.
 - Censoring masks are horizon-specific.
 - Crosswalk coverage and multiplicity are reported before overlap validation.
+- Construct-overlap outputs carry `validation_tier = candidate_farr` until a verified WRDS bridge is supplied.
 
 Empirical sufficiency gates:
 
@@ -305,69 +306,24 @@ Paper-readiness gates:
 - AAER is described as a severity-tail descriptive proxy.
 - Comment letters are described as public scrutiny, not complete SEC review.
 - Bridge validation is mandatory for the integrated old-benchmark/public-cascade paper claim.
+- Candidate farr overlap can support a related-but-non-identical construct argument, but not final WRDS-quality validation.
 
 ## Execution Contract
 
-Use `just` as the stable command surface.
-
-Quality gate:
+The operational command surface lives in the repository home page and README so
+there is a single maintained entrypoint for users and coauthors. The research
+design depends on three stable commands:
 
 ```bash
 just check
-```
-
-`just check` is the data-free local quality gate: tests, lint, and strict docs
-build.
-
-Data engineering plus core experiments:
-
-```bash
-just full mode=full dataset=raw out_dir=artifacts/full fresh_build=0 resume=1
-```
-
-This is the paper-facing core run. It runs setup, tests, and lint; builds or
-resumes the public lake; writes Silver and Gold public-lake artifacts; then runs
-the benchmark, public-cascade, and bridge-probe study components. Peer comparison
-is deliberately not part of the default `just full` path, because the peer suite
-is a heavier benchmark-only compatibility layer.
-
-Peer-compatible literature suite:
-
-```bash
+just full full raw artifacts/full
 just task study raw artifacts/full_with_peer \
   extra="--peer-comparison-mode full --parallel-jobs 2 --model-threads 4 --seed-policy task-isolated"
 ```
 
-This reruns the study layer against the completed public lake and adds the PR1
-peer suite: Dechow-family, Perols-family, Bao-inspired, and Bertomeu-style
-benchmark models plus the full peer metrics contract.
-
-If the public-lake build has already completed Silver normalization and failed
-only while writing Gold panels, resume from the DAG markers without a fresh
-build:
-
-```bash
-just full mode=full dataset=raw out_dir=artifacts/full resume=1
-```
-
-Component reruns:
-
-```bash
-just task benchmark raw artifacts/benchmark
-just task cascade raw artifacts/public_cascade
-just task bridge raw artifacts/bridge_probe
-just task study raw artifacts/study
-just task study raw artifacts/study_peer_light extra="--peer-comparison-mode light"
-```
-
-Public-lake operations:
-
-```bash
-bash scripts/run_public_lake_full.sh --dry-run
-bash scripts/run_public_lake_full.sh --mode smoke --storage-format parquet --notes-mode summary --fresh-build
-```
-
-The repo-local contract is intentionally narrow: `status` is read-only, `setup`
-syncs the external uv environment, `check` owns tests/lint/docs, `full` owns the
-restartable data-engineering plus core-study path, and `task study ... extra=...`
-is the explicit entrypoint for peer comparisons or other study-layer variants.
+`just check` is the local quality gate. `just full full raw artifacts/full` is
+the paper-facing core run for data engineering and core experiments. The
+`full_with_peer` study command adds the legacy and public-label peer model-family
+transfer suites. Component-level reruns and public-lake operational details are
+documented in [the repository home page](index.md), which includes the root
+`README.md`.

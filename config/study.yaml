@@ -12,6 +12,9 @@ outputs:
   public_cascade_subdir: "public_cascade"
   bridge_probe_subdir: "bridge_probe"
   peer_comparison_subdir: "peer_comparison"
+  public_peer_comparison_subdir: "public_peer_comparison"
+  construct_overlap_subdir: "construct_overlap"
+  opacity_validation_refresh_subdir: "opacity_validation_refresh"
 
 bridge:
   overlap_start_year: 2011

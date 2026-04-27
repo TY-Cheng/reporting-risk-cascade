@@ -1084,7 +1084,11 @@ def _summary_markdown(
 
 
 def validate_parallel_budget(*, parallel_jobs: int, model_threads: int) -> None:
-    available = os.cpu_count() or 1
+    env_limit = os.environ.get("PEER_MAX_WORKERS")
+    if env_limit:
+        available = max(1, int(env_limit))
+    else:
+        available = max(1, (os.cpu_count() or 1) - 1)
     requested = int(parallel_jobs) * int(model_threads)
     if requested > available:
         raise ValueError(

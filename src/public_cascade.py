@@ -18,13 +18,13 @@ import yaml
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
 from xgboost import XGBClassifier
 
-from .ranking_metrics import BAO_TOP_FRACTIONS, bao_top_fraction_metrics
+from .benchmark import compute_metrics
+from .ranking_metrics import BAO_TOP_FRACTIONS
 from .table_io import read_table, write_table
 
 
@@ -237,35 +237,16 @@ def _build_model(
     return clf
 
 
-def _evaluate_binary(y_true: np.ndarray, prob: np.ndarray) -> Dict[str, float]:
+def _evaluate_binary(
+    y_true: np.ndarray,
+    prob: np.ndarray,
+    *,
+    top_k: Sequence[int] = (50, 100, 200),
+) -> Dict[str, float]:
+    metrics = compute_metrics(np.asarray(y_true, dtype=int), np.asarray(prob, dtype=float), top_k=top_k)
     if len(np.unique(y_true)) < 2:
-        roc_auc = np.nan
-        pr_auc = np.nan
-    else:
-        roc_auc = float(roc_auc_score(y_true, prob))
-        pr_auc = float(average_precision_score(y_true, prob))
-    try:
-        brier = float(brier_score_loss(y_true, prob))
-    except ValueError:
-        brier = np.nan
-    prevalence = float(np.mean(y_true)) if len(y_true) else np.nan
-    try:
-        brier_null = float(brier_score_loss(y_true, np.full(len(y_true), prevalence)))
-    except ValueError:
-        brier_null = np.nan
-    brier_skill_score = (
-        float(1.0 - brier / brier_null)
-        if np.isfinite(brier) and np.isfinite(brier_null) and brier_null > 0
-        else np.nan
-    )
-    metrics = {
-        "roc_auc": roc_auc,
-        "pr_auc": pr_auc,
-        "brier": brier,
-        "brier_null": brier_null,
-        "brier_skill_score": brier_skill_score,
-    }
-    metrics.update(bao_top_fraction_metrics(y_true, prob))
+        metrics["roc_auc"] = np.nan
+        metrics["pr_auc"] = np.nan
     return metrics
 
 
@@ -653,7 +634,7 @@ def _run_public_cascade_unit(
         )
         model.fit(x_task_train, y_train)
         prob = model.predict_proba(x_task_test)[:, 1]
-        metrics = _evaluate_binary(y_test.to_numpy(), prob)
+        metrics = _evaluate_binary(y_test.to_numpy(), prob, top_k=[50, 100, 200])
         metric_rows.append(
             {
                 "_task_order": int(task_order),
@@ -858,6 +839,12 @@ def run_public_cascade(
         "brier",
         "brier_null",
         "brier_skill_score",
+        "ece",
+        "ece_quantile",
+        "ece_method",
+        "top_50_precision",
+        "top_100_precision",
+        "top_200_precision",
     ]
     for fraction in BAO_TOP_FRACTIONS:
         pct = int(round(float(fraction) * 100))

@@ -20,6 +20,7 @@
 | Public issuer panel | `data/public_lake/gold/issuer_origin_panel.parquet` |
 | Public filing panel | `data/public_lake/gold/filing_origin_panel.parquet` |
 | Bridge crosswalk | `data/external/gvkey_cik_year.csv` |
+| Construct overlap | `complete`, `validation_tier=candidate_farr` |
 | Peer comparison | `full`, benchmark-only PR1 suite |
 
 ## Evidence Map
@@ -350,11 +351,13 @@ These Double / Debiased Machine Learning (DML) estimates are high-dimensional
 adjusted associations, not causal effects. The current public-label results do
 not support a strong strategic-silence claim.
 
-## Table 10. Bridge and Construct-Overlap Gate
+## Table 10. Bridge and Construct-Overlap Validation
 
 | Field | Value |
 | --- | ---: |
 | Bridge probe status | `external_crosswalk_available` |
+| Construct-overlap status | `complete` |
+| Validation tier | `candidate_farr` |
 | Raw benchmark rows | 82,908 |
 | Raw benchmark firms | 9,156 |
 | Candidate crosswalk rows | 81,825 |
@@ -368,12 +371,83 @@ not support a strong strategic-silence claim.
 | Public-overlap rate among crosswalk candidates | 0.5888 |
 | Ambiguous raw rows | 583 |
 
-The farr-derived `gvkey-CIK-year` file moves the bridge from missing input to
-high-coverage candidate bridge. It does not, by itself, complete construct
-validation. The next paper-relevant step is an overlap table that compares
-legacy detected-misstatement labels with public-cascade labels and rankings on
-the matched issuer-year sample. WRDS remains the preferred final validation
-source if available.
+The farr-derived `gvkey-CIK-year` file is now a high-coverage candidate bridge
+for construct-overlap validation. This is not a WRDS-verified bridge, so the
+integrated claim remains candidate-level rather than final manuscript-grade
+validation.
+
+## Table 11. Candidate Construct-Overlap Evidence
+
+| Evidence item | Result | Interpretation |
+| --- | ---: | --- |
+| High-confidence overlap rows | 47,418 | annual `gvkey x data_year` rows with one public issuer-year match |
+| High-confidence legacy positives | 1,425 | matched legacy detected-misstatement positives |
+| Ambiguous matched rows | 406 | retained only for sensitivity |
+| Dropped rows | 35,084 | mostly outside public-panel coverage or bridge match |
+| Balanced event-time rows | 22,628 | rows with full `[-3,+3]` public coverage |
+| farr AAER firm-years in raw benchmark | 422 | external severity-tail support rows |
+| farr AAER and legacy-positive overlap | 243 | descriptive AAER support, not a headline target |
+
+| Public label | High-confidence public positives | Both legacy and public positive | Lift of public label given legacy positive |
+| --- | ---: | ---: | ---: |
+| `comment_thread_365` | 14,518 | 443 | 1.02 |
+| `amendment_365` | 10,184 | 582 | 1.90 |
+| `8k_402_365` | 1,109 | 286 | 8.58 |
+| `aaer_proxy_730` | 0 | 0 | n/a |
+
+This pattern is the clearest current evidence for related but non-identical
+constructs. Legacy positives are much more likely to coincide with serious
+public correction signals, especially 8-K Item 4.02, but comment-letter
+scrutiny is broader and only weakly concentrated in legacy positives.
+
+## Figure 4. Construct-Overlap Signal
+
+```mermaid
+flowchart LR
+    A["High-confidence overlap<br/>47,418 rows"] --> B["Legacy positives<br/>1,425 rows"]
+    B --> C["Any public label<br/>863 rows"]
+    B --> D["Amendment<br/>582 rows"]
+    B --> E["8-K Item 4.02<br/>286 rows"]
+    B --> F["No public cascade label<br/>562 rows"]
+```
+
+## Table 12. Risk-Score Alignment
+
+| Direction | Best row | Target positives | ROC-AUC | PR-AUC | Top-decile lift | 95% CI |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Public cascade score -> legacy positives | `public_cascade`, `8k_402`, `all`, `rolling_10y` | 146 | 0.6784 | 0.0316 | 3.01 | [2.32, 3.78] |
+| Legacy/peer score -> public labels | `bertomeu_style_xgb`, `label_8k_402_365`, `expanding`, `naive` | 549 | 0.7038 | 0.0436 | 3.06 | [2.69, 3.45] |
+
+The reciprocal result matters. Public-cascade scores can rank legacy positives
+on the matched sample, and legacy benchmark-style scores can rank the severe
+public correction label. The two directions support construct overlap without
+collapsing the two labels into the same estimand.
+
+## Table 13. Event-Time Concentration
+
+Balanced-window rows use full `[-3,+3]` public coverage around the legacy
+`data_year`. These are descriptive rates only; no significance tests are
+reported.
+
+| Relative year | Public label | Legacy-positive rate | Legacy-negative rate | Raw difference |
+| ---: | --- | ---: | ---: | ---: |
+| -1 | `amendment_365` | 0.3024 | 0.1889 | 0.1135 |
+| -1 | `8k_402_365` | 0.1003 | 0.0179 | 0.0824 |
+| 0 | `amendment_365` | 0.4087 | 0.1821 | 0.2266 |
+| 0 | `8k_402_365` | 0.2111 | 0.0166 | 0.1945 |
+| +1 | `amendment_365` | 0.3728 | 0.1741 | 0.1987 |
+| +1 | `8k_402_365` | 0.1916 | 0.0174 | 0.1743 |
+
+## Table 14. AAER and Opacity Refresh
+
+| Component | Result | Interpretation |
+| --- | ---: | --- |
+| farr AAER raw benchmark firm-years | 422 | external severity-tail support |
+| farr AAER and legacy-positive overlap | 243 | old benchmark captures many farr AAER firm-years |
+| farr AAER high-confidence public rows | 220 | bridgeable but sparse in public-score prediction years |
+| farr AAER ranking status | `blocked_sparse` | do not report stable AAER ranking metrics |
+| Public opacity DML rows | 3 fitted outcomes | copied from existing DML artifacts, not refit |
+| Public opacity DML p-values | 0.8002, 0.5688, 0.7141 | no adjusted association in this run |
 
 ## Discussion
 
@@ -402,9 +476,10 @@ source if available.
 - Public-label opacity DML does not show a significant adjusted association in
   this run. Strategic opacity should be presented as a tested but unsupported
   mechanism unless future specifications change the evidence.
-- The bridge is no longer blocked by missing identifiers, but construct overlap
-  is still the main paper-readiness gate. The current candidate crosswalk is
-  strong enough to run overlap validation; it is not a final WRDS-quality claim.
+- Construct-overlap validation is now implemented on the farr candidate bridge.
+  The strongest overlap evidence is concentrated in amendment and 8-K Item 4.02
+  outcomes, while comment-thread scrutiny remains broader. WRDS remains the
+  preferred final bridge before manuscript-level integrated claims.
 - Overall, the current evidence supports a reproducible measurement-and-ranking
   paper on public review-and-correction risk. It does not support causal claims,
   fraud-truth claims, or leaderboard superiority over prior fraud-prediction
@@ -428,3 +503,10 @@ source if available.
 - `artifacts/full_with_peer/public_cascade/public_opacity_dml.csv`
 - `artifacts/full_with_peer/bridge_probe/bridge_probe_summary.json`
 - `artifacts/full_with_peer/bridge_probe/coverage_report.csv`
+- `artifacts/full_with_peer/construct_overlap/construct_overlap_summary.md`
+- `artifacts/full_with_peer/construct_overlap/label_contingency_lift.csv`
+- `artifacts/full_with_peer/construct_overlap/public_score_legacy_ranking.csv`
+- `artifacts/full_with_peer/construct_overlap/reciprocal_alignment.csv`
+- `artifacts/full_with_peer/construct_overlap/event_time_concentration.csv`
+- `artifacts/full_with_peer/construct_overlap/farr_aaer_public_overlap.csv`
+- `artifacts/full_with_peer/opacity_validation_refresh/opacity_diagnostics_summary.csv`

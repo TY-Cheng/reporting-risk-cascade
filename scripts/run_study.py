@@ -117,6 +117,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--skip-bridge-probe", action="store_true", help="Do not run bridge probe")
     parser.add_argument(
+        "--skip-construct-overlap",
+        action="store_true",
+        help="Do not run candidate bridge construct-overlap validation",
+    )
+    parser.add_argument(
         "--parallel-jobs",
         type=int,
         default=None,
@@ -159,10 +164,12 @@ def _write_summary(
         "",
         "## Completed Components",
     ]
-    for key in ["benchmark", "public_cascade", "peer_comparison"]:
+    for key in ["benchmark", "public_cascade", "peer_comparison", "public_peer_comparison"]:
         if key not in manifest["components"]:
             continue
-        status = manifest["components"][key]["status"]
+        status = manifest["components"][key].get(
+            "status", manifest["components"][key].get("run_status", "unknown")
+        )
         out = manifest["components"][key].get("out_dir", "")
         lines.append(f"- `{key}`: {status}; output: `{out}`")
 
@@ -184,6 +191,12 @@ def _write_summary(
         lines.append(f"- Bridge probe status: `{bridge_probe.get('status')}`")
         if bridge_probe.get("summary_json"):
             lines.append(f"- Bridge probe summary: `{bridge_probe.get('summary_json')}`")
+    construct_overlap = manifest["components"].get("construct_overlap", {})
+    if construct_overlap:
+        lines.append(
+            f"- Construct-overlap status: `{construct_overlap.get('run_status')}`; "
+            f"validation tier: `{construct_overlap.get('validation_tier')}`"
+        )
 
     lines.extend(
         [
@@ -192,6 +205,8 @@ def _write_summary(
             "- `benchmark/benchmark_summary.md`",
             "- `public_cascade/public_cascade_summary.md`",
             "- `peer_comparison/peer_comparison_summary.md` when peer mode is enabled",
+            "- `public_peer_comparison/public_model_family_summary.md` when peer full mode is enabled",
+            "- `construct_overlap/construct_overlap_summary.md` when bridge validation runs",
             "- `study_run_manifest.json`",
         ]
     )
@@ -204,8 +219,10 @@ def main() -> None:
     from src import LAKE_GOLD_DIR, LAKE_SILVER_DIR, RAW_DATASET_PATH
     from src.benchmark import run_benchmark
     from src.bridge import run_bridge_probe
+    from src.construct_overlap import run_construct_overlap
     from src.peer_comparison import run_peer_comparison
     from src.public_cascade import run_public_cascade
+    from src.public_peer_comparison import run_public_peer_comparison
 
     args = parse_args()
     cfg = _load_yaml(args.config)
@@ -237,6 +254,15 @@ def main() -> None:
     peer_comparison_out = args.out_dir / str(
         outputs.get("peer_comparison_subdir", "peer_comparison")
     )
+    public_peer_comparison_out = args.out_dir / str(
+        outputs.get("public_peer_comparison_subdir", "public_peer_comparison")
+    )
+    construct_overlap_out = args.out_dir / str(
+        outputs.get("construct_overlap_subdir", "construct_overlap")
+    )
+    opacity_refresh_out = args.out_dir / str(
+        outputs.get("opacity_validation_refresh_subdir", "opacity_validation_refresh")
+    )
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: dict[str, Any] = {
@@ -247,6 +273,13 @@ def main() -> None:
             "public_cascade": {"status": "skipped" if args.skip_public_cascade else "pending"},
             "bridge_probe": {"status": "skipped" if args.skip_bridge_probe else "pending"},
             "peer_comparison": {"status": "skipped" if peer_mode == "none" else "pending"},
+            "public_peer_comparison": {
+                "status": "pending" if peer_mode == "full" else "skipped"
+            },
+            "construct_overlap": {
+                "run_status": "skipped" if args.skip_construct_overlap else "pending",
+                "validation_tier": "none",
+            },
         },
         "inputs": {
             "raw_data": str(raw_csv),
@@ -316,6 +349,26 @@ def main() -> None:
             "out_dir": str(public_cascade_out),
         }
 
+    if peer_mode == "full":
+        if not issuer_origin_panel.exists():
+            raise FileNotFoundError(
+                "public peer comparison issuer_origin_panel not found. Build the public lake first "
+                f"or pass --issuer-origin-panel explicitly. Missing path: {issuer_origin_panel}"
+            )
+        public_peer_summary = run_public_peer_comparison(
+            config_path=args.public_cascade_config,
+            issuer_origin_panel_path=issuer_origin_panel,
+            out_dir=public_peer_comparison_out,
+            mode=peer_mode,
+            peer_config=peer_cfg,
+        )
+        manifest["components"]["public_peer_comparison"] = {
+            "status": "complete",
+            "out_dir": str(public_peer_comparison_out),
+            "summary_md": str(public_peer_summary["summary_md"]),
+            "manifest_json": str(public_peer_summary["manifest_json"]),
+        }
+
     if not args.skip_bridge_probe:
         if not raw_csv.exists():
             raise FileNotFoundError(f"bridge raw table not found: {raw_csv}")
@@ -330,6 +383,22 @@ def main() -> None:
             "status": bridge_summary.get("status", "unknown"),
             "out_dir": str(bridge_probe_out),
             "summary_json": str(bridge_probe_out / "bridge_probe_summary.json"),
+        }
+
+    if not args.skip_construct_overlap:
+        overlap_summary = run_construct_overlap(
+            study_dir=args.out_dir,
+            out_dir=construct_overlap_out,
+            opacity_out_dir=opacity_refresh_out,
+            crosswalk_path=crosswalk,
+            issuer_origin_panel_path=issuer_origin_panel,
+        )
+        manifest["components"]["construct_overlap"] = {
+            "run_status": overlap_summary.get("run_status", "unknown"),
+            "validation_tier": overlap_summary.get("validation_tier", "none"),
+            "out_dir": str(construct_overlap_out),
+            "summary_md": str(construct_overlap_out / "construct_overlap_summary.md"),
+            "manifest_json": str(construct_overlap_out / "construct_overlap_manifest.json"),
         }
 
     crosswalk_exists = crosswalk.exists()

@@ -106,6 +106,9 @@ def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
     )
     assert informative["brier_null"] == pytest.approx(0.25)
     assert informative["brier_skill_score"] > 0
+    assert "ece" in informative
+    assert "ece_quantile" in informative
+    assert "top_50_precision" in informative
 
     x, y = _prepare_xy(
         pd.DataFrame({"feature": ["1", "bad"], "label": ["1", None]}),
@@ -531,6 +534,12 @@ model:
     opacity_dml = pd.read_csv(result["public_opacity_dml_csv"])
     assert not metrics.empty
     assert "brier_skill_score" in metrics.columns
+    assert "ece" in metrics.columns
+    assert "ece_quantile" in metrics.columns
+    assert "ece_method" in metrics.columns
+    assert "top_50_precision" in metrics.columns
+    assert "top_100_precision" in metrics.columns
+    assert "top_200_precision" in metrics.columns
     assert "bao_top_1pct_ndcg" in metrics.columns
     assert "bao_top_5pct_precision" in metrics.columns
     assert not predictions.empty
@@ -561,9 +570,11 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
         "__init__.py",
         "bridge.py",
         "benchmark.py",
+        "construct_overlap.py",
         "data_prep.py",
         "peer_comparison.py",
         "public_cascade.py",
+        "public_peer_comparison.py",
         "public_lake.py",
         "ranking_metrics.py",
         "sample_dataset.py",
@@ -582,6 +593,7 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
         "prepare_gvkey_cik_crosswalk.py",
         "run_bridge_probe.py",
         "run_benchmark.py",
+        "run_construct_overlap.py",
         "run_data_prep.py",
         "run_public_cascade.py",
         "run_public_lake_full.sh",

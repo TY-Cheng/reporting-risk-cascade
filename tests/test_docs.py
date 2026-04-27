@@ -67,8 +67,8 @@ def test_project_identity_uses_reporting_risk_cascade_name() -> None:
 
     assert pyproject["project"]["name"] == "reporting-risk-cascade"
     assert "# Reporting Risk Cascade" in readme
-    assert "# Reporting Risk Cascade" in home
-    assert "Reproducible research record" in home
+    assert home.strip() == '--8<-- "README.md:docs-home"'
+    assert "reproducible research workspace" in readme
     assert "reporting-risk-cascade-manuscript" in env_example
 
 
@@ -182,8 +182,9 @@ def test_just_check_is_the_single_data_free_quality_gate() -> None:
 
 def test_readme_points_to_current_docs_pages() -> None:
     readme = _read("README.md")
-    assert "docs/paper_plan.md" in readme
-    assert "docs/future_work.md" in readme
+    assert "[Paper Plan](paper_plan.md)" in readme
+    assert "[Results Snapshot](results_snapshot.md)" in readme
+    assert "[Future Work](future_work.md)" in readme
 
 
 def test_farr_bridge_scripts_are_documented_and_provenance_tagged() -> None:
@@ -219,16 +220,9 @@ def test_farr_bridge_scripts_are_documented_and_provenance_tagged() -> None:
     assert "farr_aaer_public_proxy_overlap.csv" in support_py_script
 
 
-def test_docs_home_keeps_readme_as_source_but_adds_material_landing_shell() -> None:
+def test_docs_home_is_the_readme_snippet_only() -> None:
     home = _read("docs/index.md")
-    assert '--8<-- "README.md:docs-home"' in home
-    assert "grid cards" in home
-    assert ".md-button" in home
-    assert "Reproducible Commands" in home
-    assert "results_snapshot.md" in home
-    assert "Readiness Snapshot" in home
-    assert "development_audit_prompt.md" in home
-    assert "manuscript_audit_prompt.md" in home
+    assert home.strip() == '--8<-- "README.md:docs-home"'
 
 
 def test_results_snapshot_exposes_current_main_artifact_results() -> None:
@@ -296,7 +290,17 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "Table 9. Opacity and Missingness Diagnostics",
         "0.8002",
         "strategic-silence claim",
-        "Table 10. Bridge and Construct-Overlap Gate",
+        "Table 10. Bridge and Construct-Overlap Validation",
+        "validation_tier=candidate_farr",
+        "Table 11. Candidate Construct-Overlap Evidence",
+        "High-confidence overlap rows",
+        "Table 12. Risk-Score Alignment",
+        "Public cascade score -> legacy positives",
+        "Legacy/peer score -> public labels",
+        "Table 13. Event-Time Concentration",
+        "Table 14. AAER and Opacity Refresh",
+        "blocked_sparse",
+        "reciprocal_alignment.csv",
         "external_crosswalk_available",
         "Row coverage rate | 0.9796",
         "Matched positive rows | 2,433 of 2,460",
@@ -316,16 +320,18 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
 def test_readme_home_explains_project_and_workflow() -> None:
     home = _read("README.md")
     required_phrases = [
-        "Project Scope",
-        "Research Spine",
+        "Research Object",
+        "Public Review-And-Correction Labels",
         "Repository Layout",
-        "Quick Workflow",
-        "End-to-End Workflow",
-        "Public Lake Workflow",
+        "Execution Contract",
+        "Public Lake",
         "Primary Artifacts",
+        "Bridge Inputs",
         "Current Gates",
-        "pre-disclosure reporting-risk state",
-        "just full smoke sample artifacts/full_smoke_sample",
+        "public observability states",
+        "SEC filing review process",
+        "SEC EDGAR filing access",
+        "SEC Form 8-K",
         "just full full raw artifacts/full",
         "just task study raw",
     ]
@@ -354,7 +360,7 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Research Question and Contribution",
         "filing-origin, **pre-disclosure reporting-risk state**",
         "filing-origin public reporting-risk estimand",
-        "not same-estimand leaderboard claims",
+        "not same-estimand superiority claims",
         "metric-compatible ranking evidence",
         "peer model families",
         "bridge-based overlap validation",
@@ -386,12 +392,14 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Brier Skill Score",
         "native missing-value handling",
         "Bao-style top-fraction balanced accuracy",
-        "Data engineering plus core experiments",
-        "just full mode=full dataset=raw out_dir=artifacts/full fresh_build=0 resume=1",
-        "Peer-compatible literature suite",
+        "SEC filing review process",
+        "SEC EDGAR filing access",
+        "SEC Form 8-K",
+        "operational command surface",
+        "just full full raw artifacts/full",
         "artifacts/full_with_peer",
         "--peer-comparison-mode full",
-        "just task study raw artifacts/study",
+        "repository home page",
     ]
     for phrase in required_phrases:
         assert phrase in plan
@@ -426,12 +434,16 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
         "Bridge and External Validation Inputs",
         "bridge_probe_summary.json",
         "coverage_report.csv",
+        "construct_overlap/public_score_legacy_ranking.csv",
+        "construct_overlap/reciprocal_alignment.csv",
+        "validation_tier = candidate_farr",
         "raw_identifier_blocker",
         "Evidence Gates",
         "zero-positive or sparse AAER robustness tasks",
         "just check",
-        "just full mode=full dataset=raw out_dir=artifacts/full fresh_build=0 resume=1",
-        "--peer-comparison-mode light",
+        "just full full raw artifacts/full",
+        "--peer-comparison-mode full",
+        "repository home page",
     ]
     for phrase in required_phrases:
         assert phrase in plan
@@ -452,7 +464,7 @@ def test_paper_plan_documents_prior_literature_and_intended_contribution() -> No
         "Cassell, Cunningham, and Myers",
         "Bozanic, Dietrich, and Johnson",
         "Brown, Tian, and Tucker",
-        "not same-estimand leaderboard claims",
+        "not same-estimand superiority claims",
         "does not mechanically force an earlier-stage label",
         "Dechow-style scores",
         "legacy model zoo",
