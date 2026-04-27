@@ -158,6 +158,8 @@ def test_ci_workflow_is_clean_checkout_safe() -> None:
     assert "scripts/run_study.py" in ci
     assert "--peer-comparison-mode light" in ci
     assert "--peer-target legacy" in ci
+    assert "--parallel-jobs 1" in ci
+    assert "--model-threads 1" in ci
     assert "--skip-benchmark" in ci
     assert "--skip-public-cascade" in ci
     assert "--skip-bridge-probe" in ci
