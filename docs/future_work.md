@@ -7,7 +7,8 @@ hide:
 
 This page records the research program after the current benchmark plus public
 cascade paper. These extensions are deliberately deferred so the main study does
-not become an engineering omnibus before the measurement spine is stable.
+not become an overextended data-engineering exercise before the measurement
+spine is stable.
 
 !!! warning "Scope guardrail"
     The current paper must first keep label-observability diagnostics, concept
@@ -52,17 +53,17 @@ not become an engineering omnibus before the measurement spine is stable.
 
 </div>
 
-=== "Activate next"
+=== "Near-Term Preconditions"
 
     - Finish the current benchmark plus public-cascade paper.
     - Validate gold-panel readiness and overlap diagnostics.
     - Promote only one extension family at a time.
 
-=== "Do not activate yet"
+=== "Deferred Until"
 
-    - Do not add graph or text models just because they are available.
-    - Do not widen the paper into a single giant SEC data warehouse story.
-    - Do not let later extensions weaken the current measurement claim.
+    - Text and graph models have a clearly defined incremental estimand.
+    - Security-level data can be linked through documented temporal bridges.
+    - Additional channels strengthen, rather than dilute, the current measurement claim.
 
 ## Extension Portfolio
 

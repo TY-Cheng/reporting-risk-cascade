@@ -251,6 +251,13 @@ def test_construct_overlap_end_to_end_writes_candidate_validation_artifacts(
 
     assert result["run_status"] == "complete"
     assert result["validation_tier"] == "candidate_farr"
+    study_manifest = json.loads((study / "study_run_manifest.json").read_text(encoding="utf-8"))
+    construct_component = study_manifest["components"]["construct_overlap"]
+    assert construct_component["run_status"] == "complete"
+    assert construct_component["validation_tier"] == "candidate_farr"
+    assert construct_component["out_dir"] == str(out)
+    assert construct_component["manifest_json"] == str(out / "construct_overlap_manifest.json")
+    assert construct_component["summary_md"] == str(out / "construct_overlap_summary.md")
     expected = [
         "construct_overlap_manifest.json",
         "construct_overlap_summary.md",
@@ -371,6 +378,11 @@ def test_construct_overlap_blocks_cleanly_when_crosswalk_is_missing(tmp_path: Pa
     )
     assert result["run_status"] == "blocked_missing_crosswalk"
     assert result["validation_tier"] == "none"
+    study_manifest = json.loads((study / "study_run_manifest.json").read_text(encoding="utf-8"))
+    assert (
+        study_manifest["components"]["construct_overlap"]["run_status"]
+        == "blocked_missing_crosswalk"
+    )
 
 
 def test_ranking_metric_sparse_and_bootstrap_thresholds() -> None:
@@ -390,4 +402,3 @@ def test_ranking_metric_sparse_and_bootstrap_thresholds() -> None:
     assert large["status"] == "fit"
     assert np.isfinite(large["top_decile_lift_ci_low"])
     assert np.isfinite(large["top_decile_lift_ci_high"])
-

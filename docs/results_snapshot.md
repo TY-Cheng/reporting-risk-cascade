@@ -5,28 +5,176 @@ hide:
 
 # Results Snapshot
 
-!!! warning "Static snapshot"
-    This page records the current local `artifacts/full_with_peer` run generated on
-    `2026-04-26`. It is a docs-facing snapshot for inspection and GitHub Pages,
-    not a substitute for rerunning the workflow. Regenerate the public lake with
-    `just full mode=full dataset=raw out_dir=artifacts/full fresh_build=0 resume=1`,
-    then rerun the full peer-enabled study with `just task study raw
-    artifacts/full_with_peer extra="--peer-comparison-mode full --parallel-jobs 2
-    --model-threads 4 --seed-policy task-isolated"` before updating these
-    numbers.
+## Discussion
+
+- **Bottom line.** The current evidence supports a reproducible
+  measurement-and-ranking paper on public review-and-correction risk; it does not support causal claims, fraud-truth claims, or leaderboard superiority over prior fraud-prediction papers.
+
+- **Does the task have empirical value?** Yes. The useful object is not another
+  static `misstatement = 1` classifier; it is a filing-origin estimand for
+  whether an issuer later enters an observable public review or correction
+  channel. That makes the task closer to the information environment faced by
+  investors, auditors, researchers, and regulators at the filing date.
+
+- **What is the main research decision behind the pipeline?** The legacy
+  `gvkey x data_year` benchmark is retained as a diagnostic layer, not treated
+  as the only ground truth. The public cascade is the main empirical object:
+  `comment_thread` for public scrutiny, `amendment` for correction/friction,
+  `8k_402` for severe material correction, and `aaer_proxy` only for sparse
+  enforcement-tail support.
+
+- **What data are used?** The workflow combines four data layers. First, the
+  legacy detected-misstatement benchmark provides 82,908 `gvkey x data_year`
+  observations from 2001-2019 for timing, drift, missingness, and peer-model
+  diagnostics. Second, the public SEC/PCAOB lake normalizes EDGAR filing
+  metadata, FSDS/XBRL numeric facts, Notes summaries, Form AP, PCAOB inspection
+  records, comment-letter correspondence, amended filings, 8-K Item 4.02 events,
+  and AAER support data. Third, the gold public panels create a 205,831-row
+  issuer-year modeling table and a 21.7 million-row filing provenance table;
+  the main domestic public-cascade sample has 90,445 issuer-year rows from
+  2011-2023. Fourth, farr support files supply the candidate `gvkey-CIK-year`
+  bridge plus AAER/date support used for construct-overlap and severity-tail
+  checks.
+
+- **What data matter most?** The most useful evidence comes from the public
+  SEC/PCAOB issuer-year panel, especially comment threads, amendments, 8-K Item
+  4.02 events, XBRL ratios, filing metadata, and auditor/oversight features. The
+  farr `gvkey-CIK-year` bridge is valuable for candidate construct-overlap
+  evidence; AAER support data are useful only as a sparse severity-tail
+  descriptor.
+
+- **Why use Parquet and the public lake?** The storage choice is part of the
+  research design. Large public filing, XBRL, Notes summary, and gold-panel
+  tables use Parquet so the workflow can rerun at realistic scale with typed
+  columns, projection pushdown, and lower repeated I/O cost. Small diagnostics
+  remain CSV/JSON/Markdown for inspection.
+
+- **What setup choices are being compared?** The public cascade fixes the task
+  definitions and varies two modeling dimensions. The task dimension covers
+  `comment_thread`, `amendment`, and `8k_402` as headline labels; `aaer_proxy`
+  is retained as sparse severity-tail status. The feature-family dimension
+  compares `metadata` (filing and issuer-origin descriptors), `xbrl` (financial
+  ratios and XBRL coverage), `auditor` (Form AP and engagement features),
+  `oversight` (PCAOB-style oversight exposure), and `all` (their union). The
+  temporal dimension compares annual `rolling_5y`, `rolling_7y`, `rolling_10y`,
+  and `expanding` train windows.
+
+- **Are these model hyperparameters?** Mostly no. The main comparisons are
+  experimental design factors: outcome definition, feature-family scope, and
+  temporal training window. They determine the empirical estimand and evaluation
+  design. Algorithmic hyperparameters, such as XGBoost `n_estimators=250`,
+  `max_depth=4`, and `learning_rate=0.05`, are held fixed in the core
+  public-cascade model so the results are interpretable as design comparisons
+  rather than a tuning exercise.
+
+- **Which design factors are studied?** The legacy benchmark varies label timing
+  assumptions (`naive`, `proxy_drop_observed`, and `proxy_imputed_lag` with
+  1-, 2-, 3-, and 5-year lags) and train windows (`rolling_5y`, `rolling_7y`,
+  `rolling_10y`, `expanding`). The public cascade varies public-label tasks,
+  feature families, and the same train-window logic. The peer suites vary model
+  family and imbalance handling, while preserving the same out-of-time split
+  design.
+
+- **Why this setup design?** The split design follows the filing-origin question.
+  The model trains on past fiscal years and tests on later fiscal years, so the
+  evaluation reflects out-of-time prediction rather than random within-panel
+  interpolation. The feature-family design separates the value of filing
+  metadata, XBRL, auditor, and oversight information, while the train-window
+  design asks whether recent history or longer accumulated history is more
+  useful. This prevents the public-data claim from collapsing into a single
+  black-box `all features` result.
+
+- **What setup works best?** The strongest core public-cascade setup is
+  `all + rolling_5y`, with equal-task mean PR-AUC `0.2475`. In the public peer
+  transfer, the `all` feature family is also strongest on average
+  (mean PR-AUC `0.2510`), with metadata remaining a strong baseline. The right
+  conclusion is feature-fusion gain, not XBRL dominance.
+
+- **What models are included, and why these models?** The model set is designed
+  for peer-compatible evidence rather than novelty. It includes Dechow-family
+  logit/F-score language, Perols-style logit/SVM/tree/bagging/stacking/MLP
+  families, Bao-inspired tree ensembles, and Bertomeu-style XGBoost. These cover
+  the main model families accounting reviewers expect to see without claiming an
+  original-paper replication.
+
+- **Which models perform best?** In the legacy benchmark peer suite,
+  `bertomeu_style_xgb` is the strongest mean PR-AUC model (`0.0427`). In the
+  public-label peer suite, `bao_inspired_tree_ensemble` and
+  `bertomeu_style_xgb` lead on mean public-label PR-AUC (`0.2244` and `0.2243`).
+  High single-fold `8k_402` rows are useful diagnostics, but they are not the
+  stable headline result.
+
+- **How should peer comparisons be read?** They are model-family transfer and
+  metric-language alignment, not original-paper numeric replication. Dechow
+  fixed F-score is skipped unless mapping quality is sufficient; Bao is reported
+  as `bao_inspired_tree_ensemble` because the repo panel is not the same raw
+  accounting-number input used in the original setting.
+
+- **What metrics are reported?** The snapshot reports PR-AUC, ROC-AUC, Brier,
+  Brier skill, equal-width and quantile ECE, fixed top-k precision, top-decile
+  lift, and Bao-style top-fraction precision, sensitivity, specificity, balanced
+  accuracy, and NDCG. The goal is to show discrimination, ranking, screening,
+  and calibration diagnostics without pretending they answer the same question.
+
+- **Which metric is most reasonable for the headline?** PR-AUC is the primary
+  headline ranking metric because the tasks are imbalanced and prevalence differs
+  sharply by label. It is also more aligned with the practical question:
+  whether high-scored issuer-years concentrate later public review or correction
+  events.
+
+- **Which metrics are most informative beyond PR-AUC?** Top-decile lift and
+  Bao-style top-fraction metrics translate ranking into screening language.
+  ROC-AUC is useful as a secondary discrimination metric. Brier and ECE are
+  calibration diagnostics, especially fragile for undersampled Perols-style
+  models.
+
+- **Why not random cross-validation?** The benchmark and public-cascade
+  prediction results use annual out-of-time rolling or expanding splits. That
+  choice is deliberate: random folds would be a weaker design for a filing-origin
+  prediction question with changing disclosure, review, and reporting regimes.
+
+- **What is the economic interpretation?** Public reporting-risk states are
+  observable and rankable at the filing origin. Comment-letter scrutiny captures
+  broad public review, amendments capture correction/friction, and 8-K Item 4.02
+  captures a rarer material-correction channel. Legacy misstatement positives
+  overlap most strongly with serious public correction outcomes, especially
+  8-K Item 4.02, but the constructs are related rather than identical.
+
+- **What should accounting readers take away?** The paper's contribution is a
+  measurement redesign: move from treating detected misstatement as the only
+  target toward a filing-origin public cascade that separates public scrutiny,
+  correction, severe correction, and sparse enforcement-tail evidence. The
+  current bridge evidence is candidate-level under farr; WRDS-quality validation
+  remains preferred before final manuscript-level integrated claims.
+
+- **What will reviewers likely scrutinize?** The strongest open gate is bridge
+  quality. farr provides high-coverage candidate evidence, but a WRDS or
+  equivalent institutional `gvkey-CIK-year` bridge is still preferred for final
+  integrated claims. AAER also remains sparse and selective, so it should stay a
+  severity-tail descriptor rather than a headline prediction target.
 
 ## Run Metadata
 
 | Field | Value |
 | --- | --- |
-| Study manifest timestamp | `2026-04-26T11:49:59+00:00` |
-| Runtime | `parallel_jobs=2`, `model_threads=4`, `seed_policy=task-isolated` |
+| Study manifest timestamp | `2026-04-27T02:27:29+00:00` |
+| Construct-overlap timestamp | `2026-04-27T02:56:13+00:00` |
+| Runtime | `parallel_jobs=4`, `model_threads=2`, `seed_policy=task-isolated` |
 | Benchmark input | `data/raw_dataset_misstatement.parquet` |
 | Public issuer panel | `data/public_lake/gold/issuer_origin_panel.parquet` |
 | Public filing panel | `data/public_lake/gold/filing_origin_panel.parquet` |
 | Bridge crosswalk | `data/external/gvkey_cik_year.csv` |
 | Construct overlap | `complete`, `validation_tier=candidate_farr` |
-| Peer comparison | `full`, benchmark-only PR1 suite |
+| Peer comparison | `full`, legacy PR1 suite plus public-label PR2 suite |
+
+Key readings:
+
+- The snapshot is based on the peer-enabled study directory,
+  `artifacts/full_with_peer`.
+- The run includes the legacy benchmark, public cascade, bridge probe,
+  legacy-peer suite, public-label peer suite, and construct-overlap validation.
+- Construct overlap is complete under the farr candidate bridge; this is not yet
+  WRDS-verified manuscript-grade bridge evidence.
 
 ## Evidence Map
 
@@ -34,21 +182,33 @@ hide:
 flowchart LR
     A["Legacy benchmark<br/>gvkey x data_year"] --> B["Timing diagnostics<br/>naive, proxy drop, imputed lag"]
     B --> C["Benchmark evidence<br/>label observability, drift, missingness"]
-    B --> P["Peer-compatible benchmark suite<br/>Dechow, Perols, Bao, Bertomeu model families"]
+    B --> P["Peer-compatible legacy suite<br/>Dechow, Perols, Bao, Bertomeu model families"]
 
     D["Public SEC/PCAOB lake<br/>filings, XBRL, Notes, Form AP, AAER"] --> E["Gold panels<br/>issuer-year modeling panel + filing provenance panel"]
     E --> F["Public cascade labels<br/>comment thread, amendment, 8-K 4.02, AAER proxy"]
     E --> G["Pre-origin features<br/>metadata, XBRL ratios, text summary, auditor, oversight"]
     F --> H["Public cascade models<br/>ranking and feature-family ablation"]
+    F --> Q["Peer-compatible public-label suite<br/>same model families, public estimand"]
     G --> H
+    G --> Q
     G --> I["Public opacity DML<br/>adjusted association, not causal effect"]
 
     C --> J["Bridge gate<br/>gvkey-CIK-year crosswalk"]
     P --> J
     H --> J
+    Q --> J
     I --> J
     J --> K["Overlap validation<br/>related but non-identical labels"]
 ```
+
+Key readings:
+
+- The left branch diagnoses legacy detected-misstatement labels; the right branch
+  builds the public filing-origin cascade.
+- Peer-compatible model families are evaluated on both the legacy and public
+  estimands, but those are not same-label leaderboards.
+- The bridge gate is what lets the paper test whether old and public labels are
+  related without treating them as identical.
 
 ## Table 1. Public Lake and Gold Panel Scale
 
@@ -65,10 +225,14 @@ flowchart LR
 | Gold | `issuer_origin_panel.parquet` | 205,831 | annual modeling panel with labels and features |
 | Gold | `filing_origin_panel.parquet` | 21,743,433 | lightweight filing-origin provenance panel |
 
-The Gold design is intentionally asymmetric. The annual `issuer_origin_panel`
-is the modeling table. The full `filing_origin_panel` preserves filing-origin
-coverage and auditability, but it is not a 21.7 million-row fully labeled
-modeling table.
+Key readings:
+
+- The public lake is at realistic scale: more than 21.7 million normalized
+  filing-origin rows support a compact annual issuer-year panel.
+- The annual `issuer_origin_panel` is the modeling table; the full
+  `filing_origin_panel` is a provenance and auditability layer.
+- Notes are in summary mode, so the run avoids raw text blobs while retaining
+  filing-level text-count signals.
 
 ## Table 2. Public Cascade Readiness
 
@@ -91,10 +255,14 @@ modeling table.
 | auditor | 6 | 0 | 0 | rolling_5y | 0.1385 |
 | oversight | 1 | 0 | 0 | expanding | 0.1225 |
 
-Interpretation: feature fusion is useful, but the increment over metadata is
-moderate rather than decisive. XBRL ratios are now present and nonzero, which
-clears the implementation gate, but XBRL alone is not the dominant feature
-family in this run.
+Key readings:
+
+- The full public-cascade panel is ready for modeling: there are no zero-positive
+  public tasks in the headline run.
+- The best equal-task configuration is `all + rolling_5y`, with mean PR-AUC
+  `0.2475`.
+- Feature fusion improves over metadata alone, but the margin is moderate; XBRL
+  ratios clear the implementation gate without dominating the run.
 
 ## Figure 1. Public Cascade Signal Gradient
 
@@ -112,14 +280,18 @@ flowchart TB
 | `8k_402` | 2,009 | 0.0221 | 0.0767 | 0.7768 | 8 | rare but rankable severe correction signal |
 | `aaer_proxy` | 20 | 0.0013 | 0.1308 | 0.7584 | 2 | feasibility signal only, not a stable claim |
 
-The public cascade result supports a measurable public reporting-risk state.
-It does not support a claim that the model recovers latent true fraud.
+Key readings:
 
-`Prevalence` is the fitted test-set positive rate. For PR-AUC, prevalence is
-the random-ranking baseline, so PR-AUC must be read relative to each task's base
-rate. This is why rare tasks can show low PR-AUC and still carry ranking signal.
-The reported `0.2475` is an equal-task mean over four public labels; it is not a
-single fraud-model headline score.
+- The public cascade supports a measurable public reporting-risk state; it does
+  not recover latent true fraud.
+- `comment_thread` and `amendment` provide the strongest and most stable public
+  review-and-correction signals.
+- `8k_402` is rare but rankable; `aaer_proxy` is too sparse for headline
+  performance claims.
+- `Prevalence` is the fitted test-set positive rate and the PR-AUC random-ranking
+  baseline, so PR-AUC must be read relative to each task's base rate.
+- The reported `0.2475` is an equal-task mean across public labels, not a single
+  fraud-model headline score.
 
 ## Table 3. Benchmark Timing Diagnostics
 
@@ -144,17 +316,19 @@ Benchmark panel:
 | Same-row positives with any `res_an*` | 151 |
 | Same-row positives without any `res_an*` | 2,309 |
 
-The timing grid is a sensitivity design, not a recovery of true detection dates.
-The naive label looks stronger, but the estimated ranking weakens as the label
-is constrained by visibility assumptions. The `proxy_drop_observed` row is a
-stress test with severe positive-class attrition; it should not be read as a
-standalone proof of look-ahead bias.
+Key readings:
 
-Benchmark and public-cascade prediction rows use annual out-of-time
-rolling/expanding splits, not random cross-validation. Double / Debiased Machine
-Learning (DML) opacity rows use cross-fitting internally for nuisance models and
-are reported as adjusted associations rather than prediction leaderboard
-results.
+- The timing grid is a sensitivity design, not a recovery of true detection
+  dates.
+- The naive detected-misstatement label ranks best, but ranking weakens as the
+  label is constrained by visibility assumptions.
+- `proxy_drop_observed` is a severe attrition stress test; it should not be read
+  as standalone proof of look-ahead bias.
+- Benchmark and public-cascade prediction rows use annual out-of-time
+  rolling/expanding splits, not random cross-validation.
+- Double / Debiased Machine Learning (DML) opacity rows use cross-fitting for
+  nuisance models and are adjusted associations, not prediction leaderboard
+  rows.
 
 ## Figure 2. Timing-Sensitivity Pattern
 
@@ -167,13 +341,23 @@ flowchart LR
     E --> F["Drop observed-only proxy<br/>PR-AUC 0.0229"]
 ```
 
+Key readings:
+
+- The ordering is monotone in the expected direction: stricter timing visibility
+  assumptions reduce apparent benchmark performance.
+- The figure motivates the paper's timing concern, but it does not establish the
+  true date of misstatement discovery.
+- The strongest claim is label-timing fragility, not a definitive correction of
+  the legacy benchmark.
+
 ## Peer-Compatible Literature Benchmarks
 
-The peer suite is a benchmark-only comparison layer. It transfers model families
-and metric language from the prior literature to the repo-native legacy
-benchmark folds; it is not an original-paper numeric replication and not a
-same-estimand leaderboard. Metrics below summarize all fitted task-fold rows in
-`legacy_model_family_metrics.csv`.
+The legacy peer suite transfers model families and metric language from the
+prior literature to the repo-native legacy benchmark folds. It is not an
+original-paper numeric replication and not a same-estimand leaderboard. Metrics
+below summarize all fitted task-fold rows in `legacy_model_family_metrics.csv`.
+The public-label peer transfer appears in the following section because it uses
+the same model-family language under the filing-origin public-cascade estimand.
 
 Metric coverage is complete for the implemented PR1 contract:
 
@@ -203,13 +387,16 @@ Metric coverage is complete for the implemented PR1 contract:
 | `perols_entropy_tree` | Perols decision-tree family | 336 | 336 | 0 | full | undersample_equal |
 | `dechow_fixed_fscore_model1` | Dechow fixed F-score model 1 | 336 | 0 | 336 | skipped | none |
 
-`dechow_fixed_fscore_model1` is deliberately skipped. The fixed published
-coefficient implementation requires full mapping quality; the current benchmark
-variables are close enough for `dechow_variable_logit` but not for a faithful
-fixed-coefficient F-score claim. The Bao adapter is likewise named
-`bao_inspired_tree_ensemble`, not `bao_style_ensemble`, because the legacy
-benchmark panel is an engineered mixed-input table rather than a raw accounting
-numbers table.
+Key readings:
+
+- The implemented peer suite covers Dechow-, Perols-, Bao-, and Bertomeu-style
+  model families on the repo's legacy benchmark folds.
+- `dechow_fixed_fscore_model1` is deliberately skipped because fixed published
+  coefficients require full mapping quality.
+- `dechow_variable_logit` is a fold-local Dechow-family logit, not a faithful
+  fixed-coefficient F-score replication.
+- The Bao adapter is reported as `bao_inspired_tree_ensemble` because the legacy
+  benchmark panel is mixed and engineered, not raw accounting-number input.
 
 ## Figure 3. Peer Model Mean PR-AUC Ranking
 
@@ -224,6 +411,15 @@ flowchart LR
     G --> H["Dechow-variable logit<br/>0.0235"]
     H --> I["Perols entropy tree<br/>0.0227"]
 ```
+
+Key readings:
+
+- `bertomeu_style_xgb` has the strongest mean legacy benchmark PR-AUC in this
+  run.
+- The Perols-style models cluster closely together; their ranking is informative
+  but not a calibrated-probability claim.
+- The Dechow and Bao rows should be read through their mapping labels, not as
+  original-paper numeric replications.
 
 ## Table 5. Peer Model Metrics
 
@@ -242,10 +438,17 @@ All entries are model-level means across fitted rows, except `max_pr_auc` and
 | `dechow_variable_logit` | 336 | 36,136.8 | 3,900.6 | 64.9 | 0.0164 | 0.5225 | 0.0235 | 0.2466 | -15.5804 | 0.4732 | 0.4732 | 0.0332 | 0.0282 | 0.0231 | 0.0672 | 0.6058 |
 | `perols_entropy_tree` | 336 | 36,136.8 | 3,900.6 | 64.9 | 0.0164 | 0.5810 | 0.0227 | 0.2245 | -14.1770 | 0.3565 | 0.3565 | 0.0298 | 0.0291 | 0.0287 | 0.0444 | 0.7981 |
 
-The calibration rows should be read with the imbalance design in mind.
-Perols-style full-mode models use equal positive/negative undersampling in
-training and are evaluated on untouched test folds. Their Brier and ECE values
-are diagnostic, not probability-calibration claims.
+Key readings:
+
+- Legacy benchmark prevalence is very low, so absolute PR-AUC values are
+  expected to be modest and should be compared within the same task/split
+  design.
+- `bertomeu_style_xgb` leads on mean PR-AUC, Brier, and calibration diagnostics
+  among the fitted peer families.
+- Perols-style full-mode models use equal positive/negative undersampling in
+  training and untouched test folds in evaluation.
+- Their Brier and ECE values are diagnostics, not evidence of calibrated
+  probabilities.
 
 ## Table 6. Best Peer Task-Fold Rows
 
@@ -260,6 +463,14 @@ are diagnostic, not probability-calibration claims.
 | `bao_inspired_tree_ensemble` | naive | rolling_10y | 2006 | mixed | 28,299 | 5,093 | 143 | 0.0281 | 0.6856 | 0.0628 | 0.0279 | -0.0232 | 0.0250 | 0.0250 | uniform_width_and_quantile | 0.0600 | 0.0800 | 0.1000 | none | native_or_class_weighted | false | 0.0000 |
 | `dechow_variable_logit` | proxy_imputed_lag_1y | rolling_5y | 2009 | ratios | 23,636 | 3,831 | 74 | 0.0193 | 0.5688 | 0.0672 | 0.2320 | -11.2476 | 0.4579 | 0.4579 | uniform_width_and_quantile | 0.1200 | 0.0800 | 0.0500 | class_weight_balanced | native_or_class_weighted | false | 0.0000 |
 | `perols_entropy_tree` | proxy_imputed_lag_2y | expanding | 2015 | mixed | 63,624 | 3,912 | 58 | 0.0148 | 0.6852 | 0.0444 | 0.1600 | -9.9542 | 0.3237 | 0.3237 | uniform_width_and_quantile | 0.1200 | 0.0700 | 0.0600 | undersample_equal | none_after_undersampling | true | 0.0000 |
+
+Key readings:
+
+- The best individual rows can be materially stronger than model-family means,
+  so they are useful diagnostics but not the headline comparison.
+- The top row remains `bertomeu_style_xgb` on the naive legacy label in 2014.
+- Several Perols-style rows rank well in specific folds, but their calibration
+  warnings remain binding.
 
 ## Table 7. Bao-Style Top-Fraction Ranking Metrics
 
@@ -315,6 +526,14 @@ sensitivity, specificity, balanced accuracy (`bac`), and NDCG.
 | `perols_entropy_tree` | top_4pct | 155.9 | 0.0291 | 0.0718 | 0.9605 | 0.5162 | 0.0592 |
 | `perols_entropy_tree` | top_5pct | 195.1 | 0.0283 | 0.0877 | 0.9506 | 0.5191 | 0.0679 |
 
+Key readings:
+
+- Bao-style top-fraction metrics translate ranking into screening language:
+  precision, sensitivity, specificity, BAC, and NDCG at top 1%-5%.
+- `bertomeu_style_xgb` dominates this table across the top-fraction cutoffs.
+- Precision remains low in absolute terms because the legacy detected-misstatement
+  base rate is low.
+
 ## Table 8. Peer Imbalance and Feature-Importance Diagnostics
 
 | Model | Imbalance strategy | Rows | Mean train N before | Mean positives before | Mean train N after | Mean positives after | Mean test prevalence |
@@ -339,9 +558,120 @@ sensitivity, specificity, balanced accuracy (`bac`), and NDCG.
 | `dechow_variable_logit` | absolute_coefficient | 3,024 |
 | `perols_entropy_tree` | feature_importance | 34,560 |
 
-Feature importance is available where the fitted model family exposes a stable
-importance or coefficient surface. The SVM and MLP adapters are included in the
-performance comparison but do not emit comparable feature-importance rows.
+Key readings:
+
+- The imbalance table makes the Perols design explicit: undersampled training
+  folds are balanced, while test folds keep the original low prevalence.
+- Feature importance is emitted only where the model family exposes a stable
+  importance or coefficient surface.
+- SVM and MLP adapters remain in the performance comparison but do not emit
+  comparable feature-importance rows.
+
+## Public-Label Peer Transfer
+
+The public peer suite applies the same peer-compatible model-family language to
+the filing-origin public-cascade tasks. It is not a comparison to prior
+fraud-prediction papers on their original labels. It asks how transferred
+Dechow/Perols/Bao/Bertomeu-style families perform on the repo's public
+review-and-correction labels.
+
+Status:
+
+| Field | Value |
+| --- | ---: |
+| Fitted task-fold rows | 4,320 |
+| Skipped status rows | 2,080 |
+| Missing Dechow fixed-score mapping rows | 480 |
+| AAER severity-tail status rows | 1,600 |
+| Headline public tasks | `comment_thread`, `amendment`, `8k_402` |
+| Severity-tail task | `aaer_proxy`, status only |
+
+Key readings:
+
+- Public peer transfer is complete for the three headline public labels.
+- `aaer_proxy` is intentionally status-only because sparse positives make stable
+  public-peer training inappropriate.
+- Skipped rows are mostly design-imposed status rows, not silent failures.
+
+Model-family means over fitted public-label task-fold rows:
+
+| Model | Rows | Mean PR-AUC | Mean ROC-AUC | Max PR-AUC | Mean Brier | Mean ECE |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bao_inspired_tree_ensemble` | 480 | 0.2244 | 0.6440 | 0.5108 | 0.1124 | 0.0315 |
+| `bertomeu_style_xgb` | 480 | 0.2243 | 0.6436 | 0.5115 | 0.1124 | 0.0314 |
+| `perols_bagged` | 480 | 0.2131 | 0.6312 | 0.4600 | 0.2237 | 0.3134 |
+| `perols_stacking` | 480 | 0.2094 | 0.6206 | 0.6385 | 0.2228 | 0.3120 |
+| `perols_logit` | 480 | 0.2077 | 0.6215 | 0.6542 | 0.2251 | 0.3025 |
+| `perols_linear_svm` | 480 | 0.2056 | 0.6156 | 0.6621 | 0.2244 | 0.3119 |
+| `perols_mlp` | 480 | 0.2020 | 0.6103 | 0.4407 | 0.2315 | 0.3093 |
+| `perols_entropy_tree` | 480 | 0.2005 | 0.6139 | 0.4398 | 0.2276 | 0.3092 |
+| `dechow_variable_logit` | 480 | 0.1586 | 0.4883 | 0.3058 | 0.2500 | 0.3537 |
+
+Key readings:
+
+- Bao-inspired and Bertomeu-style tree ensembles have the highest mean
+  public-label PR-AUC.
+- Perols-style models are competitive in some folds but show weaker calibration
+  diagnostics under undersampling.
+- Dechow-variable logit is the weakest transferred public-label family in this
+  run, consistent with conservative public proxy mapping.
+
+Task-level public peer performance:
+
+| Task | Rows | Mean prevalence | Mean PR-AUC | Mean ROC-AUC | Max PR-AUC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `comment_thread` | 1,440 | 0.2615 | 0.3292 | 0.5925 | 0.5115 |
+| `amendment` | 1,440 | 0.1552 | 0.2331 | 0.6102 | 0.3870 |
+| `8k_402` | 1,440 | 0.0221 | 0.0529 | 0.6270 | 0.6621 |
+
+Key readings:
+
+- `comment_thread` is the easiest public-label task on mean PR-AUC because it is
+  more prevalent and better supported.
+- `amendment` provides a clear correction/friction ranking task.
+- `8k_402` has low mean PR-AUC because it is rare, but some folds show strong
+  ranking performance.
+
+Feature-family means:
+
+| Feature set | Rows | Mean PR-AUC | Mean ROC-AUC | Max PR-AUC |
+| --- | ---: | ---: | ---: | ---: |
+| `all` | 864 | 0.2510 | 0.6845 | 0.6621 |
+| `metadata` | 864 | 0.2389 | 0.6631 | 0.4695 |
+| `xbrl` | 864 | 0.1937 | 0.6032 | 0.4525 |
+| `auditor` | 864 | 0.1796 | 0.5647 | 0.6533 |
+| `oversight` | 864 | 0.1621 | 0.5340 | 0.3403 |
+
+Key readings:
+
+- The `all` feature family is strongest on average, supporting feature fusion.
+- Metadata remains a strong baseline; added public feature families help but do
+  not erase the metadata signal.
+- XBRL, auditor, and oversight families are useful ablations rather than
+  standalone dominant feature groups in this run.
+
+Best public-peer task-fold rows:
+
+| Model | Task | Feature set | Window | Test year | Prevalence | ROC-AUC | PR-AUC |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| `perols_linear_svm` | `8k_402` | `all` | `expanding` | 2020 | 0.0631 | 0.9305 | 0.6621 |
+| `perols_logit` | `8k_402` | `all` | `expanding` | 2020 | 0.0631 | 0.9345 | 0.6542 |
+| `perols_logit` | `8k_402` | `auditor` | `rolling_7y` | 2020 | 0.0631 | 0.9184 | 0.6533 |
+| `perols_stacking` | `8k_402` | `auditor` | `rolling_10y` | 2020 | 0.0631 | 0.8817 | 0.6385 |
+| `perols_stacking` | `8k_402` | `auditor` | `rolling_5y` | 2020 | 0.0631 | 0.9314 | 0.6180 |
+| `perols_linear_svm` | `8k_402` | `auditor` | `rolling_5y` | 2020 | 0.0631 | 0.9132 | 0.5996 |
+| `perols_logit` | `8k_402` | `all` | `rolling_5y` | 2020 | 0.0631 | 0.9288 | 0.5509 |
+| `perols_linear_svm` | `8k_402` | `auditor` | `expanding` | 2020 | 0.0631 | 0.7953 | 0.5492 |
+
+Key readings:
+
+- The highest single-row PR-AUC values are concentrated in the 2020 `8k_402`
+  fold, where fitted prevalence is higher than the cross-year mean.
+- These rows demonstrate local ranking strength but should not replace the
+  model-family and feature-family averages as the stable summary.
+- Public peer transfer confirms that prior model families can rank public
+  review-and-correction outcomes under the repo's estimand.
+- The paper's contribution remains the measurement design, not a new classifier.
 
 ## Table 9. Opacity and Missingness Diagnostics
 
@@ -352,9 +682,14 @@ performance comparison but do not emit comparable feature-importance rows.
 | public cascade | `8k_402` | 90,429 | 0.0222 | `missingness_density_score` | -0.0114 | 0.0312 | 0.7141 | no adjusted association in this run |
 | legacy benchmark | `misstatement firm-year` | 82,908 | 0.0297 | `missingness_density_score` | 0.0028 | 0.0053 | 0.5925 | legacy diagnostic only |
 
-These Double / Debiased Machine Learning (DML) estimates are high-dimensional
-adjusted associations, not causal effects. The current public-label results do
-not support a strong strategic-silence claim.
+Key readings:
+
+- These Double / Debiased Machine Learning (DML) estimates are high-dimensional
+  adjusted associations, not causal effects.
+- None of the public-label opacity estimates supports a strong strategic-silence
+  claim in this run.
+- The legacy opacity row remains a diagnostic benchmark comparison, not the main
+  public-cascade estimand.
 
 ## Table 10. Bridge and Construct-Overlap Validation
 
@@ -376,10 +711,14 @@ not support a strong strategic-silence claim.
 | Public-overlap rate among crosswalk candidates | 0.5888 |
 | Ambiguous raw rows | 583 |
 
-The farr-derived `gvkey-CIK-year` file is now a high-coverage candidate bridge
-for construct-overlap validation. This is not a WRDS-verified bridge, so the
-integrated claim remains candidate-level rather than final manuscript-grade
-validation.
+Key readings:
+
+- The farr-derived `gvkey-CIK-year` file provides high raw-row and firm coverage
+  for candidate construct-overlap validation.
+- Public-panel overlap is naturally smaller because the public cascade starts in
+  2011 while the legacy benchmark begins in 2001.
+- The bridge is not WRDS-verified, so integrated old/public claims remain
+  candidate-level rather than final manuscript-grade validation.
 
 ## Table 11. Candidate Construct-Overlap Evidence
 
@@ -400,10 +739,15 @@ validation.
 | `8k_402_365` | 1,109 | 286 | 8.58 |
 | `aaer_proxy_730` | 0 | 0 | n/a |
 
-This pattern is the clearest current evidence for related but non-identical
-constructs. Legacy positives are much more likely to coincide with serious
-public correction signals, especially 8-K Item 4.02, but comment-letter
-scrutiny is broader and only weakly concentrated in legacy positives.
+Key readings:
+
+- This is the clearest current evidence for related but non-identical constructs.
+- Legacy positives are much more likely to coincide with serious public
+  correction signals, especially 8-K Item 4.02.
+- Comment-letter scrutiny is broader and only weakly concentrated in legacy
+  positives, consistent with public scrutiny rather than fraud truth.
+- The AAER proxy is absent in the high-confidence overlap table and remains a
+  severity-tail support item, not a headline target.
 
 ## Figure 4. Construct-Overlap Signal
 
@@ -416,6 +760,15 @@ flowchart LR
     B --> F["No public cascade label<br/>562 rows"]
 ```
 
+Key readings:
+
+- A meaningful share of legacy positives also carries public review or correction
+  labels in the matched sample.
+- The split between amendment, 8-K Item 4.02, and no public cascade label is why
+  the constructs should be described as related but non-identical.
+- The figure summarizes overlap among legacy positives, not full population
+  prevalence.
+
 ## Table 12. Risk-Score Alignment
 
 | Direction | Best row | Target positives | ROC-AUC | PR-AUC | Top-decile lift | 95% CI |
@@ -423,10 +776,13 @@ flowchart LR
 | Public cascade score -> legacy positives | `public_cascade`, `8k_402`, `all`, `rolling_10y` | 146 | 0.6784 | 0.0316 | 3.01 | [2.32, 3.78] |
 | Legacy/peer score -> public labels | `bertomeu_style_xgb`, `label_8k_402_365`, `expanding`, `naive` | 549 | 0.7038 | 0.0436 | 3.06 | [2.69, 3.45] |
 
-The reciprocal result matters. Public-cascade scores can rank legacy positives
-on the matched sample, and legacy benchmark-style scores can rank the severe
-public correction label. The two directions support construct overlap without
-collapsing the two labels into the same estimand.
+Key readings:
+
+- Public-cascade scores can rank legacy positives on the matched candidate-bridge
+  sample.
+- Legacy benchmark-style scores can also rank the severe public correction label.
+- The reciprocal alignment supports construct overlap without collapsing the two
+  labels into the same estimand.
 
 ## Table 13. Event-Time Concentration
 
@@ -443,6 +799,14 @@ reported.
 | +1 | `amendment_365` | 0.3728 | 0.1741 | 0.1987 |
 | +1 | `8k_402_365` | 0.1916 | 0.0174 | 0.1743 |
 
+Key readings:
+
+- Public amendment and 8-K Item 4.02 labels are concentrated around legacy
+  positive firm-years in the balanced event-time window.
+- The strongest differences appear at relative year 0 and remain visible at +1.
+- These are descriptive event-time rates only; the table intentionally reports
+  no p-values or causal timing tests.
+
 ## Table 14. AAER and Opacity Refresh
 
 | Component | Result | Interpretation |
@@ -454,41 +818,14 @@ reported.
 | Public opacity DML rows | 3 fitted outcomes | copied from existing DML artifacts, not refit |
 | Public opacity DML p-values | 0.8002, 0.5688, 0.7141 | no adjusted association in this run |
 
-## Discussion
+Key readings:
 
-- The public-data build is now at realistic scale: more than 21.7 million public
-  filing rows feed a compact annual issuer-year modeling panel.
-- The primary empirical signal is strongest for public scrutiny and correction
-  outcomes (`comment_thread`, `amendment`), which is consistent with the paper's
-  estimand: public reporting-risk state rather than latent fraud.
-- The all-feature public cascade improves over metadata, but the margin is not
-  large enough to claim that XBRL ratios dominate. The defensible claim is
-  feature-fusion gain with verified XBRL-ratio availability.
-- The `8k_402` task is rare but rankable. The `aaer_proxy` task is too sparse
-  for headline performance claims and should remain a severity-tail diagnostic.
-- Benchmark results motivate timing concern: performance is materially weaker
-  under visibility assumptions than under the naive final label. This is
-  evidence for label fragility, not a direct estimate of true fraud occurrence.
-- The peer-compatible model-family comparison is now complete. The strongest
-  benchmark ranking evidence comes from `bertomeu_style_xgb`; the transferred
-  Perols-family models cluster below it, and their calibration metrics are weak
-  because full mode uses equal positive/negative undersampling without
-  post-calibration.
-- The suite is deliberately conservative about literature naming:
-  `dechow_fixed_fscore_model1` is skipped rather than approximated, and the Bao
-  adapter is reported as `bao_inspired_tree_ensemble` because the legacy panel is
-  not a raw accounting-number input.
-- Public-label opacity DML does not show a significant adjusted association in
-  this run. Strategic opacity should be presented as a tested but unsupported
-  mechanism unless future specifications change the evidence.
-- Construct-overlap validation is now implemented on the farr candidate bridge.
-  The strongest overlap evidence is concentrated in amendment and 8-K Item 4.02
-  outcomes, while comment-thread scrutiny remains broader. WRDS remains the
-  preferred final bridge before manuscript-level integrated claims.
-- Overall, the current evidence supports a reproducible measurement-and-ranking
-  paper on public review-and-correction risk. It does not support causal claims,
-  fraud-truth claims, or leaderboard superiority over prior fraud-prediction
-  papers.
+- farr AAER support data reinforce the severity-tail interpretation of legacy
+  positives but do not supply complete enforcement truth.
+- AAER public-score ranking remains blocked for sparsity, so no stable AAER
+  ranking metric is reported.
+- The opacity refresh confirms that DML artifacts exist and are summarized, but
+  it does not change the non-causal interpretation of the opacity analysis.
 
 ## Artifact Index
 
@@ -503,6 +840,11 @@ reported.
 - `artifacts/full_with_peer/peer_comparison/feature_mapping_attrition.csv`
 - `artifacts/full_with_peer/peer_comparison/imbalance_strategy_report.csv`
 - `artifacts/full_with_peer/peer_comparison/legacy_feature_importance.csv`
+- `artifacts/full_with_peer/public_peer_comparison/public_model_family_summary.md`
+- `artifacts/full_with_peer/public_peer_comparison/public_model_family_metrics.csv`
+- `artifacts/full_with_peer/public_peer_comparison/public_model_family_predictions.parquet`
+- `artifacts/full_with_peer/public_peer_comparison/public_model_family_task_status.csv`
+- `artifacts/full_with_peer/public_peer_comparison/public_model_family_feature_importance.csv`
 - `artifacts/full_with_peer/public_cascade/public_cascade_summary.md`
 - `artifacts/full_with_peer/public_cascade/public_cascade_metrics.csv`
 - `artifacts/full_with_peer/public_cascade/public_opacity_dml.csv`

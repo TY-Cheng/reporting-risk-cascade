@@ -132,6 +132,33 @@ def _write_json(payload: dict[str, Any], path: Path) -> Path:
     return path
 
 
+def _update_study_manifest_for_construct_overlap(
+    *,
+    study_dir: Path,
+    out_dir: Path,
+    manifest: dict[str, Any],
+) -> None:
+    path = study_dir / "study_run_manifest.json"
+    if not path.exists():
+        return
+    study_manifest = _read_manifest(study_dir)
+    components = study_manifest.setdefault("components", {})
+    component: dict[str, Any] = {
+        "run_status": manifest.get("run_status", "unknown"),
+        "validation_tier": manifest.get("validation_tier", "none"),
+        "out_dir": str(out_dir),
+        "manifest_json": str(out_dir / "construct_overlap_manifest.json"),
+    }
+    summary_path = out_dir / "construct_overlap_summary.md"
+    if summary_path.exists():
+        component["summary_md"] = str(summary_path)
+    blockers = manifest.get("blockers", [])
+    if blockers:
+        component["blockers"] = blockers
+    components["construct_overlap"] = component
+    _write_json(study_manifest, path)
+
+
 def _top_precision(y: np.ndarray, score: np.ndarray, fraction: float) -> float:
     if len(y) == 0:
         return float("nan")
@@ -1189,6 +1216,11 @@ def run_construct_overlap(
         }
         _write_json(manifest, out_dir / "construct_overlap_manifest.json")
         _write_json({"blockers": blockers}, out_dir / "construct_overlap_blockers.json")
+        _update_study_manifest_for_construct_overlap(
+            study_dir=study_dir,
+            out_dir=out_dir,
+            manifest=manifest,
+        )
         return manifest
 
     con = _duckdb_connect()
@@ -1277,5 +1309,10 @@ def run_construct_overlap(
         reciprocal=reciprocal,
         cooccurrence=cooccurrence,
         aggregation=aggregation,
+    )
+    _update_study_manifest_for_construct_overlap(
+        study_dir=study_dir,
+        out_dir=out_dir,
+        manifest=manifest,
     )
     return manifest
