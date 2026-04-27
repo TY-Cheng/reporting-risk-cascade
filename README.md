@@ -23,9 +23,10 @@ AAER severity-tail events.
 | Public cascade | `issuer_cik x fiscal_year` | Main filing-origin prediction target for public review-and-correction risk. |
 | Bridge validation | `gvkey-CIK-year` | Construct-overlap layer linking legacy detected-misstatement labels to public cascade labels and scores. |
 
-The detailed research design is in [Paper Plan](paper_plan.md).
-The static run interpretation is in [Results Snapshot](results_snapshot.md).
-Deferred extensions are in [Future Work](future_work.md).
+Documentation site: [Reporting Risk Cascade](https://ty-cheng.github.io/reporting-risk-cascade/).
+The detailed research design is in [Paper Plan](https://ty-cheng.github.io/reporting-risk-cascade/paper_plan/).
+The static run interpretation is in [Results Snapshot](https://ty-cheng.github.io/reporting-risk-cascade/results_snapshot/).
+Deferred extensions are in [Future Work](https://ty-cheng.github.io/reporting-risk-cascade/future_work/).
 
 ## Public Review-And-Correction Labels
 

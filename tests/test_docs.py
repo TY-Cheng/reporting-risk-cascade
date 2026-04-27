@@ -186,9 +186,14 @@ def test_just_check_is_the_single_data_free_quality_gate() -> None:
 
 def test_readme_points_to_current_docs_pages() -> None:
     readme = _read("README.md")
-    assert "[Paper Plan](paper_plan.md)" in readme
-    assert "[Results Snapshot](results_snapshot.md)" in readme
-    assert "[Future Work](future_work.md)" in readme
+    docs_url = "https://ty-cheng.github.io/reporting-risk-cascade/"
+    assert f"[Reporting Risk Cascade]({docs_url})" in readme
+    assert f"[Paper Plan]({docs_url}paper_plan/)" in readme
+    assert f"[Results Snapshot]({docs_url}results_snapshot/)" in readme
+    assert f"[Future Work]({docs_url}future_work/)" in readme
+    assert "[Paper Plan](paper_plan.md)" not in readme
+    assert "[Results Snapshot](results_snapshot.md)" not in readme
+    assert "[Future Work](future_work.md)" not in readme
 
 
 def test_farr_bridge_scripts_are_documented_and_provenance_tagged() -> None:
