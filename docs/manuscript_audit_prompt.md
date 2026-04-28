@@ -92,6 +92,15 @@ If reporting-risk-cascade-manuscript is empty or incomplete, report that as a ma
 blocker and provide a proposed manuscript skeleton based on paper_plan.md and
 results_snapshot.md. Do not invent results.
 
+Audit mode:
+- Use triage audit mode unless the user explicitly asks for a full audit. In
+  triage audit mode, report only P0/P1 findings, the central
+  claim-to-evidence + claim-strength table, the bridge-gate assessment, the
+  likely rejection path, and no more than five revision actions.
+- Use full audit mode when the user asks for a comprehensive manuscript review.
+  Full audit mode should add terminology, public-data, citation, and rewrite
+  ledgers, while still keeping P0/P1 findings first.
+
 Audit dimensions:
 
 1. Fit to paper_plan.md
@@ -132,8 +141,9 @@ Flag and correct any misuse of these terms:
   restatement filing dates.
 - Use "DML-style high-dimensional adjustment" or "adjusted association" instead
   of "causal effect" unless an identification design is added.
-- Use "public cascade" for comment/amendment/8-K/AAER outcomes; do not collapse
-  them into one restatement label.
+- Use "public cascade" for the headline comment/amendment/8-K outcomes; keep
+  AAER as AAER appendix/status-only severity-tail support unless the manuscript
+  has enough positives across out-of-time folds for stable ranking evaluation.
 - Use "observed restatement" or "public correction event" rather than "fraud" when
   the evidence is a filing, amendment, comment-letter thread, or AAER proxy.
 - Use "evidence layer" or "benchmark layer" instead of implying the raw CSV and
@@ -167,6 +177,13 @@ Flag and correct any misuse of these terms:
   interpreted as negative evidence.
 - Check whether all labels are described with their actual horizon and timing:
   comment_thread_365, amendment_365, 8k_402_365, and aaer_proxy_730.
+- Check whether the headline public tasks exclude aaer_proxy: the main
+  manuscript should treat comment_thread_365, amendment_365, and 8k_402_365 as
+  the three primary public outcomes. If aaer_proxy_730 appears, it must be
+  labeled as appendix/status-only severity-tail support, not a coequal task.
+- Do not allow AAER to enter headline public-cascade means, best-window
+  selection, feature-family rankings, model-family rankings, or main prediction
+  claims unless the table is explicitly labeled as appendix robustness.
 - Check whether public cascade outcomes are interpreted as public events, not as
   complete latent misstatement occurrence.
 - Check whether artifact-backed claims distinguish readiness diagnostics from
@@ -176,25 +193,34 @@ Flag and correct any misuse of these terms:
   ranking of public review-and-correction risk as reportable findings when they
   are supported by current artifacts.
 - Check whether PR-AUC is reported with the relevant prevalence/base-rate, and
-  whether top-k precision or lift is framed as screening evidence rather than a
-  calibrated decision rule.
+  whether PR-AUC, lift, and top-k precision comparisons include fold dispersion,
+  a confidence interval, a paired test, or an uncertainty caveat.
+- Check whether top-k precision or lift is framed as screening evidence rather
+  than a calibrated decision rule.
 - Check whether screening claims discuss asymmetric costs and false negatives
   for regulatory or audit use, without inventing a utility model.
 - Check whether predictor text and outcome text are kept separate. Predictor
   text must come from documents with public filing date <= origin_date; any
   amendment, 8-K Item 4.02, comment-letter, or other outcome-side text filed
   after origin_date is future information.
-- Treat feature-family results as feature fusion, not XBRL dominance, unless the
-  artifact shows XBRL or another family clearly dominates the common-sample run.
-- Check whether feature-family comparisons use a common-sample design or clearly
-  disclose when coverage differences affect the comparison.
+- Treat feature-family results as feature fusion, not XBRL dominance. The
+  manuscript phrasing should be "feature fusion helps, metadata remains strong";
+  do not write XBRL dominance unless a common-sample artifact directly supports
+  it.
+- Check whether feature-family comparisons use a common-sample design or include
+  a common-sample / coverage caveat, especially for XBRL, auditor, and oversight
+  feature families.
 - Treat public-label peer transfer as model-family transfer and metric-language
   alignment, not original-paper replication or leaderboard superiority.
 - Treat candidate-level construct-overlap, reciprocal risk-score alignment, and
   event-time concentration as candidate evidence while validation_tier remains
   candidate_farr.
-- Do not let a single-fold 2020 8k_402 result replace model-family or
-  feature-family averages as the headline.
+- Describe 8-K Item 4.02 as rare but rankable; flag any manuscript that promotes
+  the single-fold 2020 8k_402 result over model-family or feature-family
+  averages as the headline.
+- Flag comparative result language such as "dominates", "significantly
+  outperforms", or "superior to" when the manuscript does not show fold
+  dispersion, confidence intervals, or paired uncertainty evidence.
 - Treat null public-opacity DML p-values as evidence against a strong strategic-silence claim;
   this is a current-run limitation.
 
@@ -282,11 +308,11 @@ mechanism-driven.
 - Does it use the public lake scale and typed artifact chain as reproducibility
   evidence, without sounding like engineering marketing?
 - Does it state that comment-thread and amendment outcomes are the broad stable
-  public signals, while 8-K Item 4.02 is rarer but sharper?
+  public signals, while 8-K Item 4.02 is rare but rankable?
 - Does it use the bridge evidence to argue related-but-non-identical constructs,
   not equivalence between legacy misstatement labels and public labels?
-- Does it keep AAER as severity-tail support and avoid stable enforcement
-  prediction language?
+- Does it keep AAER as appendix/status-only severity-tail support and avoid
+  stable enforcement prediction language?
 - Does it report peer-compatible model families as a check on accounting ML
   comparability, not as a claim of superiority over prior studies?
 - Does it avoid burying the strongest limitation: current integrated evidence is
@@ -300,8 +326,9 @@ mechanism-driven.
   than full SEC review?
 - How does the paper distinguish latent misreporting risk from endogenous
   scrutiny or propensity to be reviewed?
-- What decision changes for regulators, auditors, investors, or researchers if
-  they can observe a filing-origin public reporting-risk score?
+- What limited screening interpretation follows for regulators, auditors,
+  investors, or researchers, if any, when they observe a filing-origin public
+  reporting-risk score?
 - Why is public-data-first a scientific information-set design rather than a
   budget compromise?
 - Does the benchmark layer remain a diagnostic for timing, drift, missingness,
@@ -313,8 +340,11 @@ Output format:
 Start with:
 - Manuscript readiness: not started / outline only / partial draft / submission
   draft / not assessable.
+- Audit mode used: triage audit / full audit.
 - Main paper risk: one sentence.
 - Best target outlet given the current draft: one sentence.
+- Likely rejection path: the three most likely referee rejection reasons, and
+  whether the manuscript currently preempts each one.
 
 Then provide findings ordered by severity:
 - P0: claims that are false, unsupported, or inconsistent with paper_plan.md.
