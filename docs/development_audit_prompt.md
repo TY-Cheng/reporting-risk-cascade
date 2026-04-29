@@ -95,6 +95,8 @@ Repository context:
 - Main command surface:
   - justfile
   - .env / UV_PROJECT_ENVIRONMENT
+  - UV_PROJECT_ENVIRONMENT must be an absolute path outside the repository;
+    repo-local .venv creation is workflow drift.
 - Main configs:
   - config/benchmark.yaml
   - config/public_cascade.yaml
@@ -128,8 +130,10 @@ Repository context:
   - tests/test_public_cascade_interfaces.py
   - tests/test_bridge.py
   - tests/test_construct_overlap.py
+  - tests/test_data_prep.py
   - tests/test_peer_comparison.py
   - tests/test_public_peer_comparison.py
+  - tests/test_table_io_sample.py
   - tests/test_docs.py
 
 Required first pass:
@@ -170,6 +174,9 @@ Audit dimensions:
 - Does just full full raw artifacts/full still represent the core paper-facing
   run for setup, tests, lint, public-lake build/resume, benchmark, public
   cascade, bridge probe, and construct-overlap validation when inputs exist?
+- Does just full intentionally leave peer comparison at its default none mode,
+  with full peer evidence requiring the separate full_with_peer invocation and
+  --peer-comparison-mode full?
 - Does scripts/run_study.py orchestrate benchmark, public cascade, bridge probe,
   legacy peer comparison, public peer comparison, and construct overlap
   consistently with config/study.yaml?
@@ -185,6 +192,8 @@ Audit dimensions:
   the full peer suite?
 - Does status avoid mutating environment state, and does setup own dependency
   sync through UV_PROJECT_ENVIRONMENT?
+- Does the justfile keep UV_PROJECT_ENVIRONMENT outside the repo and avoid
+  silently creating a repo-local .venv?
 
 2. Paper-plan compliance
 - Are the execution gates in docs/paper_plan.md implemented or honestly marked
@@ -265,7 +274,8 @@ Audit dimensions:
   so 2011-2016 auditor partner features should be treated as structurally
   coverage-limited unless another public source is documented.
 - Does public_cascade_summary.json report readiness level, zero-positive tasks,
-  task status counts, feature-family summaries, and DML status counts?
+  task status counts, feature-family summaries, and
+  public_opacity_dml_status_counts?
 - Are one-class train/test task fits skipped and reported rather than forced into
   metrics?
 - Are public_opacity_dml.csv and public_opacity_dml_meta.json based on
@@ -407,6 +417,8 @@ Audit dimensions:
 11. Engineering quality and efficiency
 - Is reusable logic kept in src/ and thin execution code kept in scripts/?
 - Are tests checking behavior and artifact contracts rather than only imports?
+- Do the core quality gates include test_data_prep.py and test_table_io_sample.py
+  alongside the benchmark, bridge, public-cascade, peer, and docs tests?
 - Are public-lake downloads restartable and hash-checked?
 - Are SEC requests rate-limited?
 - Are full-scale FSDS/Notes paths using Parquet/DuckDB where pandas-only
@@ -414,6 +426,9 @@ Audit dimensions:
 - Does DuckDB memory configuration, a temp/spill directory, or an equivalent
   out-of-core strategy protect large FSDS/Notes/public-lake aggregations from
   avoidable OOM failures?
+- Does the public-lake workflow preserve the conservative defaults unless
+  explicitly overridden: DuckDB memory limit 10GB, max temp size 400GB, and
+  temp/spill directory under the active Silver lake directory?
 - Do imputation, feature selection, and prediction schemas avoid fold-dependent
   shape drift, especially with all-missing features?
 - Does the peer runtime fail fast when parallel_jobs * model_threads exceeds the

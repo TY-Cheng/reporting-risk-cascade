@@ -22,6 +22,7 @@ Working title:
 - **Filing-origin estimand.** The repo defines a filing-origin public reporting-risk estimand based only on information visible at or before `origin_date`.
 - **Construct claim.** The public cascade is expected to be related to, but not identical with, legacy detected-misstatement labels.
 - **Peer comparison boundary.** Peer models and metrics are used for compatibility checks; comparisons provide metric-compatible ranking evidence, not same-estimand superiority claims.
+- **Peer-suite boundary.** PR1 is the legacy benchmark peer suite; PR2 is the public-label peer transfer. Mapping quality determines whether Dechow/Bao adapters can use stronger names or must be reported as mapped/inspired variants, and public peer transfer runs only in `full` mode so the default workflow stays bounded.
 - **Evidence requirement.** Credible bridge-based overlap validation is required before any integrated old-benchmark/public-cascade claim.
 
 ### Design Overview
@@ -154,8 +155,8 @@ bash scripts/prepare_farr_support_data.sh --install-missing
 - **Common sample rule.** Feature families use the same filtered issuer-year sample for fair ablations.
 - **Missing-value rule.** Tree models with native missing-value handling retain numeric `np.nan`; non-tree adapters use fold-internal imputation only when required.
 - **Excluded columns.** Label, censoring, identifier, source-availability, public-date, and vintage columns are excluded by default.
-- **Metadata.** SIC, form, entity type, filing size, XBRL flags, prior filing count, days since prior filing, and headquarters-state controls when available.
-- **Filing friction and public history.** Current-cycle NT status and amendment friction, plus strictly pre-origin rolling counts and recency for prior NT filings, comment threads, amendments, and 8-K instability items.
+- **Metadata.** SIC, form, SEC submissions `entityType`, filing size, XBRL flags, prior filing count, days since prior filing, and headquarters-state controls when available.
+- **Filing friction and public history.** Current-cycle NT status and amendment friction, plus strictly pre-origin rolling counts and recency for prior NT filings, comment threads, amendments, and 8-K instability items. Rolling public-history features must use only events with `event_date < origin_date`.
 - **XBRL.** `xbrl_ratio_*` and `xbrl_coverage_*` features from controlled core tags, including size, leverage, profitability, working capital, receivables, inventory, cash, debt, operating cash flow, and year-over-year revenue/assets changes.
 - **Auditor and oversight.** PCAOB Form AP fields, engagement-partner exposure, and PCAOB inspection features in their public source windows.
 - **Note opacity.** Note count, note character count, note-tag coverage, and tag entropy as a disclosure breadth measure.
@@ -245,6 +246,8 @@ bash scripts/prepare_farr_support_data.sh --install-missing
   - Public cascade covers fiscal years 2011-2023 in the full panel.
   - Comment-thread, amendment, and 8-K Item 4.02 tasks have nonzero positives.
   - `xbrl_ratio_*` and `xbrl_coverage_*` features are present for non-metadata public-cascade evidence.
+  - Prediction metrics are read relative to each task's prevalence; there is no absolute PR-AUC leaderboard threshold.
+  - Overlap evidence reports top-decile lift, reciprocal alignment, bridge tiers, and bridge coverage before integrated claims are made.
   - Zero-positive or sparse AAER robustness tasks are skipped and reported as severity-tail blockers.
 - **Paper-readiness gates.**
   - Claims remain measurement and decision-useful prediction claims, not causal proof of fraud occurrence.

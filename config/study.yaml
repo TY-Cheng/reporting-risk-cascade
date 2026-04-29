@@ -1,6 +1,6 @@
 paper:
-  title: "From Restatements to Public Scrutiny"
-  subtitle: "Label Maturation, Strategic Silence, and the Public Reporting-Risk Cascade"
+  title: "From Restatements to Public Review and Correction"
+  subtitle: "Label Observability and the Public Reporting-Risk Cascade"
 
 inputs:
   raw_data: "data/raw_dataset_misstatement.parquet"

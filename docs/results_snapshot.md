@@ -169,6 +169,8 @@ hide:
 
 Key readings:
 
+- This page is a static documentation snapshot, not a live recomputation of the
+  workflow.
 - The snapshot is based on the peer-enabled study directory,
   `artifacts/full_with_peer`.
 - The run includes the legacy benchmark, public cascade, bridge probe,
@@ -288,6 +290,9 @@ Key readings:
   review-and-correction signals.
 - `8k_402` is rare but rankable; `aaer_proxy` is too sparse for headline
   performance claims.
+- The large gap between `8k_402` ROC-AUC and PR-AUC is expected in a rare-event
+  task: ROC-AUC reflects pairwise ranking, while PR-AUC is anchored to the
+  low positive rate.
 - `Prevalence` is the fitted test-set positive rate and the PR-AUC random-ranking
   baseline, so PR-AUC must be read relative to each task's base rate.
 - The reported `0.2475` is an equal-task mean across public labels, not a single
@@ -443,6 +448,8 @@ Key readings:
 - Legacy benchmark prevalence is very low, so absolute PR-AUC values are
   expected to be modest and should be compared within the same task/split
   design.
+- Legacy peer-suite PR-AUC and public-cascade PR-AUC are not directly comparable:
+  the estimand, label prevalence, and feature surface differ.
 - `bertomeu_style_xgb` leads on mean PR-AUC, Brier, and calibration diagnostics
   among the fitted peer families.
 - Perols-style full-mode models use equal positive/negative undersampling in
@@ -591,6 +598,9 @@ Key readings:
 - Public peer transfer is complete for the three headline public labels.
 - `aaer_proxy` is intentionally status-only because sparse positives make stable
   public-peer training inappropriate.
+- Public peer inputs are always `public_issuer_origin`, so Bao-family public
+  transfer is reported as `bao_inspired_tree_ensemble`; `bao_style_ensemble` is
+  not emitted on the public panel.
 - Skipped rows are mostly design-imposed status rows, not silent failures.
 
 Model-family means over fitted public-label task-fold rows:
@@ -827,7 +837,11 @@ Key readings:
 - The opacity refresh confirms that DML artifacts exist and are summarized, but
   it does not change the non-causal interpretation of the opacity analysis.
 
-## Artifact Index
+## Selected Artifact Index
+
+This index lists the high-signal artifacts referenced by this snapshot. It is not
+an exhaustive file inventory; each component directory also contains manifests,
+blockers, and schema-support files used by the tests.
 
 - `artifacts/full_with_peer/study_summary.md`
 - `artifacts/full_with_peer/study_run_manifest.json`
