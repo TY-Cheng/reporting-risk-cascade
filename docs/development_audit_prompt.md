@@ -135,6 +135,14 @@ Repository context:
   - tests/test_public_peer_comparison.py
   - tests/test_table_io_sample.py
   - tests/test_docs.py
+- Current generated-artifact families when present:
+  - artifacts/full_with_peer/benchmark/
+  - artifacts/full_with_peer/public_cascade/
+  - artifacts/full_with_peer/peer_comparison/
+  - artifacts/full_with_peer/public_peer_comparison/
+  - artifacts/full_with_peer/bridge_probe/
+  - artifacts/full_with_peer/construct_overlap/
+  - artifacts/full_with_peer/opacity_validation_refresh/
 
 Required first pass:
 1. Read docs/paper_plan.md end to end.
@@ -180,6 +188,9 @@ Audit dimensions:
 - Does scripts/run_study.py orchestrate benchmark, public cascade, bridge probe,
   legacy peer comparison, public peer comparison, and construct overlap
   consistently with config/study.yaml?
+- Does --skip-construct-overlap skip only the candidate overlap validation layer,
+  without changing benchmark, public cascade, peer-suite, or bridge-probe
+  behavior?
 - Check the relationship between --peer-comparison-mode none/light/full and
   --peer-target legacy/public/both: the first controls peer-suite intensity, the
   second controls whether legacy peer, public peer, or both targets run.
@@ -273,8 +284,8 @@ Audit dimensions:
   reported by fiscal year or origin year. Form AP is available from 2017-01-31,
   so 2011-2016 auditor partner features should be treated as structurally
   coverage-limited unless another public source is documented.
-- Does public_cascade_summary.json report readiness level, zero-positive tasks,
-  task status counts, feature-family summaries, and
+- Do public_cascade_summary.md and public_cascade_summary.json report readiness
+  level, zero-positive tasks, task status counts, feature-family summaries, and
   public_opacity_dml_status_counts?
 - Are one-class train/test task fits skipped and reported rather than forced into
   metrics?
@@ -291,6 +302,7 @@ Audit dimensions:
   peer_task_status.csv, feature_mapping_attrition.csv,
   imbalance_strategy_report.csv, and legacy_feature_importance.csv.
 - Public peer suite: check public_model_family_summary.md,
+  public_model_family_manifest.json, public_model_family_blockers.json,
   public_model_family_metrics.csv, public_model_family_predictions.parquet,
   public_model_family_task_status.csv, public_model_family_mapping_attrition.csv,
   public_model_family_imbalance_strategy_report.csv, and
@@ -324,15 +336,29 @@ Audit dimensions:
 - Bridge probe: check bridge_probe_summary.json, coverage_report.csv,
   multiplicity_report.csv, and unmatched_raw_characteristics.csv.
 - Construct overlap: check construct_overlap_manifest.json,
-  construct_overlap_summary.md, construct_overlap/label_contingency_lift.csv,
-  construct_overlap/public_score_legacy_ranking.csv,
-  construct_overlap/reciprocal_alignment.csv,
-  construct_overlap/event_time_concentration.csv,
-  construct_overlap/farr_aaer_public_overlap.csv,
+  construct_overlap_summary.md, construct_overlap_blockers.json,
   construct_overlap/overlap_sample_flow.csv,
+  construct_overlap/overlap_panel.parquet,
   construct_overlap/bridge_confidence_tiers.csv,
-  construct_overlap/aggregation_sensitivity.csv, and
-  opacity_validation_refresh outputs.
+  construct_overlap/bridge_multiplicity_in_overlap.csv,
+  construct_overlap/aggregation_sensitivity.csv,
+  construct_overlap/label_contingency_lift.csv,
+  construct_overlap/public_score_legacy_ranking.csv,
+  construct_overlap/public_score_legacy_ranking_sensitivity.csv,
+  construct_overlap/reciprocal_alignment.csv, construct_overlap/top_decile_lift.csv,
+  construct_overlap/legacy_positive_public_label_cooccurrence.csv,
+  construct_overlap/event_time_concentration.csv,
+  construct_overlap/event_time_coverage.csv,
+  construct_overlap/farr_aaer_benchmark_overlap.csv,
+  construct_overlap/farr_aaer_public_overlap.csv,
+  construct_overlap/farr_aaer_ranking_lift.csv,
+  construct_overlap/farr_aaer_lag_distribution.csv, and
+  construct_overlap/res_an_proxy_coverage.csv.
+- Opacity refresh: check opacity_validation_refresh/opacity_diagnostics_summary.csv,
+  opacity_validation_refresh/opacity_validation_refresh_summary.md, and
+  opacity_validation_refresh/opacity_validation_blockers.json. Missing opacity
+  artifacts should be reported as a refresh blocker rather than as a failure of
+  construct-overlap validation.
 - Check whether high-confidence, ambiguous, and dropped bridge tiers are reported
   separately.
 - Audit the grain explicitly: raw panel grain, prediction grain, and overlap
@@ -406,9 +432,20 @@ Audit dimensions:
 10. Documentation and results snapshot
 - Does README.md describe the current command surface without duplicating stale
   paper-plan text?
+- Does docs/paper_plan.md Design Overview match the implemented computation
+  flow, including legacy/public X/Y, time spans, out-of-time splits, peer
+  suites, metrics, DML, and bridge validation?
+- Does docs/results_snapshot.md Evidence Map describe the current artifact state
+  rather than only the intended design?
+- Are the Paper Plan Design Overview and Results Snapshot Evidence Map
+  logically consistent while preserving their different roles: design contract
+  versus current evidence state?
 - Does docs/results_snapshot.md clearly say it is a static snapshot?
 - Do results-snapshot tables match actual artifacts under artifacts/full or
   artifacts/full_with_peer?
+- If docs/results_snapshot.md uses a Selected Artifact Index, does it clearly
+  say the list is selected rather than exhaustive, and do all listed artifacts
+  exist locally?
 - Are wide-table pages configured for readable docs output where needed?
 - Do docs avoid claiming true fraud, causal identification, full SEC review, or
   full enforcement coverage?
