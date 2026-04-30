@@ -37,8 +37,7 @@ This audit is public-data-first. Assume no WRDS, Audit Analytics, CRSP,
 Compustat, FactSet, Refinitiv, RavenPack, or similar institutional database
 access unless the user explicitly says otherwise. The core reproducible spine is
 public SEC/PCAOB/EDGAR data plus the local
-data/raw_dataset_misstatement.parquet benchmark layer, converted from the legacy
-CSV when needed.
+legacy gvkey x data_year benchmark layer when available.
 
 Do not treat absence of WRDS or Audit Analytics as a code bug. A farr
 gvkey-CIK bridge can support candidate validation, but it is not WRDS-verified.
@@ -85,85 +84,41 @@ or artifact_unavailable. Do not treat missing local data/artifacts as a code
 bug. Distinguish code-path support, documented contract, and live local evidence.
 
 Repository context:
-- Main raw benchmark data:
-  - data/raw_dataset_misstatement.parquet
-- Current paper/docs:
-  - docs/paper_plan.md
-  - docs/results_snapshot.md
-  - docs/future_work.md
-  - README.md
-- Main command surface:
-  - justfile
-  - .env / UV_PROJECT_ENVIRONMENT
-  - UV_PROJECT_ENVIRONMENT must be an absolute path outside the repository;
-    repo-local .venv creation is workflow drift.
-- Main configs:
-  - config/benchmark.yaml
-  - config/public_cascade.yaml
-  - config/public_data.yaml
-  - config/study.yaml
-- Main implementation modules:
-  - src/benchmark.py
-  - src/public_lake.py
-  - src/public_cascade.py
-  - src/bridge.py
-  - src/construct_overlap.py
-  - src/peer_comparison.py
-  - src/public_peer_comparison.py
-  - src/data_prep.py
-  - src/ranking_metrics.py
-  - src/table_io.py
-- Main execution wrappers:
-  - scripts/run_benchmark.py
-  - scripts/run_public_cascade.py
-  - scripts/run_bridge_probe.py
-  - scripts/run_construct_overlap.py
-  - scripts/run_study.py
-  - scripts/fetch_public_data.py
-  - scripts/run_public_lake_full.sh
-  - scripts/prepare_gvkey_cik_crosswalk.py
-  - scripts/prepare_farr_gvkey_cik_bridge.sh
-  - scripts/prepare_farr_support_data.sh
-- Main tests:
-  - tests/test_benchmark.py
-  - tests/test_public_lake.py
-  - tests/test_public_cascade_interfaces.py
-  - tests/test_bridge.py
-  - tests/test_construct_overlap.py
-  - tests/test_data_prep.py
-  - tests/test_peer_comparison.py
-  - tests/test_public_peer_comparison.py
-  - tests/test_table_io_sample.py
-  - tests/test_docs.py
-- Current generated-artifact families when present:
-  - artifacts/full_with_peer/benchmark/
-  - artifacts/full_with_peer/public_cascade/
-  - artifacts/full_with_peer/peer_comparison/
-  - artifacts/full_with_peer/public_peer_comparison/
-  - artifacts/full_with_peer/bridge_probe/
-  - artifacts/full_with_peer/construct_overlap/
-  - artifacts/full_with_peer/opacity_validation_refresh/
+- Stable source-of-truth files are README.md, docs/paper_plan.md,
+  docs/results_snapshot.md, docs/future_work.md, justfile, .env,
+  pyproject.toml, uv.lock, and the YAML files under config/.
+- Source code, wrappers, and tests live under src/, scripts/, and tests/.
+  Discover the current file inventory from the checkout instead of relying on a
+  hand-maintained list in this prompt.
+- Generated evidence lives under artifacts/. Discover study outputs from
+  manifests, summaries, component subdirectories, and artifact indexes. Do not
+  assume that a directory name is a just recipe.
+- The raw benchmark source is the local gvkey x data_year misstatement panel
+  when available. Public evidence comes from the public SEC/PCAOB lake and its
+  derived gold panels when available.
+- UV_PROJECT_ENVIRONMENT must be an absolute path outside the repository;
+  repo-local .venv creation is workflow drift.
 
 Required first pass:
 1. Read docs/paper_plan.md end to end.
 2. Read README.md, docs/results_snapshot.md, and justfile to understand the
    current workflow and artifact claims.
-3. Inspect config/study.yaml, config/benchmark.yaml, and config/public_cascade.yaml.
-4. Inspect the modules and wrappers listed above. Do not skip
-   src/construct_overlap.py or src/public_peer_comparison.py.
+3. Inspect config/*.yaml and confirm the command defaults against justfile.
+4. Inspect the relevant src/ modules and scripts/ wrappers. Do not skip
+   construct-overlap or public-peer code paths if they exist in the checkout.
 5. Inspect tests to see which invariants are actually locked. Do not treat
    tests for prompt keywords as semantic correctness; they are presence checks.
 6. Inspect the raw benchmark schema and basic row counts without loading more
    data than needed. Report rows, columns, identifier columns, target column,
    res_an* columns, missing_* flags, and whether raw-side CIK/ticker/company
    name/CUSIP/PERMNO fields exist.
-7. If data/public_lake exists, report whether issuer_origin_panel.parquet and
-   filing_origin_panel.parquet exist, their row counts, fiscal-year span, and
-   whether comment_thread, amendment, 8-K Item 4.02, and AAER proxy labels have
-   nonzero positives.
-8. If artifacts/full or artifacts/full_with_peer exists, inspect
-   study_run_manifest.json and the key summaries. Say when a docs number is a
-   static snapshot rather than a live result.
+7. If the public lake exists, report whether the gold issuer-year and
+   filing-origin panels exist, their row counts, fiscal-year span, and whether
+   comment_thread, amendment, 8-K Item 4.02, and AAER proxy labels have nonzero
+   positives.
+8. If artifacts exist, inspect the study manifest, component summaries, and
+   selected artifact indexes. Say when a docs number is a static snapshot rather
+   than a live result.
 
 Audit dimensions:
 
@@ -178,29 +133,26 @@ Audit dimensions:
   ground truth.
 
 1. Workflow and command contract
+- Discover the active command surface from justfile rather than assuming recipe
+  names from this prompt.
 - Does just check remain the data-free quality gate?
-- Does just full full raw artifacts/full still represent the core paper-facing
-  run for setup, tests, lint, public-lake build/resume, benchmark, public
-  cascade, bridge probe, and construct-overlap validation when inputs exist?
+- Does the paper-facing full command still run setup/tests/lint, public-lake
+  build or resume, benchmark, public cascade, bridge probe, and construct
+  overlap when required inputs exist?
 - Does just full intentionally leave peer comparison at its default none mode,
-  with full peer evidence requiring the separate full_with_peer invocation and
-  --peer-comparison-mode full?
-- Does scripts/run_study.py orchestrate benchmark, public cascade, bridge probe,
+  with peer evidence requiring an explicit study rerun that passes
+  --peer-comparison-mode and, when needed, --peer-target? Treat full_with_peer as
+  a conventional output directory name if present, not as a recipe unless
+  justfile defines it.
+- Does the task dispatcher, if present, route prep, component analyses, study
+  runs, and public-data fetch/build tasks consistently with README and justfile?
+- Does the study runner orchestrate benchmark, public cascade, bridge probe,
   legacy peer comparison, public peer comparison, and construct overlap
-  consistently with config/study.yaml?
-- Does --skip-construct-overlap skip only the candidate overlap validation layer,
-  without changing benchmark, public cascade, peer-suite, or bridge-probe
-  behavior?
-- Check the relationship between --peer-comparison-mode none/light/full and
-  --peer-target legacy/public/both: the first controls peer-suite intensity, the
-  second controls whether legacy peer, public peer, or both targets run.
-- Treat --peer-target public as meaningful only with --peer-comparison-mode full;
-  in light mode, public peer transfer should be skipped or clearly marked as not
-  run.
-- Does --peer-target legacy/public/both do what the docs say, including keeping
-  existing peer artifacts when a skipped target already exists?
-- Does CI use a light, bounded peer target rather than accidentally triggering
-  the full peer suite?
+  consistently with config defaults and CLI overrides?
+- If skip flags or target flags exist, verify that they skip only their intended
+  component and leave unrelated components unchanged.
+- Does CI use bounded smoke targets rather than accidentally triggering full
+  public-lake or full peer suites?
 - Does status avoid mutating environment state, and does setup own dependency
   sync through UV_PROJECT_ENVIRONMENT?
 - Does the justfile keep UV_PROJECT_ENVIRONMENT outside the repo and avoid
@@ -257,10 +209,10 @@ Audit dimensions:
   collapsed into a single fraud or restatement label.
 
 4. Benchmark layer
-- Are timing_coverage.csv, timing_summary.json, rolling_metrics.csv,
-  rolling_predictions.parquet, structural_breaks.csv,
-  missing_profile_clusters.csv, dml_result.json, and benchmark_summary.md
-  emitted when the benchmark runs?
+- Does the benchmark run emit a complete, inspectable set of panel, timing,
+  rolling-prediction, rolling-metric, drift, missingness, DML-style, and summary
+  artifacts? Discover the exact filenames from the output directory and code
+  rather than relying on this prompt as an exhaustive list.
 - Does timing_claim_status distinguish sensitivity evidence from paper-grade
   maturation evidence?
 - Do benchmark models use annual out-of-time windows rather than random
@@ -284,39 +236,33 @@ Audit dimensions:
   reported by fiscal year or origin year. Form AP is available from 2017-01-31,
   so 2011-2016 auditor partner features should be treated as structurally
   coverage-limited unless another public source is documented.
-- Do public_cascade_summary.md and public_cascade_summary.json report readiness
-  level, zero-positive tasks, task status counts, feature-family summaries, and
-  public_opacity_dml_status_counts?
+- Do the public-cascade summaries report readiness level, zero-positive tasks,
+  task status counts, feature-family summaries, and public-opacity DML status?
 - Are one-class train/test task fits skipped and reported rather than forced into
   metrics?
-- Are public_opacity_dml.csv and public_opacity_dml_meta.json based on
-  label_comment_thread_365, label_amendment_365, and label_8k_402_365 as primary
-  outcomes?
+- Are public-opacity DML artifacts based on label_comment_thread_365,
+  label_amendment_365, and label_8k_402_365 as primary outcomes?
 - Are public-label DML results described as adjusted associations, not causal
   evidence of strategic silence?
 - Is AAER proxy status-only or robustness-only when positives are sparse?
 
 6. Benchmark and public peer model-family transfer
-- Legacy peer suite: check peer_comparison_summary.md,
-  legacy_model_family_metrics.csv, legacy_model_family_predictions.parquet,
-  peer_task_status.csv, feature_mapping_attrition.csv,
-  imbalance_strategy_report.csv, and legacy_feature_importance.csv.
-- Public peer suite: check public_model_family_summary.md,
-  public_model_family_manifest.json, public_model_family_blockers.json,
-  public_model_family_metrics.csv, public_model_family_predictions.parquet,
-  public_model_family_task_status.csv, public_model_family_mapping_attrition.csv,
-  public_model_family_imbalance_strategy_report.csv, and
-  public_model_family_feature_importance.csv.
-- Check whether public_model_family_task_status.csv carries imbalance_strategy
-  and reason_code fields, not just an uninformative status flag.
+- Discover legacy-peer and public-peer artifacts from their component
+  directories, manifests, summaries, and schema tests. Do not treat this prompt
+  as an exhaustive artifact list.
+- For each peer suite, check metrics, predictions, task status, mapping
+  attrition, imbalance strategy, feature importance where applicable, manifests,
+  and blockers when those artifact classes are implemented.
+- Check whether task-status tables carry imbalance_strategy and reason_code
+  fields, not just an uninformative status flag.
 - Check whether the peer suites are described as model-family transfer and
   metric-compatible ranking evidence, not same-estimand replication of prior
   fraud-prediction papers.
-- Check whether public_model_family_task_status.csv skipped rows include
-  specific reason_code values that a developer can act on. Do not accept a
-  generic "skipped" status without a reason.
-- Check whether public_model_family_mapping_attrition.csv records missing,
-  exact, and proxy mappings for public Dechow/Bao-style variables.
+- Check whether skipped rows include specific reason_code values that a
+  developer can act on. Do not accept a generic "skipped" status without a
+  reason.
+- Check whether mapping-attrition outputs record missing, exact, and proxy
+  mappings for public Dechow/Bao-style variables.
 - Check whether Bao/Dechow public transfer states plainly when raw
   accounting-number model replication is not supported by public issuer-origin
   inputs.
@@ -333,39 +279,24 @@ Audit dimensions:
   reason code.
 
 7. Bridge and construct-overlap validation
-- Bridge probe: check bridge_probe_summary.json, coverage_report.csv,
-  multiplicity_report.csv, and unmatched_raw_characteristics.csv.
-- Construct overlap: check construct_overlap_manifest.json,
-  construct_overlap_summary.md, construct_overlap_blockers.json,
-  construct_overlap/overlap_sample_flow.csv,
-  construct_overlap/overlap_panel.parquet,
-  construct_overlap/bridge_confidence_tiers.csv,
-  construct_overlap/bridge_multiplicity_in_overlap.csv,
-  construct_overlap/aggregation_sensitivity.csv,
-  construct_overlap/label_contingency_lift.csv,
-  construct_overlap/public_score_legacy_ranking.csv,
-  construct_overlap/public_score_legacy_ranking_sensitivity.csv,
-  construct_overlap/reciprocal_alignment.csv, construct_overlap/top_decile_lift.csv,
-  construct_overlap/legacy_positive_public_label_cooccurrence.csv,
-  construct_overlap/event_time_concentration.csv,
-  construct_overlap/event_time_coverage.csv,
-  construct_overlap/farr_aaer_benchmark_overlap.csv,
-  construct_overlap/farr_aaer_public_overlap.csv,
-  construct_overlap/farr_aaer_ranking_lift.csv,
-  construct_overlap/farr_aaer_lag_distribution.csv, and
-  construct_overlap/res_an_proxy_coverage.csv.
-- Opacity refresh: check opacity_validation_refresh/opacity_diagnostics_summary.csv,
-  opacity_validation_refresh/opacity_validation_refresh_summary.md, and
-  opacity_validation_refresh/opacity_validation_blockers.json. Missing opacity
-  artifacts should be reported as a refresh blocker rather than as a failure of
-  construct-overlap validation.
+- Discover bridge-probe and construct-overlap artifacts from manifests,
+  summaries, blocker files, component directories, and docs artifact indexes.
+- Check bridge coverage, multiplicity, unmatched diagnostics, validation tier,
+  overlap sample flow, overlap panel grain, bridge confidence tiers, aggregation
+  sensitivity, label contingency/lift, public-score-to-legacy ranking,
+  legacy-score-to-public ranking, top-decile lift, label co-occurrence,
+  event-time concentration, event-time coverage, AAER support, and res_an proxy
+  coverage when those outputs are implemented.
+- Check opacity-refresh outputs separately from construct-overlap outputs.
+  Missing opacity artifacts should be reported as a refresh blocker rather than
+  as a failure of construct-overlap validation.
 - Check whether high-confidence, ambiguous, and dropped bridge tiers are reported
   separately.
 - Audit the grain explicitly: raw panel grain, prediction grain, and overlap
   aggregation grain. State whether the primary overlap result is annual-primary,
-  origin-level, or max-score/max-label aggregated, and require
-  aggregation_sensitivity.csv when multiple public-origin rows can map to one
-  annual legacy row.
+  origin-level, or max-score/max-label aggregated, and require an aggregation
+  sensitivity output when multiple public-origin rows can map to one annual
+  legacy row.
 - Check whether overlap claims are limited to related-but-non-identical
   constructs.
 - Check whether amendment and 8-K Item 4.02 evidence are separated from the
@@ -441,8 +372,8 @@ Audit dimensions:
   logically consistent while preserving their different roles: design contract
   versus current evidence state?
 - Does docs/results_snapshot.md clearly say it is a static snapshot?
-- Do results-snapshot tables match actual artifacts under artifacts/full or
-  artifacts/full_with_peer?
+- Do results-snapshot tables match the actual artifacts in the active study
+  directory or directories?
 - If docs/results_snapshot.md uses a Selected Artifact Index, does it clearly
   say the list is selected rather than exhaustive, and do all listed artifacts
   exist locally?
@@ -454,8 +385,8 @@ Audit dimensions:
 11. Engineering quality and efficiency
 - Is reusable logic kept in src/ and thin execution code kept in scripts/?
 - Are tests checking behavior and artifact contracts rather than only imports?
-- Do the core quality gates include test_data_prep.py and test_table_io_sample.py
-  alongside the benchmark, bridge, public-cascade, peer, and docs tests?
+- Do the core quality gates include data-prep and table-I/O tests alongside the
+  benchmark, bridge, public-cascade, peer, and docs tests?
 - Are public-lake downloads restartable and hash-checked?
 - Are SEC requests rate-limited?
 - Are full-scale FSDS/Notes paths using Parquet/DuckDB where pandas-only
