@@ -8,21 +8,21 @@ hide:
 ## Discussion
 
 - **Bottom line.** The current evidence supports a reproducible
-  measurement-and-ranking paper on public review-and-correction risk; it does not support causal claims, latent-fraud truth claims, or superiority claims
+  measurement-and-ranking paper on public review-and-correction risk; it does not support causal claims, claims about unobserved fraud occurrence, or same-estimand performance claims
   over prior fraud-prediction papers on their original estimands.
 
-- **Does the task have empirical value?** Yes. The useful object is not another
+- **What is the empirical value of the task?** The useful object is not another
   static `misstatement = 1` classifier; it is a filing-origin estimand for
   whether an issuer later enters an observable public review or correction
   channel. That makes the task closer to the information environment faced by
   investors, auditors, researchers, and regulators at the filing date.
 
-- **What is the main research decision behind the study design?** The legacy
+- **What is the main research-design decision?** The legacy
   `gvkey x data_year` benchmark is retained as a diagnostic layer, not treated
-  as the only truth standard. The public cascade is the main empirical object:
+  as the sole reference construct. The public cascade is the main empirical object:
   `comment_thread` for public scrutiny, `amendment` for correction/friction,
   `8k_402` for severe material correction, and `aaer_proxy` only for sparse
-  enforcement-tail support.
+  high-severity enforcement support.
 
 - **What data are used?** The workflow combines four data layers. First, the
   legacy detected-misstatement benchmark provides 82,908 `gvkey x data_year`
@@ -34,14 +34,14 @@ hide:
   issuer-year modeling table and a 21.7 million-row filing provenance table;
   the main domestic public-cascade sample has 90,445 issuer-year rows from
   2011-2023. Fourth, farr support files supply the candidate `gvkey-CIK-year`
-  bridge plus AAER/date support used for construct-overlap and severity-tail
+  bridge plus AAER/date support used for construct-overlap and high-severity
   checks.
 
 - **What data matter most?** The most useful evidence comes from the public
   SEC/PCAOB issuer-year panel, especially comment threads, amendments, 8-K Item
   4.02 events, XBRL ratios, filing metadata, and auditor/oversight features. The
   farr `gvkey-CIK-year` bridge is valuable for candidate construct-overlap
-  evidence; AAER support data are useful only as a sparse severity-tail
+  evidence; AAER support data are useful only as a sparse high-severity enforcement
   descriptor.
 
 - **Are the legacy and public tasks the same X with different Y?** No. The
@@ -90,7 +90,7 @@ hide:
 - **What setup choices are being compared?** The public cascade fixes the task
   definitions and varies two modeling dimensions. The task dimension covers
   `comment_thread`, `amendment`, and `8k_402` as headline labels; `aaer_proxy`
-  is retained as sparse severity-tail status. The feature-family dimension
+  is retained as sparse high-severity status. The feature-family dimension
   compares `metadata` (filing and issuer-origin descriptors), `xbrl` (financial
   ratios and XBRL coverage), `auditor` (Form AP and engagement features),
   `oversight` (PCAOB-style oversight exposure), and `all` (their union). The
@@ -122,7 +122,7 @@ hide:
   useful. This prevents the public-data claim from collapsing into an
   undifferentiated `all features` result.
 
-- **What setup works best?** The strongest core public-cascade setup is
+- **Which empirical specification is strongest?** The strongest core public-cascade specification is
   `all + rolling_5y`, with equal-task mean PR-AUC `0.2475`. In the public peer
   transfer, the `all` feature family is also strongest on average
   (mean PR-AUC `0.2510`), with metadata remaining a strong baseline. The
@@ -132,7 +132,7 @@ hide:
   for peer-compatible evidence rather than novelty. It includes Dechow-family
   logit/F-score language, Perols-style logit/SVM/tree/bagging/stacking/MLP
   families, Bao-inspired tree ensembles, and Bertomeu-style XGBoost. These cover
-  the main model families accounting reviewers expect to see without claiming an
+  the main model families used in accounting ML research without claiming an
   exact replication of the original papers' samples and specifications.
 
 - **Which models perform best?** In the legacy benchmark peer suite,
@@ -185,11 +185,11 @@ hide:
   current bridge evidence is candidate-level under farr; WRDS-quality validation
   remains preferred before final manuscript-level integrated claims.
 
-- **What will reviewers likely scrutinize?** The strongest open gate is bridge
+- **Which limitation matters most for manuscript claims?** The strongest open gate is bridge
   quality. farr provides high-coverage candidate evidence, but a WRDS or
   equivalent institutional `gvkey-CIK-year` bridge is still preferred for final
   integrated claims. AAER also remains sparse and selective, so it should stay a
-  severity-tail descriptor rather than a headline prediction target.
+  high-severity descriptor rather than a headline prediction target.
 
 ## Run Metadata
 
@@ -203,7 +203,7 @@ hide:
 | Public filing panel | `data/public_lake/gold/filing_origin_panel.parquet` |
 | Bridge crosswalk | `data/external/gvkey_cik_year.csv` |
 | Construct overlap | `complete`, `validation_tier=candidate_farr` |
-| Peer comparison | `full`, legacy PR1 suite plus public-label PR2 suite |
+| Peer comparison | `full`, legacy peer suite plus public-label peer suite |
 
 Key readings:
 
@@ -224,9 +224,9 @@ flowchart LR
         L0["Legacy input<br/>data/raw_dataset_misstatement.parquet<br/>82,908 gvkey x data_year rows<br/>9,156 firms, 2001-2019"]
         L1["Legacy X<br/>engineered accounting, audit, governance,<br/>market, industry, and missingness predictors<br/>exclude ids, labels, res_an*, post-outcome fields"]
         L2["Legacy Y<br/>detected misstatement firm-year<br/>naive, proxy_drop_observed,<br/>proxy_imputed_lag 1/2/3/5y<br/>external_timing not available in this run"]
-        L3["Legacy model loops<br/>annual out-of-time test years<br/>rolling_5y, rolling_7y, rolling_10y, expanding<br/>core benchmark plus Peer-compatible legacy suite PR1<br/>Dechow / Perols / Bao / Bertomeu families"]
+        L3["Legacy model loops<br/>annual out-of-time test years<br/>rolling_5y, rolling_7y, rolling_10y, expanding<br/>core benchmark plus peer-compatible legacy suite<br/>Dechow / Perols / Bao / Bertomeu families"]
         L4["Legacy metrics<br/>PR-AUC relative to prevalence, ROC-AUC,<br/>Brier/BSS, ECE, top-50/100/200 precision,<br/>Bao top-fraction precision, sensitivity, BAC, NDCG"]
-        L5["Legacy reading<br/>timing-sensitive diagnostic benchmark<br/>useful for fragility, drift, and peer compatibility<br/>not a final latent-fraud truth standard"]
+        L5["Legacy reading<br/>timing-sensitive diagnostic benchmark<br/>useful for fragility, drift, and peer compatibility<br/>not a final standard for unobserved fraud occurrence"]
         L0 --> L1
         L0 --> L2
         L1 --> L3
@@ -240,11 +240,11 @@ flowchart LR
         P1["Parquet public lake<br/>21,743,433 filing provenance rows<br/>205,831 issuer-year rows<br/>90,445 domestic U.S. GAAP main-sample rows<br/>public fiscal years 2011-2023"]
         P2["Public modeling grain<br/>issuer_cik x fiscal_year<br/>origin_date is selected annual filing date<br/>public_issuer_origin input"]
         P3["Public X<br/>metadata, XBRL ratios, auditor, oversight, all<br/>rolling public history requires event_date < origin_date<br/>exclude source_available_*, public_date_*, vintage_* fields"]
-        P4["Public Y<br/>label_comment_thread_365: SEC comment-thread scrutiny<br/>label_amendment_365: amended filing or filing friction<br/>label_8k_402_365: Item 4.02 non-reliance<br/>label_aaer_proxy_730: sparse AAER severity-tail proxy"]
+        P4["Public Y<br/>label_comment_thread_365: SEC comment-thread scrutiny<br/>label_amendment_365: amended filing or filing friction<br/>label_8k_402_365: Item 4.02 non-reliance<br/>label_aaer_proxy_730: sparse high-severity AAER proxy"]
         P5["Public cascade loops<br/>annual out-of-time fiscal-year tests<br/>rolling/expanding train windows<br/>feature-family ablation<br/>best equal-task setup: all + rolling_5y<br/>mean PR-AUC 0.2475"]
-        P6["Peer-compatible public-label suite PR2<br/>same Dechow / Perols / Bao / Bertomeu families<br/>run on public estimand and public_issuer_origin input<br/>Bao emitted as bao_inspired_tree_ensemble"]
+        P6["Peer-compatible public-label suite<br/>same Dechow / Perols / Bao / Bertomeu families<br/>run on public estimand and public_issuer_origin input<br/>Bao emitted as bao_inspired_tree_ensemble"]
         P7["Public metrics<br/>same metric vocabulary where defined<br/>PR-AUC vs prevalence, ROC-AUC, Brier/BSS, ECE,<br/>top-50/100/200 precision, top-decile lift,<br/>Bao-style top-fraction metrics"]
-        P8["Public reading<br/>measurable filing-origin review-and-correction signal<br/>feature fusion helps over metadata baseline<br/>not evidence of superiority on the legacy fraud-prediction estimand"]
+        P8["Public reading<br/>measurable filing-origin review-and-correction signal<br/>feature fusion helps over metadata baseline<br/>not a performance ranking on the legacy fraud-prediction estimand"]
         P9["Public opacity DML<br/>missingness_density_score to public labels<br/>cross-fitted nuisance models<br/>adjusted association, not causal effect"]
         P0 --> P1
         P1 --> P2
@@ -262,9 +262,9 @@ flowchart LR
 
     subgraph VALIDATION["Bridge and construct-overlap evidence"]
         V0["Bridge gate<br/>farr gvkey-CIK-year candidate crosswalk<br/>raw-row coverage 97.96%, firm coverage 99.12%<br/>WRDS preferred for final manuscript validation"]
-        V1["Construct-overlap validation<br/>complete under validation_tier=candidate_farr<br/>47,418 high-confidence overlap rows<br/>contingency, lift, reciprocal alignment,<br/>event-time concentration, AAER severity-tail support"]
+        V1["Construct-overlap validation<br/>complete under validation_tier=candidate_farr<br/>47,418 high-confidence overlap rows<br/>contingency, lift, reciprocal alignment,<br/>event-time concentration, AAER high-severity support"]
         V2["Current integrated reading<br/>legacy positives are enriched in serious public labels<br/>public and legacy scores reciprocally rank severe outcomes<br/>constructs are related but non-identical"]
-        V3["Claim boundary<br/>candidate bridge evidence strengthens construct validity<br/>but does not establish fraud truth,<br/>causal identification, or WRDS-grade final validation"]
+        V3["Claim boundary<br/>candidate bridge evidence strengthens construct validity<br/>but does not identify unobserved fraud occurrence,<br/>causal effects, or WRDS-grade final validation"]
         V0 --> V1
         V1 --> V2
         V2 --> V3
@@ -438,7 +438,7 @@ comparison. Metrics below summarize all fitted task-fold rows in
 The public-label peer transfer appears in the following section because it uses
 the same model-family language under the filing-origin public-cascade estimand.
 
-Metric coverage is complete for the implemented PR1 contract:
+Metric coverage is complete for the implemented legacy peer-suite contract:
 
 - Sample and prevalence fields: `n_train`, `n_test`, `n_pos_test`, `prevalence`.
 - Discrimination: `roc_auc`, `pr_auc`.
@@ -663,9 +663,9 @@ Status:
 | Fitted task-fold rows | 4,320 |
 | Skipped status rows | 2,080 |
 | Missing Dechow fixed-score mapping rows | 480 |
-| AAER severity-tail status rows | 1,600 |
+| AAER high-severity status rows | 1,600 |
 | Headline public tasks | `comment_thread`, `amendment`, `8k_402` |
-| Severity-tail task | `aaer_proxy`, status only |
+| High-severity task | `aaer_proxy`, status only |
 
 Key readings:
 
@@ -813,7 +813,7 @@ Key readings:
 | Ambiguous matched rows | 406 | retained only for sensitivity |
 | Dropped rows | 35,084 | mostly outside public-panel coverage or bridge match |
 | Balanced event-time rows | 22,628 | rows with full `[-3,+3]` public coverage |
-| farr AAER firm-years in raw benchmark | 422 | external severity-tail support rows |
+| farr AAER firm-years in raw benchmark | 422 | external high-severity support rows |
 | farr AAER and legacy-positive overlap | 243 | descriptive AAER support, not a headline target |
 
 | Public label | High-confidence public positives | Both legacy and public positive | Lift of public label given legacy positive |
@@ -829,9 +829,9 @@ Key readings:
 - Legacy positives are much more likely to coincide with serious public
   correction signals, especially 8-K Item 4.02.
 - Comment-letter scrutiny is broader and only weakly concentrated in legacy
-  positives, consistent with public scrutiny rather than fraud truth.
+  positives, consistent with public scrutiny rather than unobserved fraud occurrence.
 - The AAER proxy is absent in the high-confidence overlap table and remains a
-  severity-tail support item, not a headline target.
+  high-severity support item, not a headline target.
 
 ## Figure 4. Construct-Overlap Signal
 
@@ -895,7 +895,7 @@ Key readings:
 
 | Component | Result | Interpretation |
 | --- | ---: | --- |
-| farr AAER raw benchmark firm-years | 422 | external severity-tail support |
+| farr AAER raw benchmark firm-years | 422 | external high-severity support |
 | farr AAER and legacy-positive overlap | 243 | old benchmark captures many farr AAER firm-years |
 | farr AAER high-confidence public rows | 220 | bridgeable but sparse in public-score prediction years |
 | farr AAER ranking status | `blocked_sparse` | do not report stable AAER ranking metrics |
@@ -904,8 +904,8 @@ Key readings:
 
 Key readings:
 
-- farr AAER support data reinforce the severity-tail interpretation of legacy
-  positives but do not supply complete enforcement truth.
+- farr AAER support data reinforce the high-severity interpretation of legacy
+  positives but do not provide a complete enforcement universe.
 - AAER public-score ranking remains blocked for sparsity, so no stable AAER
   ranking metric is reported.
 - The opacity refresh confirms that DML artifacts exist and are summarized, but

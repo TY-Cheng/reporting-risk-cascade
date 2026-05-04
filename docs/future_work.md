@@ -5,16 +5,15 @@ hide:
 
 # Deferred Extensions
 
-This page records the research program after the current benchmark plus public
-cascade paper. These extensions are deliberately deferred so the main study does
-not become an overextended data-engineering exercise before the measurement
-spine is stable.
+This page records extensions that follow the current benchmark and public
+cascade paper. They are deferred so the main study remains focused on the
+filing-origin measurement design before additional data layers are introduced.
 
 !!! warning "Scope guardrail"
-    The current paper must first keep label-observability diagnostics, concept
+    The current paper should first keep label-observability diagnostics, concept
     drift, public-label opacity analysis, full public-lake construction, public
     cascade prediction, and `gvkey-CIK-year` overlap validation reproducible.
-    Future models should be added only after those foundations are stable.
+    Additional model classes should be added only after those foundations are stable.
 
 [Back to the current paper plan](paper_plan.md){ .md-button .md-button--primary }
 [Return to docs home](index.md){ .md-button }
@@ -34,7 +33,7 @@ spine is stable.
 
     Add 13F, EDGAR-log, FTD, and market-structure inputs only after temporal
     security bridges and source-availability masks are defensible. SEC Insider
-    Transactions are a narrower P1 issuer-CIK extension in the current paper plan,
+    Transactions are a narrower issuer-CIK extension in the current paper plan,
     not part of this security-level expansion.
 
 - :material-account-network-outline: __Auditor and oversight network__
@@ -67,13 +66,13 @@ spine is stable.
 
 ## Extension Portfolio
 
-| Extension | Research contribution | When to activate |
+| Extension | Research contribution | Scope condition |
 | --- | --- | --- |
 | Multimodal cascade | Test whether narrative filings add lead time and stage-specific information. | After public cascade labels are stable. |
 | Public security and attention layers | Add institutional, attention, FTD, and market microstructure channels. | After temporal security-to-CIK bridges are available. |
 | Auditor and oversight network | Model monitoring exposure through Form AP, partners, firms, and PCAOB inspections. | After Form AP and inspection joins are clean. |
 | Severity and detector labels | Move toward occurrence-detection-disclosure decomposition. | After higher-quality restatement or detector data are acquired. |
-| Reproducibility package | Make the empirical pipeline submission-ready. | Before manuscript circulation and review. |
+| Reproducibility package | Make the empirical workflow submission-ready. | Before manuscript circulation and review. |
 
 ## Extension 1: Multimodal Cascade Model
 
@@ -311,7 +310,7 @@ development.
 - row-count reports for bronze, silver, and gold layers
 - model configuration files
 - table and figure reproduction commands
-- smoke-data test path for reviewers without public downloads
+- smoke-data test path for external replication without public downloads
 - documentation build command
 
 ### Reproducibility Command Shape
@@ -328,6 +327,6 @@ because it is network dependent.
 ### Submission Criteria
 
 - a fresh clone with `.env` configured can build docs and run tests
-- smoke data can reproduce the pipeline shape without the full public lake
+- smoke data can reproduce the workflow structure without the full public lake
 - full results can be regenerated from raw public sources and local manifests
 - every table in the manuscript maps to a single artifact path

@@ -1,11 +1,11 @@
-# Development Audit Prompt
+# Development Audit Brief
 
-Use this prompt when you want another agent to audit whether the
+Use this audit brief when you want an independent reviewer to assess whether the
 `reporting-risk-cascade` code and generated artifacts support the current paper
 plan. The audit should stay close to accounting evidence, filing timing, and ML
 evaluation. Do not turn it into a generic code review or a data-shopping list.
 
-## Prompt
+## Audit Instructions
 
 ```text
 You are auditing the reporting-risk-cascade paper repo. The paper is about a
@@ -84,7 +84,7 @@ or artifact_unavailable. Do not treat missing local data/artifacts as a code
 bug. Distinguish code-path support, documented contract, and live local evidence.
 
 Repository context:
-- Stable source-of-truth files are README.md, docs/paper_plan.md,
+- Authoritative reference files are README.md, docs/paper_plan.md,
   docs/results_snapshot.md, docs/future_work.md, justfile, .env,
   pyproject.toml, uv.lock, and the YAML files under config/.
 - Source code, wrappers, and tests live under src/, scripts/, and tests/.
@@ -129,8 +129,8 @@ Audit dimensions:
 - Separate code bugs from data constraints.
 - Treat raw_identifier_blocker as a bridge/input condition, not as proof that
   the public lake design is wrong.
-- Treat farr gvkey-CIK output as candidate_farr validation, not as WRDS-quality
-  ground truth.
+- Treat farr gvkey-CIK output as candidate_farr validation, not as a
+  WRDS-quality reference bridge.
 
 1. Workflow and command contract
 - Discover the active command surface from justfile rather than assuming recipe
@@ -201,7 +201,7 @@ Audit dimensions:
 - Check whether censoring is horizon-specific and task-specific.
 - Check whether comment letters are described as public comment-letter scrutiny,
   not full SEC review.
-- Check whether AAER is treated only as a severity-tail proxy or external
+- Check whether AAER is treated only as a high-severity enforcement proxy or external
   validation anchor, not as a full enforcement universe or a stable headline
   prediction target.
 - Check whether label_comment_thread_365, label_amendment_365,
@@ -273,7 +273,7 @@ Audit dimensions:
 - Check whether undersampling, class weights, calibration warnings, and Brier/ECE
   interpretation are documented under rare-event imbalance.
 - Check whether public peer transfer covers comment_thread, amendment, and
-  8k_402 while keeping aaer_proxy as severity-tail status.
+  8k_402 while keeping aaer_proxy as high-severity status.
 - Check whether aaer_proxy is skipped or status-only with
   severity_tail_sparse_not_headline, blocked_sparse, or an equally explicit
   reason code.
@@ -303,7 +303,7 @@ Audit dimensions:
   broader comment-letter signal.
 - Check whether aaer_proxy_730 sparsity is interpreted correctly: lack of public
   AAER proxy positives is not evidence that legacy positives have no AAER
-  relation; farr AAER support is a separate severity-tail check.
+  relation; farr AAER support is a separate high-severity check.
 - Check whether candidate_farr is clearly labeled as not WRDS-verified.
 
 8. Public Data Utilization Audit
@@ -425,7 +425,7 @@ Start with a short verdict:
 Then provide findings ordered by severity:
 - P0: critical violations of leakage, timing, identity, or claim validity.
 - P1: missing evidence needed for the next paper gate.
-- P2: engineering debt, performance risk, or documentation drift.
+- P2: implementation debt, performance risk, or documentation drift.
 
 For every finding, include:
 - title
@@ -454,7 +454,7 @@ Constraints:
 - Do not invent data availability.
 - Do not treat absence of WRDS or Audit Analytics as a code bug.
 - Do not recommend paid data as required for the current v1 paper.
-- Do not recommend LLM/GNN/frontier multimodal work until the benchmark, public
+- Do not recommend LLM/GNN or multimodal extensions until the benchmark, public
   cascade, XBRL ratios, peer-transfer evidence, and bridge/construct-overlap
   gates are stable.
 - Do not present farr candidate validation as WRDS-quality validation.

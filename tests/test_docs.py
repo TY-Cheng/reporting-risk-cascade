@@ -42,7 +42,7 @@ def test_mkdocs_nav_uses_paper_plan_and_future_work_pages() -> None:
         {"Results Snapshot": "results_snapshot.md"},
         {"Paper Plan": "paper_plan.md"},
         {
-            "Audit Prompts": [
+            "Audit Briefs": [
                 {"Development Audit": "development_audit_prompt.md"},
                 {"Manuscript Audit": "manuscript_audit_prompt.md"},
             ]
@@ -238,7 +238,7 @@ def test_docs_home_is_the_readme_snippet_only() -> None:
 def test_results_snapshot_exposes_current_main_artifact_results() -> None:
     results = _read("docs/results_snapshot.md")
     required_phrases = [
-        "Does the task have empirical value?",
+        "What is the empirical value of the task?",
         "What data are used?",
         "legacy detected-misstatement benchmark",
         "205,831-row",
@@ -256,7 +256,7 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "Which design factors are studied?",
         "proxy_imputed_lag",
         "Why this setup design?",
-        "What setup works best?",
+        "Which empirical specification is strongest?",
         "What models are included, and why these models?",
         "Which models perform best?",
         "What metrics are reported?",
@@ -271,7 +271,7 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "Legacy benchmark evidence",
         "Public filing-origin cascade evidence",
         "Bridge and construct-overlap evidence",
-        "Peer-compatible legacy suite",
+        "peer-compatible legacy suite",
         "Peer-compatible public-label suite",
         "same metric vocabulary where defined",
         "public_issuer_origin input",
@@ -374,7 +374,7 @@ def test_readme_home_explains_project_and_workflow() -> None:
     home = _read("README.md")
     required_phrases = [
         "Research Object",
-        "Public Review-And-Correction Labels",
+        "Public Review-and-Correction Labels",
         "Repository Layout",
         "Execution Contract",
         "Public Lake",
@@ -418,14 +418,14 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "**Construct claim.**",
         "**Evidence requirement.**",
         "filing-origin public reporting-risk estimand",
-        "not same-estimand superiority claims",
+        "not same-estimand performance rankings",
         "metric-compatible ranking evidence",
         "Peer models and metrics",
         "bridge-based overlap validation",
         "legacy detected-misstatement labels",
         "ex post detected misconduct",
-        "review-and-correction risk rather than latent fraud truth",
-        "does not by itself establish latent fraud truth, causal identification",
+        "review-and-correction risk rather than unobserved fraud occurrence",
+        "does not by itself identify unobserved fraud occurrence, causal effects",
         "positive-class rate",
         "random-ranking baseline for PR-AUC",
         "annual out-of-time evaluation",
@@ -444,8 +444,8 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Public filing-origin cascade",
         "Bridge and interpretation layer",
         "external benchmark, not SEC/PCAOB public lake",
-        "PR1 legacy peer suite",
-        "PR2 public peer suite",
+        "legacy peer suite",
+        "public-label peer suite",
         "same metric vocabulary as benchmark",
         "Construct-overlap checks",
         "```mermaid",
@@ -546,7 +546,7 @@ def test_paper_plan_documents_prior_literature_and_intended_contribution() -> No
         "Cassell, Cunningham, and Myers",
         "Bozanic, Dietrich, and Johnson",
         "Brown, Tian, and Tucker",
-        "not same-estimand superiority claims",
+        "not same-estimand performance rankings",
         "does not mechanically force an earlier-stage label",
         "Dechow-style scores",
         "legacy model zoo",
@@ -576,7 +576,7 @@ def test_gitignore_covers_local_manuscript_exports_and_mac_junk() -> None:
 def test_future_work_documents_deferred_scope_and_guardrails() -> None:
     future = _read("docs/future_work.md")
     required_phrases = [
-        "deliberately deferred",
+        "They are deferred",
         "Multimodal Cascade Model",
         "long-context finance embeddings",
         "No runtime code is retained",
@@ -592,7 +592,7 @@ def test_future_work_documents_deferred_scope_and_guardrails() -> None:
 def test_development_audit_prompt_targets_code_against_paper_plan() -> None:
     prompt = _read("docs/development_audit_prompt.md")
     required_phrases = [
-        "Development Audit Prompt",
+        "Development Audit Brief",
         "reporting-risk-cascade paper",
         "pre-disclosure reporting-risk state",
         "docs/paper_plan.md as the binding research and implementation contract",
@@ -678,9 +678,9 @@ def test_manuscript_audit_prompt_targets_manuscript_quality_and_terms() -> None:
         "reporting-risk-cascade-manuscript",
         "pre-disclosure reporting-risk state",
         "public comment-letter scrutiny",
-        "AAER severity-tail proxy",
+        "AAER high-severity enforcement proxy",
         "DML-style high-dimensional adjustment",
-        "AI flavor",
+        "formulaic prose",
         "Claim-strength ladder",
         "reportable finding",
         "candidate evidence",

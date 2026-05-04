@@ -67,7 +67,7 @@ nav:
   - Home: index.md
   - Results Snapshot: results_snapshot.md
   - Paper Plan: paper_plan.md
-  - Audit Prompts:
+  - Audit Briefs:
       - Development Audit: development_audit_prompt.md
       - Manuscript Audit: manuscript_audit_prompt.md
   - Future Work: future_work.md

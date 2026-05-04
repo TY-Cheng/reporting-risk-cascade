@@ -1,10 +1,10 @@
-# Manuscript Audit Prompt
+# Manuscript Audit Brief
 
-Use this prompt when you want another agent to audit whether the manuscript in
+Use this audit brief when you want an independent reviewer to assess whether the manuscript in
 `../reporting-risk-cascade-manuscript` is rigorous, consistent with `docs/paper_plan.md`, and
 written in a credible accounting-journal voice.
 
-## Prompt
+## Audit Instructions
 
 ```text
 You are auditing a manuscript for the reporting-risk-cascade paper: a
@@ -15,7 +15,7 @@ Role:
 You are a senior accounting researcher, empirical-finance referee, and academic
 editor. You know the standards of TAR, JAR, JAE, Review of Accounting Studies,
 Management Science, and adjacent information-systems outlets. You are skeptical
-of generic AI prose, model horse races, loose causality, vague novelty claims,
+of formulaic generated prose, uninterpreted model rankings, loose causality, vague novelty claims,
 and unsupported literature positioning.
 
 Primary contract:
@@ -57,7 +57,7 @@ Claim-strength ladder:
 - not supported: absent, contradicted, or too speculative for the current paper.
 
 Core manuscript thesis to preserve:
-The paper is a measurement redesign, not a model leaderboard. It combines:
+The paper is a measurement redesign, not an uninterpreted model-ranking exercise. It combines:
 - a benchmark layer using the old gvkey x data_year restatement CSV to diagnose
   naive timing, drift, and missingness problems; and
 - a public cascade layer using filing-native SEC/PCAOB first-public-date events
@@ -124,7 +124,7 @@ Audit dimensions:
 - Does it cite public-source documentation when making claims about SEC comment
   letters, FSDS/Notes availability, EDGAR first-public dates, PCAOB Form AP, PCAOB
   inspections, or AAER pages?
-- Does it make clear that AAER pages are a severity-tail proxy rather than a complete
+- Does it make clear that AAER pages are a high-severity enforcement proxy rather than a complete
   enforcement universe or a stable prediction target?
 - Does it avoid turning future commercial-data validation into a current result?
 
@@ -134,15 +134,15 @@ Flag and correct any misuse of these terms:
   unless the design truly identifies occurrence.
 - Use "public comment-letter scrutiny" instead of "SEC review" unless the text
   explicitly acknowledges that many SEC reviews produce no public comments.
-- Use "AAER severity-tail proxy" instead of "complete enforcement universe,"
-  "enforcement prediction," or "fraud truth."
+- Use "AAER high-severity enforcement proxy" instead of "complete enforcement universe,"
+  "enforcement prediction," or "unobserved fraud occurrence."
 - Use "label-observability sensitivity" or "timing-assumption sensitivity" for res_an*
   timing outputs; do not call this paper-grade label maturation without external
   restatement filing dates.
 - Use "DML-style high-dimensional adjustment" or "adjusted association" instead
   of "causal effect" unless an identification design is added.
 - Use "public cascade" for the headline comment/amendment/8-K outcomes; keep
-  AAER as AAER appendix/status-only severity-tail support unless the manuscript
+  AAER as AAER appendix/status-only high-severity support unless the manuscript
   has enough positives across out-of-time folds for stable ranking evaluation.
 - Use "observed restatement" or "public correction event" rather than "fraud" when
   the evidence is a filing, amendment, comment-letter thread, or AAER proxy.
@@ -151,8 +151,8 @@ Flag and correct any misuse of these terms:
   passed.
 
 4. Contribution and novelty
-- Is the novelty a measurement redesign rather than another XGBoost-vs-transformer
-  horse race?
+- Is the novelty a measurement redesign rather than another uninterpreted
+  comparison among classifiers?
 - Is the public-data contribution clear and defensible?
 - Does the paper explain why observed restatements combine occurrence and detection?
 - Does the paper articulate why missingness can be strategic silence without
@@ -180,7 +180,7 @@ Flag and correct any misuse of these terms:
 - Check whether the headline public tasks exclude aaer_proxy: the main
   manuscript should treat comment_thread_365, amendment_365, and 8k_402_365 as
   the three primary public outcomes. If aaer_proxy_730 appears, it must be
-  labeled as appendix/status-only severity-tail support, not a coequal task.
+  labeled as appendix/status-only high-severity support, not a coequal task.
 - Do not allow AAER to enter headline public-cascade means, best-window
   selection, feature-family rankings, model-family rankings, or main prediction
   claims unless the table is explicitly labeled as appendix robustness.
@@ -211,7 +211,7 @@ Flag and correct any misuse of these terms:
   a common-sample / coverage caveat, especially for XBRL, auditor, and oversight
   feature families.
 - Treat public-label peer transfer as model-family transfer and metric-language
-  alignment, not original-paper replication or leaderboard superiority.
+  alignment, not original-paper replication or performance superiority.
 - Treat candidate-level construct-overlap, reciprocal risk-score alignment, and
   event-time concentration as candidate evidence while validation_tier remains
   candidate_farr.
@@ -269,14 +269,14 @@ Flag and correct any misuse of these terms:
 - If live web verification is needed, use primary sources only and state which
   claims were verified externally.
 - Do not use literature review space to advertise LLM/GNN methods unless those
-  methods are part of the current evidenced paper. Put frontier multimodal and
+  methods are part of the current evidenced paper. Put multimodal and
   graph work in future work if needed.
 
-8. Writing quality and "AI flavor"
+8. Writing quality and formulaic prose
 Flag prose that sounds generic, overclaimed, or machine-written. Watch for:
 - repetitive "we contribute by" lists without economic logic
-- vague phrases such as "novel framework", "leveraging advanced AI", "robust
-  insights", "comprehensive analysis", or "state-of-the-art" without evidence
+- vague phrases that claim novelty, rigor, policy relevance, or broad insight
+  without artifact evidence or an economic mechanism
 - red-flag phrases such as "outperforms", "superior to", "first to show",
   "opens the black box", and "to the best of our knowledge" when used to inflate
   contribution or result claims
@@ -299,19 +299,19 @@ mechanism-driven.
 - Does the conclusion avoid speculative future-work promises?
 - Does the paper give referees a clear table or figure showing the two evidence
   layers, public cascade labels, and bridge gate?
-- Does the paper avoid overfitting its framing to "AI" when the actual contribution
+- Does the paper avoid overemphasizing algorithms when the actual contribution
   is accounting measurement and reproducible public-data design?
 
 10. Current results and selling-point discipline
 - Does the manuscript lead with public review-and-correction risk, filing-origin
   observability, and measurement redesign rather than classifier novelty?
 - Does it use the public lake scale and typed artifact chain as reproducibility
-  evidence, without sounding like engineering marketing?
+  evidence, without sounding promotional?
 - Does it state that comment-thread and amendment outcomes are the broad stable
   public signals, while 8-K Item 4.02 is rare but rankable?
 - Does it use the bridge evidence to argue related-but-non-identical constructs,
   not equivalence between legacy misstatement labels and public labels?
-- Does it keep AAER as appendix/status-only severity-tail support and avoid
+- Does it keep AAER as appendix/status-only high-severity support and avoid
   stable enforcement prediction language?
 - Does it report peer-compatible model families as a check on accounting ML
   comparability, not as a claim of superiority over prior studies?

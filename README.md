@@ -12,7 +12,7 @@ uses a `gvkey x data_year` detected-misstatement panel to diagnose timing,
 observability, drift, and missingness. The public cascade layer builds an
 issuer-year panel from SEC and PCAOB sources and predicts subsequent public
 scrutiny, amendment or filing friction, Item 4.02 non-reliance, and rare
-AAER severity-tail events.
+AAER high-severity enforcement indicators.
 
 ## Research Object
 
@@ -28,7 +28,7 @@ The detailed research design is in [Paper Plan](https://ty-cheng.github.io/repor
 The static run interpretation is in [Results Snapshot](https://ty-cheng.github.io/reporting-risk-cascade/results_snapshot/).
 Deferred extensions are in [Future Work](https://ty-cheng.github.io/reporting-risk-cascade/future_work/).
 
-## Public Review-And-Correction Labels
+## Public Review-and-Correction Labels
 
 The public cascade is a multi-label outcome design. These labels are public observability states, not alternative names for fraud.
 
@@ -37,9 +37,9 @@ The public cascade is a multi-label outcome design. These labels are public obse
 | `label_comment_thread_365` | 365 days | SEC comment-letter scrutiny after the filing origin. | [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) and public EDGAR correspondence. |
 | `label_amendment_365` | 365 days | Amended filing, correction, or filing-friction signal. | [SEC EDGAR filing access](https://www.sec.gov/edgar/search-and-access) and amended filing form metadata. |
 | `label_8k_402_365` | 365 days | Item 4.02 non-reliance or material-correction signal. | [SEC Form 8-K](https://www.sec.gov/files/form8-k.pdf), Item 4.02. |
-| `label_aaer_proxy_730` | 730 days | Rare enforcement severity-tail descriptor. | [SEC Accounting and Auditing Enforcement Releases](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) and `farr::aaer_*` support data. |
+| `label_aaer_proxy_730` | 730 days | Rare high-severity enforcement indicator. | [SEC Accounting and Auditing Enforcement Releases](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) and `farr::aaer_*` support data. |
 
-AAER is retained as severity-tail evidence because it is sparse and selective;
+AAER is retained as high-severity enforcement evidence because it is sparse and selective;
 it is not the headline prediction target.
 
 ## Repository Layout
@@ -120,7 +120,7 @@ just task study raw artifacts/full_with_peer \
 This reruns the study layer against the completed public lake and adds the
 legacy benchmark peer suite plus the public-label peer transfer suite on
 `issuer_origin_panel.parquet`. The public peer suite covers `comment_thread`,
-`amendment`, and `8k_402`; `aaer_proxy` remains a sparse severity-tail status.
+`amendment`, and `8k_402`; `aaer_proxy` remains a sparse high-severity status.
 Use `--peer-target public` to refresh public-label peer outputs without rerunning
 the legacy benchmark peer suite.
 
@@ -236,7 +236,7 @@ bash scripts/prepare_farr_support_data.sh --install-missing
 ```
 
 This exports `farr::aaer_dates`, `farr::aaer_firm_year`, and `farr::state_hq`.
-The AAER files support severity-tail overlap diagnostics; they do not replace
+The AAER files support high-severity overlap diagnostics; they do not replace
 the main public-cascade labels. `farr::state_hq` is used as a date-bounded,
 public-origin headquarters-state metadata feature when
 `data/external/farr_state_hq.csv` exists.
@@ -255,6 +255,6 @@ retain provenance fields: `source`, `source_version`, `extracted_at`,
 3. Candidate bridge overlap can support a related-but-non-identical construct
    argument. WRDS or equivalent validation remains preferred for final
    manuscript-grade integrated claims.
-4. AAER is a severity-tail descriptor and robustness anchor, not the headline
+4. AAER is a high-severity enforcement descriptor and robustness anchor, not the headline
    prediction target.
 <!-- --8<-- [end:docs-home] -->
