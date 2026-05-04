@@ -149,6 +149,7 @@ celerybeat.pid
 .env
 .envrc
 .venv*
+.serena/
 env/
 venv/
 ENV/
