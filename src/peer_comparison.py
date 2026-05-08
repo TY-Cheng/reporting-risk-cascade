@@ -1,7 +1,7 @@
 """Benchmark-only peer-compatible model-family comparison.
 
-This PR1 module deliberately stays inside the legacy benchmark task. It transfers
-peer model families into the repo's own folds and labels; it does not replicate
+This module stays inside the legacy benchmark task. It transfers peer model
+families into the repo's own folds and labels; it does not replicate
 original-paper samples or run public-cascade overlap analysis.
 """
 
@@ -216,7 +216,7 @@ def _mapping_rows(
 
 
 def aggregate_mapping_quality(mapping: pd.DataFrame) -> str:
-    """Aggregate variable-level mappings into the PR1 run-level quality enum."""
+    """Aggregate variable-level mappings into the run-level quality enum."""
     if mapping.empty:
         return "skipped"
     if not set(mapping["mapping_status"]).issubset(MAPPING_STATUSES):
@@ -1052,8 +1052,8 @@ def _summary_markdown(
     lines = [
         "# Peer Comparison Summary",
         "",
-        "- Scope: benchmark-only PR1 peer-compatible comparison.",
-        "- This is not original-paper numeric replication and not same-estimand leaderboard evidence.",
+        "- Scope: benchmark-only legacy peer-compatible comparison.",
+        "- This is not original-paper numeric replication and not same-estimand performance-ranking evidence.",
         "- `bao_style_ensemble` is reserved for raw-number-compatible inputs. The legacy benchmark "
         "defaults to `bao_inspired_tree_ensemble` when the raw-number gate does not pass.",
         f"- Mode: `{mode}`",
@@ -1111,7 +1111,7 @@ def run_peer_comparison(
     peer_config: Optional[Dict[str, Any]] = None,
     timing_csv: Optional[Path] = None,
 ) -> Dict[str, Path]:
-    """Run PR1 benchmark peer-compatible comparisons and write fixed artifacts."""
+    """Run benchmark peer-compatible comparisons and write fixed artifacts."""
     peer_config = peer_config or {}
     if mode not in {"none", "light", "full"}:
         raise ValueError("peer comparison mode must be one of: none, light, full")

@@ -136,7 +136,7 @@ flowchart LR
 
 > Comment letters are public scrutiny signals, not the full SEC review universe. AAER is a rare high-severity enforcement indicator, not a complete enforcement universe.
 
-> Bridge validation is mandatory for an integrated claim that the public cascade and the old benchmark measure related but non-identical constructs. Without that validation, the public-cascade result remains a public-data measurement result rather than a validated fraud/restatement overlap paper.
+> Bridge validation is mandatory for an integrated claim that the public cascade and the legacy benchmark measure related but non-identical constructs. Without that validation, the public-cascade result remains a public-data measurement result rather than a validated fraud/restatement overlap paper.
 
 ## Data and Feature Construction
 

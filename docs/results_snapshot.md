@@ -896,7 +896,7 @@ Key readings:
 | Component | Result | Interpretation |
 | --- | ---: | --- |
 | farr AAER raw benchmark firm-years | 422 | external high-severity support |
-| farr AAER and legacy-positive overlap | 243 | old benchmark captures many farr AAER firm-years |
+| farr AAER and legacy-positive overlap | 243 | legacy benchmark captures many farr AAER firm-years |
 | farr AAER high-confidence public rows | 220 | bridgeable but sparse in public-score prediction years |
 | farr AAER ranking status | `blocked_sparse` | do not report stable AAER ranking metrics |
 | Public opacity DML rows | 3 fitted outcomes | copied from existing DML artifacts, not refit |

@@ -166,7 +166,7 @@ def parse_args() -> argparse.Namespace:
         "--peer-comparison-mode",
         choices=["none", "light", "full"],
         default=None,
-        help="Run PR1 benchmark peer-compatible comparison suite",
+        help="Run peer-compatible model-family comparison suites",
     )
     parser.add_argument(
         "--peer-target",

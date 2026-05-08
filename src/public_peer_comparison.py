@@ -1,8 +1,7 @@
 """Public-label peer-compatible model-family transfer.
 
-This module is the PR2 counterpart to :mod:`src.peer_comparison`. It keeps the
-peer model-family comparison language but changes the estimand to filing-origin
-public review-and-correction labels.
+This module transfers the legacy peer model-family comparison language to
+filing-origin public review-and-correction labels.
 """
 
 from __future__ import annotations
@@ -743,9 +742,9 @@ def _summary_markdown(
     lines = [
         "# Public Peer Comparison Summary",
         "",
-        "- Scope: public-label PR2 peer-compatible model-family transfer.",
-        "- This is not same-estimand leaderboard evidence against prior fraud papers.",
-        "- `aaer_proxy` is status-only severity-tail evidence.",
+        "- Scope: public-label peer-compatible model-family transfer.",
+        "- This is not same-estimand performance-ranking evidence against prior fraud papers.",
+        "- `aaer_proxy` is status-only high-severity enforcement support.",
         f"- Mode: `{mode}`",
         "",
         "## Status Counts",

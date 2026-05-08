@@ -1136,7 +1136,7 @@ def _write_summary(
             "This pattern is consistent with related but non-identical constructs: the "
             "public cascade captures a broader set of review-and-correction events that "
             "includes, but is not limited to, legacy detected misstatements and "
-            "AAER-like severity-tail events."
+            "AAER-like high-severity enforcement events."
         )
     lines.extend(
         [
@@ -1144,7 +1144,7 @@ def _write_summary(
             "## Notes",
             "",
             "- Public-label event-time rows are descriptive rates only; no significance tests are reported.",
-            "- AAER rows are severity-tail support, not complete enforcement truth.",
+            "- AAER rows are high-severity enforcement support, not a complete enforcement universe.",
             "- farr bridge evidence is candidate validation. WRDS remains preferred for final manuscript claims.",
         ]
     )
