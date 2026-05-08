@@ -28,11 +28,10 @@ PUBLIC_LABELS = [
     "label_aaer_proxy_730",
 ]
 RES_AN_COLS = ["res_an0", "res_an1", "res_an2", "res_an3"]
-BRIDGE_SOURCE = "farr_candidate"
-VALIDATION_TIER = "candidate_farr"
 BOOTSTRAP_REPS = 1000
 MIN_RANKING_POSITIVES = 10
 BOOTSTRAP_POSITIVE_THRESHOLD = 30
+BRIDGE_PROVENANCE_COLUMNS = ["source", "source_version", "match_method"]
 
 
 def _utc_now() -> str:
@@ -130,6 +129,62 @@ def _write_json(payload: dict[str, Any], path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return path
+
+
+def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
+    """Infer bridge evidence tier from normalized crosswalk provenance columns."""
+    if not crosswalk_path.exists():
+        return {
+            "bridge_source": "none",
+            "validation_tier": "none",
+            "bridge_provenance": {"source_values": [], "match_methods": []},
+        }
+
+    header = pd.read_csv(crosswalk_path, nrows=0)
+    available = [col for col in BRIDGE_PROVENANCE_COLUMNS if col in header.columns]
+    if not available:
+        return {
+            "bridge_source": "external_crosswalk_unknown_provenance",
+            "validation_tier": "candidate_external",
+            "bridge_provenance": {"source_values": [], "match_methods": []},
+        }
+
+    frame = pd.read_csv(crosswalk_path, usecols=available, dtype=str).fillna("")
+    source_values = (
+        sorted(value for value in frame["source"].str.strip().unique() if value)
+        if "source" in frame
+        else []
+    )
+    match_methods = (
+        sorted(value for value in frame["match_method"].str.strip().unique() if value)
+        if "match_method" in frame
+        else []
+    )
+    evidence_text = frame.apply(lambda row: " ".join(str(value) for value in row), axis=1).str.lower()
+    has_wrds = evidence_text.str.contains("wrds|compustat", regex=True).any()
+    has_farr = evidence_text.str.contains("farr|gvkey_ciks", regex=True).any()
+
+    if has_wrds and not has_farr:
+        bridge_source = source_values[0] if len(source_values) == 1 else "wrds_compustat_crosswalk"
+        validation_tier = "wrds_validated"
+    elif has_wrds and has_farr:
+        bridge_source = "mixed_wrds_farr_crosswalk"
+        validation_tier = "candidate_mixed"
+    elif has_farr:
+        bridge_source = "farr_candidate"
+        validation_tier = "candidate_farr"
+    else:
+        bridge_source = source_values[0] if len(source_values) == 1 else "external_crosswalk"
+        validation_tier = "candidate_external"
+
+    return {
+        "bridge_source": bridge_source,
+        "validation_tier": validation_tier,
+        "bridge_provenance": {
+            "source_values": source_values,
+            "match_methods": match_methods,
+        },
+    }
 
 
 def _update_study_manifest_for_construct_overlap(
@@ -547,6 +602,7 @@ def _score_metric_rows(
     target_col: str,
     score_col: str,
     count_prefix: str,
+    bridge_source: str,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if frame.empty:
@@ -568,7 +624,7 @@ def _score_metric_rows(
                 "top_decile_lift_ci_low": metrics["top_decile_lift_ci_low"],
                 "top_decile_lift_ci_high": metrics["top_decile_lift_ci_high"],
                 "metric_status": metrics["status"],
-                "bridge_source": BRIDGE_SOURCE,
+                "bridge_source": bridge_source,
             }
         )
         rows.append(row)
@@ -635,7 +691,12 @@ def _public_score_frames(con: Any, public_predictions_path: Path) -> dict[str, p
     return outputs
 
 
-def _public_ranking(con: Any, public_predictions_path: Path, out_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _public_ranking(
+    con: Any,
+    public_predictions_path: Path,
+    out_dir: Path,
+    bridge_source: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     frames = _public_score_frames(con, public_predictions_path)
     main = frames["mean"].loc[frames["mean"]["bridge_tier"].eq("high_confidence")].copy()
     main["model_id"] = "public_cascade"
@@ -654,6 +715,7 @@ def _public_ranking(con: Any, public_predictions_path: Path, out_dir: Path) -> t
         target_col="legacy_label",
         score_col="score",
         count_prefix="legacy",
+        bridge_source=bridge_source,
     )
     main_out = pd.DataFrame(main_rows)
     _write_csv(main_out, out_dir / "public_score_legacy_ranking.csv")
@@ -675,6 +737,7 @@ def _public_ranking(con: Any, public_predictions_path: Path, out_dir: Path) -> t
         target_col="legacy_label",
         score_col="score",
         count_prefix="legacy",
+        bridge_source=bridge_source,
     )
     sens_out = pd.DataFrame(sens_rows)
     _write_csv(sens_out, out_dir / "public_score_legacy_ranking_sensitivity.csv")
@@ -703,6 +766,7 @@ def _reciprocal_alignment(
     benchmark_predictions_path: Path,
     peer_predictions_path: Path | None,
     out_dir: Path,
+    bridge_source: str,
 ) -> pd.DataFrame:
     con.execute(
         f"""
@@ -793,6 +857,7 @@ def _reciprocal_alignment(
         target_col="target_label",
         score_col="score",
         count_prefix="public",
+        bridge_source=bridge_source,
     )
     out = pd.DataFrame(rows)
     _write_csv(out, out_dir / "reciprocal_alignment.csv")
@@ -912,6 +977,7 @@ def _aaer_outputs(
     farr_aaer_firm_year_path: Path,
     farr_aaer_dates_path: Path,
     public_ranking_source: pd.DataFrame,
+    bridge_source: str,
 ) -> None:
     expanded = _expand_farr_aaer(farr_aaer_firm_year_path)
     if expanded.empty:
@@ -980,6 +1046,7 @@ def _aaer_outputs(
             target_col="farr_aaer_firm_year",
             score_col="score",
             count_prefix="farr_aaer",
+            bridge_source=bridge_source,
         )
         ranking = pd.DataFrame(rows)
     _write_csv(ranking, out_dir / "farr_aaer_ranking_lift.csv")
@@ -1086,6 +1153,13 @@ def _write_summary(
     cooccurrence: pd.DataFrame,
     aggregation: pd.DataFrame,
 ) -> None:
+    bridge_source = manifest["bridge_source"]
+    validation_tier = manifest["validation_tier"]
+    matched_sample_label = (
+        "WRDS-validated bridge sample"
+        if validation_tier == "wrds_validated"
+        else "matched candidate-bridge sample"
+    )
     best = (
         public_ranking.sort_values("top_decile_lift", ascending=False).head(1)
         if not public_ranking.empty
@@ -1113,8 +1187,8 @@ def _write_summary(
         "## Evidence Tier",
         "",
         f"- Run status: `{manifest['run_status']}`",
-        f"- Validation tier: `{manifest['validation_tier']}`",
-        f"- Bridge source: `{BRIDGE_SOURCE}`",
+        f"- Validation tier: `{validation_tier}`",
+        f"- Bridge source: `{bridge_source}`",
         f"- Aggregation-sensitive public-label rates: `{aggregation_sensitive}`",
         "",
         "## Claim Template",
@@ -1127,7 +1201,7 @@ def _write_summary(
     else:
         row = best.iloc[0]
         lines.append(
-            "In the matched candidate-bridge sample, legacy misstatement firm-years are "
+            f"In the {matched_sample_label}, legacy misstatement firm-years are "
             f"enriched in the top decile of public review-and-correction risk scores "
             f"(best top-decile lift = {row['top_decile_lift']:.2f}), but most high-risk "
             "public-cascade firm-years do not correspond to legacy detected-misstatement "
@@ -1145,9 +1219,14 @@ def _write_summary(
             "",
             "- Public-label event-time rows are descriptive rates only; no significance tests are reported.",
             "- AAER rows are high-severity enforcement support, not a complete enforcement universe.",
-            "- farr bridge evidence is candidate validation. WRDS remains preferred for final manuscript claims.",
         ]
     )
+    if validation_tier == "wrds_validated":
+        lines.append("- Bridge tier is inferred from WRDS/Compustat provenance in the normalized crosswalk.")
+    elif validation_tier == "candidate_farr":
+        lines.append("- farr bridge evidence is candidate validation. WRDS remains preferred for final manuscript claims.")
+    else:
+        lines.append("- Bridge tier is inferred from crosswalk provenance; non-WRDS tiers remain candidate evidence.")
     (out_dir / "construct_overlap_summary.md").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
@@ -1223,6 +1302,10 @@ def run_construct_overlap(
         )
         return manifest
 
+    bridge_evidence = _bridge_evidence_from_crosswalk(crosswalk)
+    bridge_source = str(bridge_evidence["bridge_source"])
+    validation_tier = str(bridge_evidence["validation_tier"])
+
     con = _duckdb_connect()
     try:
         _setup_base_tables(
@@ -1234,12 +1317,18 @@ def run_construct_overlap(
         panel = _write_overlap_core(con, out_dir)
         label_lift = _label_contingency(panel, out_dir)
         cooccurrence = _cooccurrence(panel, out_dir)
-        public_ranking, _ = _public_ranking(con, required["public_predictions"], out_dir)
+        public_ranking, _ = _public_ranking(
+            con,
+            required["public_predictions"],
+            out_dir,
+            bridge_source,
+        )
         reciprocal = _reciprocal_alignment(
             con,
             benchmark_predictions_path=required["benchmark_predictions"],
             peer_predictions_path=study_dir / "peer_comparison" / "legacy_model_family_predictions.parquet",
             out_dir=out_dir,
+            bridge_source=bridge_source,
         )
         _event_time(con, out_dir)
         high_public_scores = con.execute(
@@ -1268,6 +1357,7 @@ def run_construct_overlap(
             farr_aaer_firm_year_path=farr_aaer_firm_year,
             farr_aaer_dates_path=farr_aaer_dates,
             public_ranking_source=high_public_scores,
+            bridge_source=bridge_source,
         )
         _res_an_proxy_coverage(panel, out_dir)
         aggregation = pd.read_csv(out_dir / "aggregation_sensitivity.csv")
@@ -1285,8 +1375,9 @@ def run_construct_overlap(
     manifest = {
         "created_at": _utc_now(),
         "run_status": "complete",
-        "validation_tier": VALIDATION_TIER,
-        "bridge_source": BRIDGE_SOURCE,
+        "validation_tier": validation_tier,
+        "bridge_source": bridge_source,
+        "bridge_provenance": bridge_evidence["bridge_provenance"],
         "study_dir": str(study_dir),
         "out_dir": str(out_dir),
         "opacity_refresh": opacity_status,

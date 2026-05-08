@@ -1,5 +1,9 @@
 """
 Run construct-overlap validation from existing study artifacts.
+
+The validation tier is inferred from normalized crosswalk provenance,
+especially the `source` and `match_method` fields written by
+scripts/prepare_gvkey_cik_crosswalk.py.
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ def parse_args() -> argparse.Namespace:
         "--crosswalk",
         type=Path,
         default=DATA_DIR / "external" / "gvkey_cik_year.csv",
-        help="Candidate gvkey-CIK-year bridge",
+        help="Provenance-tagged gvkey-CIK-year bridge; source/match_method determine validation tier",
     )
     parser.add_argument(
         "--issuer-origin-panel",

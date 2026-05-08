@@ -217,6 +217,14 @@ uv run python scripts/prepare_gvkey_cik_crosswalk.py \
 just task bridge raw
 ```
 
+After replacing the bridge file in a peer-enabled study directory, refresh the
+bridge probe and construct-overlap layer without refitting models:
+
+```bash
+just task bridge raw artifacts/full_with_peer/bridge_probe
+uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
+```
+
 When WRDS is unavailable, prepare a provenance-tagged candidate bridge from
 `farr::gvkey_ciks`:
 
@@ -246,15 +254,23 @@ Accepted crosswalk columns are `gvkey`, `issuer_cik` or `cik`, plus either
 retain provenance fields: `source`, `source_version`, `extracted_at`,
 `match_method`, and `match_score`.
 
+Construct-overlap validation reads those provenance fields to infer
+`validation_tier`: farr exports remain `candidate_farr`, while WRDS/Compustat
+source or match-method provenance is reported as `wrds_validated`. Mixed
+WRDS/farr crosswalks remain candidate evidence until the mixed-source rows are
+resolved.
+
 ## Current Gates
 
 1. The public-cascade run is the current non-metadata `xbrl_ratio_baseline`
    snapshot.
 2. `farr::gvkey_ciks` is the current high-coverage candidate bridge when WRDS is
-   unavailable; coverage and multiplicity must be reported.
+   unavailable; coverage, multiplicity, and inferred validation tier must be
+   reported.
 3. Candidate bridge overlap can support a related-but-non-identical construct
-   argument. WRDS or equivalent validation remains preferred for final
-   manuscript-grade integrated claims.
+   argument. The construct-overlap manifest should move from `candidate_farr` to
+   `wrds_validated` only after a provenance-tagged WRDS or equivalent crosswalk
+   is supplied and the overlap layer is rerun.
 4. AAER is a high-severity enforcement descriptor and robustness anchor, not the headline
    prediction target.
 <!-- --8<-- [end:docs-home] -->

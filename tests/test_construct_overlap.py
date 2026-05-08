@@ -13,7 +13,13 @@ from src.construct_overlap import (
 from src.table_io import read_table, write_table
 
 
-def _write_toy_study(tmp_path: Path, *, with_opacity: bool = True) -> tuple[Path, Path, Path]:
+def _write_toy_study(
+    tmp_path: Path,
+    *,
+    with_opacity: bool = True,
+    crosswalk_source: str = "farr_gvkey_ciks",
+    match_method: str = "farr_gvkey_ciks_date_range",
+) -> tuple[Path, Path, Path]:
     study = tmp_path / "study"
     benchmark = study / "benchmark"
     cascade = study / "public_cascade"
@@ -57,7 +63,8 @@ def _write_toy_study(tmp_path: Path, *, with_opacity: bool = True) -> tuple[Path
                 "gvkey": gvkey,
                 "data_year": 2018,
                 "issuer_cik": cik,
-                "source": "farr_gvkey_ciks",
+                "source": crosswalk_source,
+                "match_method": match_method,
             }
         )
         public_rows.append(
@@ -144,7 +151,8 @@ def _write_toy_study(tmp_path: Path, *, with_opacity: bool = True) -> tuple[Path
                 "gvkey": "9000",
                 "data_year": 2018,
                 "issuer_cik": cik,
-                "source": "farr_gvkey_ciks",
+                "source": crosswalk_source,
+                "match_method": match_method,
             }
         )
         public_rows.append(
@@ -188,7 +196,8 @@ def _write_toy_study(tmp_path: Path, *, with_opacity: bool = True) -> tuple[Path
             "gvkey": "9999",
             "data_year": 2018,
             "issuer_cik": "0000099999",
-            "source": "farr_gvkey_ciks",
+            "source": crosswalk_source,
+            "match_method": match_method,
         }
     )
 
@@ -349,6 +358,35 @@ def test_construct_overlap_end_to_end_writes_candidate_validation_artifacts(
     summary = (out / "construct_overlap_summary.md").read_text(encoding="utf-8")
     assert "related but non-identical constructs" in summary
     assert "candidate validation" in summary
+
+
+def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance(
+    tmp_path: Path,
+) -> None:
+    study, crosswalk, public_panel = _write_toy_study(
+        tmp_path,
+        crosswalk_source="wrds_compustat_cik_gvkey_link",
+        match_method="wrds_cik_gvkey_link",
+    )
+    result = run_construct_overlap(
+        study_dir=study,
+        crosswalk_path=crosswalk,
+        issuer_origin_panel_path=public_panel,
+        farr_aaer_firm_year_path=tmp_path / "external" / "farr_aaer_firm_year.csv",
+        farr_aaer_dates_path=tmp_path / "external" / "farr_aaer_dates.csv",
+    )
+    out = study / "construct_overlap"
+
+    assert result["run_status"] == "complete"
+    assert result["validation_tier"] == "wrds_validated"
+    assert result["bridge_source"] == "wrds_compustat_cik_gvkey_link"
+    assert result["bridge_provenance"]["source_values"] == ["wrds_compustat_cik_gvkey_link"]
+    ranking = pd.read_csv(out / "public_score_legacy_ranking.csv")
+    assert set(ranking["bridge_source"]) == {"wrds_compustat_cik_gvkey_link"}
+    summary = (out / "construct_overlap_summary.md").read_text(encoding="utf-8")
+    assert "WRDS-validated bridge sample" in summary
+    study_manifest = json.loads((study / "study_run_manifest.json").read_text(encoding="utf-8"))
+    assert study_manifest["components"]["construct_overlap"]["validation_tier"] == "wrds_validated"
 
 
 def test_construct_overlap_missing_opacity_writes_blocker_without_failing(tmp_path: Path) -> None:

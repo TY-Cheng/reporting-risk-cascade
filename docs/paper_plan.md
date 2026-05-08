@@ -219,6 +219,9 @@ set -a; source .env; set +a
 uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --input path/to/wrds_cik_gvkey_link.csv \
   --out data/external/gvkey_cik_year.csv
+
+just task bridge raw artifacts/full_with_peer/bridge_probe
+uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
 ```
 
 - **Public candidate route while WRDS access is pending.**
@@ -229,6 +232,7 @@ bash scripts/prepare_farr_support_data.sh --install-missing
 ```
 
 - **Current candidate bridge.** `farr::gvkey_ciks` is the working high-coverage candidate bridge; it must be reported with coverage and multiplicity tables and should not be described as WRDS-verified.
+- **Validation tier.** Construct-overlap outputs infer `validation_tier` from normalized crosswalk provenance: farr exports remain `candidate_farr`, WRDS/Compustat provenance is `wrds_validated`, and mixed-source bridges remain candidate evidence.
 - **AAER support.** `farr::aaer_firm_year` and `farr::aaer_dates` are external AAER validation anchors.
 - **Metadata support.** `farr::state_hq` is a date-bounded headquarters-state metadata control.
 - **Missing bridge behavior.** If no usable external crosswalk exists, the bridge probe must report `raw_identifier_blocker` rather than infer links from benchmark identifiers alone.
@@ -326,7 +330,7 @@ bash scripts/prepare_farr_support_data.sh --install-missing
   - `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` stay outside default predictors.
   - Censoring masks are horizon-specific.
   - Crosswalk coverage and multiplicity are reported before overlap validation.
-  - Construct-overlap outputs carry `validation_tier = candidate_farr` until a verified WRDS bridge is supplied.
+  - Construct-overlap outputs carry `validation_tier = candidate_farr` under farr provenance and should flip to `wrds_validated` only after a provenance-tagged WRDS or equivalent bridge is supplied.
 - **Empirical sufficiency gates.**
   - Benchmark outputs non-empty rolling metrics, timing coverage, and missingness diagnostics.
   - Public cascade covers fiscal years 2011-2023 in the full panel.
