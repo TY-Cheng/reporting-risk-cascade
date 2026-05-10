@@ -58,10 +58,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     _bootstrap_repo_root()
 
-    from src import ARTIFACTS_DIR, DATA_DIR, RAW_DATASET_PATH, SAMPLE_DATASET_PATH
+    from src import ARTIFACTS_DIR, RAW_DATASET_PATH, SAMPLE_DATASET_PATH
     from src.data_prep import main as run_data_prep
+    from src.raw_dataset import materialize_raw_dataset
     from src.sample_dataset import materialize_sample_dataset
-    from src.table_io import read_table, write_table
 
     args = parse_args()
 
@@ -69,23 +69,13 @@ def main() -> None:
     if raw_override is not None:
         raw_csv = raw_override
     elif args.dataset == "sample":
-        legacy_csv = DATA_DIR / "raw_dataset_misstatement.csv"
-        if (
-            not RAW_DATASET_PATH.exists()
-            and RAW_DATASET_PATH.suffix.lower() == ".parquet"
-            and legacy_csv.exists()
-        ):
-            write_table(read_table(legacy_csv, low_memory=False), RAW_DATASET_PATH)
+        if not RAW_DATASET_PATH.exists() and RAW_DATASET_PATH.suffix.lower() == ".parquet":
+            materialize_raw_dataset()
         materialize_sample_dataset(raw_csv=RAW_DATASET_PATH, out_csv=SAMPLE_DATASET_PATH)
         raw_csv = SAMPLE_DATASET_PATH
     else:
-        legacy_csv = DATA_DIR / "raw_dataset_misstatement.csv"
-        if (
-            not RAW_DATASET_PATH.exists()
-            and RAW_DATASET_PATH.suffix.lower() == ".parquet"
-            and legacy_csv.exists()
-        ):
-            write_table(read_table(legacy_csv, low_memory=False), RAW_DATASET_PATH)
+        if not RAW_DATASET_PATH.exists() and RAW_DATASET_PATH.suffix.lower() == ".parquet":
+            materialize_raw_dataset()
         raw_csv = RAW_DATASET_PATH
 
     out_dir = args.out_dir or (ARTIFACTS_DIR / f"{args.dataset}_run")

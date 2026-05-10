@@ -13,7 +13,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Tuple
 
 import pandas as pd
 
@@ -145,7 +145,7 @@ def _rss_kib(pid: int) -> int:
     return int(sum(table[item][1] for item in pids if item in table))
 
 
-def _row_count_report(silver_dir: Path, gold_dir: Path) -> Dict[str, int]:
+def _row_count_report(silver_dir: Path, gold_dir: Path) -> Tuple[Dict[str, int], Dict[str, str]]:
     targets = {
         "issuer_dim": silver_dir / "issuer_dim.parquet",
         "filing_dim": silver_dir / "filing_dim.parquet",
@@ -160,7 +160,16 @@ def _row_count_report(silver_dir: Path, gold_dir: Path) -> Dict[str, int]:
         "issuer_origin_panel": gold_dir / "issuer_origin_panel.parquet",
         "filing_origin_panel": gold_dir / "filing_origin_panel.parquet",
     }
-    return {name: _count_table_rows(path) for name, path in targets.items() if path.exists()}
+    counts: Dict[str, int] = {}
+    errors: Dict[str, str] = {}
+    for name, path in targets.items():
+        if not path.exists():
+            continue
+        try:
+            counts[name] = _count_table_rows(path)
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            errors[name] = str(exc)
+    return counts, errors
 
 
 def _snapshot(args: argparse.Namespace, *, include_row_counts: bool = False) -> Dict[str, object]:
@@ -178,9 +187,9 @@ def _snapshot(args: argparse.Namespace, *, include_row_counts: bool = False) -> 
         "manifest_rows_json": json.dumps(manifests, sort_keys=True),
     }
     if include_row_counts:
-        row["row_counts_json"] = json.dumps(
-            _row_count_report(args.silver_dir, args.gold_dir), sort_keys=True
-        )
+        counts, errors = _row_count_report(args.silver_dir, args.gold_dir)
+        row["row_counts_json"] = json.dumps(counts, sort_keys=True)
+        row["row_count_errors_json"] = json.dumps(errors, sort_keys=True)
     return row
 
 
@@ -205,12 +214,14 @@ def main() -> None:
         row = _snapshot(args, include_row_counts=True)
         _append_csv(monitor_csv, [row])
         if args.report_json:
+            counts, errors = _row_count_report(args.silver_dir, args.gold_dir)
             args.report_json.parent.mkdir(parents=True, exist_ok=True)
             args.report_json.write_text(
                 json.dumps(
                     {
                         "snapshot": row,
-                        "row_counts": _row_count_report(args.silver_dir, args.gold_dir),
+                        "row_counts": counts,
+                        "row_count_errors": errors,
                     },
                     indent=2,
                     sort_keys=True,

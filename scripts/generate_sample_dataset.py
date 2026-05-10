@@ -41,13 +41,12 @@ def main() -> None:
     raw_data = args.raw_data or args.raw_csv
     out_data = args.out_data or args.out_csv
     if raw_data is None:
-        from src import DATA_DIR, RAW_DATASET_PATH
-        from src.table_io import read_table, write_table
+        from src import RAW_DATASET_PATH
+        from src.raw_dataset import materialize_raw_dataset
 
         raw_data = RAW_DATASET_PATH
-        legacy_csv = DATA_DIR / "raw_dataset_misstatement.csv"
-        if not raw_data.exists() and raw_data.suffix.lower() == ".parquet" and legacy_csv.exists():
-            write_table(read_table(legacy_csv, low_memory=False), raw_data)
+        if not raw_data.exists() and raw_data.suffix.lower() == ".parquet":
+            materialize_raw_dataset()
     if out_data is None:
         from src import SAMPLE_DATASET_PATH
 

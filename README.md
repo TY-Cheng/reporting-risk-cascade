@@ -72,7 +72,14 @@ The default local benchmark input is:
 data/raw_dataset_misstatement.parquet
 ```
 
-If only the legacy CSV exists, convert it once:
+If only the legacy CSV or ZIP exists, keep it at one of these paths and
+materialize the Parquet once:
+
+```text
+data/raw_dataset_misstatement.csv
+data/raw_dataset_misstatement.zip
+data/external/raw_dataset_misstatement.zip
+```
 
 ```bash
 uv run python scripts/convert_raw_dataset.py
@@ -80,7 +87,7 @@ uv run python scripts/convert_raw_dataset.py
 
 A clean GitHub checkout without the benchmark data can run `just check` and
 fixture-based smoke checks. Benchmark, study, and full workflows require the
-raw benchmark Parquet or the legacy CSV.
+raw benchmark Parquet or a materializable legacy CSV/ZIP.
 
 ## Execution Contract
 
@@ -94,6 +101,20 @@ just check
 public-lake coverage gate, `ruff`, and the strict MkDocs build. Core runtime
 modules must remain at or above 95% coverage; the larger public-lake builder has
 a separate 93% toy-data gate.
+
+Data-engineering only:
+
+```bash
+just data
+just data smoke
+just data full force
+```
+
+`just data` materializes the raw benchmark Parquet from CSV/ZIP when needed and
+builds the public lake without running the model study. The optional second
+argument controls refresh behavior: `fresh` rebuilds silver/gold from cached
+bronze, `resume` reuses DAG markers, and `force` re-downloads public source
+payloads before rebuilding.
 
 Paper-facing core run:
 

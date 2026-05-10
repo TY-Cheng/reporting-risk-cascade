@@ -39,6 +39,7 @@ _test-core:
         tests/test_peer_comparison.py \
         tests/test_public_cascade_interfaces.py \
         tests/test_public_peer_comparison.py \
+        tests/test_raw_dataset.py \
         tests/test_table_io_sample.py \
         --cov=src.benchmark \
         --cov=src.bridge \
@@ -115,7 +116,7 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
             uv run python scripts/generate_sample_dataset.py; \
         elif [ "{{ dataset }}" = "raw" ]; then \
             raw_data="data/raw_dataset_misstatement.parquet"; \
-            if [ ! -f "$raw_data" ] && [ -f "data/raw_dataset_misstatement.csv" ]; then \
+            if [ ! -f "$raw_data" ]; then \
                 uv run python scripts/convert_raw_dataset.py; \
             fi; \
         else \
@@ -139,7 +140,7 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
             uv run python scripts/generate_sample_dataset.py; \
         elif [ "{{ dataset }}" = "raw" ]; then \
             raw_data="data/raw_dataset_misstatement.parquet"; \
-            if [ ! -f "$raw_data" ] && [ -f "data/raw_dataset_misstatement.csv" ]; then \
+            if [ ! -f "$raw_data" ]; then \
                 uv run python scripts/convert_raw_dataset.py; \
             fi; \
         else \
@@ -157,7 +158,7 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
             uv run python scripts/generate_sample_dataset.py; \
         elif [ "{{ dataset }}" = "raw" ]; then \
             raw_data="data/raw_dataset_misstatement.parquet"; \
-            if [ ! -f "$raw_data" ] && [ -f "data/raw_dataset_misstatement.csv" ]; then \
+            if [ ! -f "$raw_data" ]; then \
                 uv run python scripts/convert_raw_dataset.py; \
             fi; \
         else \
@@ -176,6 +177,34 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
 
 _fetch source="sec-bulk" extra="": _check-env
     uv run python scripts/fetch_public_data.py --mode "{{ source }}" {{ extra }}
+
+data mode="full" strategy="fresh": _check-env
+    @if [ "{{ mode }}" != "smoke" ] && [ "{{ mode }}" != "full" ]; then \
+        echo "mode must be 'smoke' or 'full'"; \
+        exit 1; \
+    fi
+    @case "{{ strategy }}" in \
+        fresh|resume|force) ;; \
+        *) echo "strategy must be 'fresh', 'resume', or 'force'"; exit 1 ;; \
+    esac
+    just setup
+    @if [ "{{ strategy }}" = "force" ]; then \
+        uv run python scripts/convert_raw_dataset.py --overwrite; \
+    else \
+        uv run python scripts/convert_raw_dataset.py; \
+    fi
+    @lake_args=""; \
+    case "{{ strategy }}" in \
+        fresh) lake_args="--fresh-build" ;; \
+        resume) lake_args="--resume" ;; \
+        force) lake_args="--force --fresh-build" ;; \
+    esac; \
+    bash scripts/run_public_lake_full.sh \
+        --mode "{{ mode }}" \
+        --skip-setup \
+        --skip-public-cascade \
+        $lake_args; \
+    echo "Data engineering complete: raw dataset parquet plus public lake {{ mode }}."
 
 full *args: _check-env
     @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="4"; model_threads="2"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="400GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
@@ -256,12 +285,10 @@ full *args: _check-env
     just setup; \
     just _test; \
     just _ruff; \
-    if [ ! -f "data/raw_dataset_misstatement.parquet" ] && [ -f "data/raw_dataset_misstatement.csv" ]; then \
-        uv run python scripts/convert_raw_dataset.py; \
-    fi; \
+    uv run python scripts/convert_raw_dataset.py; \
     if [ "$dataset" = "raw" ] && [ ! -f "data/raw_dataset_misstatement.parquet" ]; then \
         echo "data/raw_dataset_misstatement.parquet is required for dataset=raw"; \
-        echo "If only the legacy CSV exists, run: uv run python scripts/convert_raw_dataset.py"; \
+        echo "Expected data/raw_dataset_misstatement.csv or data/external/raw_dataset_misstatement.zip as a materialization source."; \
         exit 1; \
     fi; \
     run_out="$out_dir"; \

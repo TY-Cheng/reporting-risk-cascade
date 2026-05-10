@@ -1,5 +1,5 @@
 """
-Convert the benchmark raw dataset from CSV to the repo-default Parquet path.
+Convert the benchmark raw dataset from CSV or ZIP to the repo-default Parquet path.
 """
 
 from __future__ import annotations
@@ -22,12 +22,22 @@ def parse_args() -> argparse.Namespace:
 
     from src import DATA_DIR
 
-    parser = argparse.ArgumentParser(description="Convert raw benchmark CSV to Parquet")
+    parser = argparse.ArgumentParser(description="Convert raw benchmark CSV/ZIP to Parquet")
+    parser.add_argument(
+        "--input-data",
+        type=Path,
+        default=None,
+        help=(
+            "Existing raw benchmark CSV or ZIP. Defaults to data/raw_dataset_misstatement.csv, "
+            "then data/raw_dataset_misstatement.zip, then "
+            "data/external/raw_dataset_misstatement.zip."
+        ),
+    )
     parser.add_argument(
         "--input-csv",
         type=Path,
-        default=DATA_DIR / "raw_dataset_misstatement.csv",
-        help="Existing raw benchmark CSV",
+        default=None,
+        help="Deprecated alias for --input-data",
     )
     parser.add_argument(
         "--out-data",
@@ -42,18 +52,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     _bootstrap_repo_root()
 
-    from src.table_io import read_table, write_table
+    from src.raw_dataset import materialize_raw_dataset
 
     args = parse_args()
-    if args.out_data.exists() and not args.overwrite:
-        print(f"Exists: {args.out_data}")
-        return
-    if not args.input_csv.exists():
-        raise FileNotFoundError(f"Raw benchmark CSV not found: {args.input_csv}")
-
-    frame = read_table(args.input_csv, low_memory=False)
-    write_table(frame, args.out_data, overwrite=True)
-    print(f"Wrote {len(frame)} rows to {args.out_data}")
+    source = args.input_data or args.input_csv
+    result = materialize_raw_dataset(
+        source_path=source,
+        out_data=args.out_data,
+        overwrite=args.overwrite,
+    )
+    if result.wrote_output:
+        print(f"Wrote {result.rows_written} rows from {result.source_path} to {result.out_data}")
+    else:
+        print(f"Exists: {result.out_data} (source available: {result.source_path})")
 
 
 if __name__ == "__main__":
