@@ -19,7 +19,7 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import ARTIFACTS_DIR, PROJECT_ROOT
+    from src import ARTIFACTS_DIR, LAKE_GOLD_DIR, PROJECT_ROOT
 
     parser = argparse.ArgumentParser(
         description="Run public cascade on the public filing-native panel"
@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--issuer-origin-panel",
         type=Path,
-        default=PROJECT_ROOT / "data" / "public_lake" / "gold" / "issuer_origin_panel.parquet",
+        default=LAKE_GOLD_DIR / "issuer_origin_panel.parquet",
         help="Issuer-level gold panel built from the public lake",
     )
     parser.add_argument(

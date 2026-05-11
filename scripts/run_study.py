@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,12 +33,22 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def _resolve_project_path(value: str | Path | None, *, default: Path) -> Path:
+def _resolve_project_path(
+    value: str | Path | None,
+    *,
+    default: Path,
+    data_dir: Path,
+    artifacts_dir: Path,
+) -> Path:
     if value is None or str(value) == "":
         return default
-    path = Path(value)
+    path = Path(os.path.expandvars(str(value))).expanduser()
     if path.is_absolute():
         return path
+    if path.parts and path.parts[0] == "data":
+        return data_dir.joinpath(*path.parts[1:])
+    if path.parts and path.parts[0] == "artifacts":
+        return artifacts_dir.joinpath(*path.parts[1:])
     return REPO_ROOT / path
 
 
@@ -248,7 +259,7 @@ def _write_summary(
 def main() -> None:
     _bootstrap_repo_root()
 
-    from src import LAKE_GOLD_DIR, LAKE_SILVER_DIR, RAW_DATASET_PATH
+    from src import ARTIFACTS_DIR, DATA_DIR, LAKE_GOLD_DIR, LAKE_SILVER_DIR, RAW_DATASET_PATH
     from src.benchmark import run_benchmark
     from src.bridge import run_bridge_probe
     from src.construct_overlap import run_construct_overlap
@@ -276,18 +287,26 @@ def main() -> None:
     raw_csv = _resolve_project_path(
         raw_data_arg or inputs.get("raw_data") or inputs.get("raw_csv"),
         default=RAW_DATASET_PATH,
+        data_dir=DATA_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
     )
     issuer_origin_panel = _resolve_project_path(
         args.issuer_origin_panel or inputs.get("issuer_origin_panel"),
         default=LAKE_GOLD_DIR / "issuer_origin_panel.parquet",
+        data_dir=DATA_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
     )
     issuer_dim = _resolve_project_path(
         args.issuer_dim or inputs.get("issuer_dim"),
         default=LAKE_SILVER_DIR / "issuer_dim.parquet",
+        data_dir=DATA_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
     )
     crosswalk = _resolve_project_path(
         args.crosswalk or inputs.get("gvkey_cik_crosswalk"),
-        default=REPO_ROOT / "data" / "external" / "gvkey_cik_year.csv",
+        default=DATA_DIR / "external" / "gvkey_cik_year.csv",
+        data_dir=DATA_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
     )
     benchmark_out = args.out_dir / str(outputs.get("benchmark_subdir", "benchmark"))
     public_cascade_out = args.out_dir / str(outputs.get("public_cascade_subdir", "public_cascade"))

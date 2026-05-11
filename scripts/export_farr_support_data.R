@@ -12,7 +12,7 @@ usage <- function() {
       "",
       "Options:",
       "  --out-dir PATH          Output directory.",
-      "                          Default: data/external",
+      "                          Default: DATA_DIR/external",
       "  --source-version TEXT   Override source_version column.",
       "                          Default: farr <installed-version>",
       "  --install-missing       Install farr from CRAN if it is not installed.",
@@ -25,8 +25,12 @@ usage <- function() {
 }
 
 parse_args <- function(args) {
+  data_dir <- Sys.getenv("DATA_DIR", unset = "data")
+  if (!nzchar(data_dir)) {
+    data_dir <- "data"
+  }
   opts <- list(
-    out_dir = "data/external",
+    out_dir = file.path(data_dir, "external"),
     source_version = "",
     install_missing = FALSE,
     repos = "https://cloud.r-project.org"

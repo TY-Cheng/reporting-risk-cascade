@@ -143,26 +143,27 @@ flowchart LR
 ### Reproduction Inputs
 
 - **Operational inputs.** A reproducible run needs the legacy benchmark file, the public SEC/PCAOB lake configuration, and the optional bridge/support exports:
-  - `data/raw_dataset_misstatement.parquet` for the legacy `gvkey x data_year` benchmark.
+  - `$DATA_DIR/raw_dataset_misstatement.parquet` for the legacy `gvkey x data_year` benchmark.
   - `config/public_data.yaml` and `config/study.yaml` for public-source and study defaults.
-  - `data/external/gvkey_cik_year.csv` for bridge validation, generated from WRDS when available or from farr as the current candidate bridge.
-  - `data/external/farr_aaer_firm_year.csv`, `data/external/farr_aaer_dates.csv`, and `data/external/farr_state_hq.csv` for AAER and headquarters-state support.
+  - `$DATA_DIR/external/gvkey_cik_year.csv` for bridge validation, generated from WRDS when available or from farr as the current candidate bridge.
+  - `$DATA_DIR/external/farr_aaer_firm_year.csv`, `$DATA_DIR/external/farr_aaer_dates.csv`, and `$DATA_DIR/external/farr_state_hq.csv` for AAER and headquarters-state support.
 - **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-04-23`. The stable full command is:
 
 ```bash
-just full full raw artifacts/full
+just full mode=full dataset=raw
 ```
 
 - **Peer and overlap run.** The peer-enabled study is a separate run so the default workflow stays bounded:
 
 ```bash
-just task study raw artifacts/full_with_peer \
+set -a; source .env; set +a
+just task study raw "$ARTIFACTS_DIR/full_with_peer" \
   extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
 ```
 
 ### Legacy Benchmark Panel
 
-- **File.** `data/raw_dataset_misstatement.parquet`.
+- **File.** `$DATA_DIR/raw_dataset_misstatement.parquet`.
 - **Grain.** `gvkey x data_year`.
 - **Coverage.** 2001-2019.
 - **Required fields.** `gvkey`, `data_year`, `misstatement firm-year`, `res_an0` to `res_an3`, `missing_*` flags, and accounting/audit/governance/market/industry predictors.
@@ -177,7 +178,7 @@ just task study raw artifacts/full_with_peer \
 
 ### Public SEC/PCAOB Lake
 
-- **Storage design.** `data/public_lake/` is organized as bronze, silver, and gold.
+- **Storage design.** `$DATA_DIR/public_lake/` is organized as bronze, silver, and gold.
 - **Bronze.** Downloaded public files with source URL, timestamp, SHA256 hash, parser version, schema version, and as-of date.
 - **Silver.** Normalized issuer, filing, XBRL, Notes, comment-thread, correction, Form AP, PCAOB inspection, and AAER proxy tables; large Silver tables are Parquet-first.
 - **Gold.** `issuer_origin_panel.parquet` and `filing_origin_panel.parquet`.
@@ -209,7 +210,7 @@ just task study raw artifacts/full_with_peer \
 
 ### Bridge and External Validation Inputs
 
-- **Bridge file.** `data/external/gvkey_cik_year.csv`.
+- **Bridge file.** `$DATA_DIR/external/gvkey_cik_year.csv`.
 - **Required fields.** `gvkey`, `issuer_cik`, a single year or start/end years, and provenance fields such as source, version, extraction date, match method, and match score.
 - **Bridge grain.** Bridge validation maps legacy `gvkey x data_year` rows to public `issuer_cik x fiscal_year` rows. It must report coverage, multiplicity, high-confidence and ambiguous matches, and unmatched diagnostics before overlap evidence is interpreted.
 - **WRDS-preferred route.**
@@ -218,10 +219,10 @@ just task study raw artifacts/full_with_peer \
 set -a; source .env; set +a
 uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --input path/to/wrds_cik_gvkey_link.csv \
-  --out data/external/gvkey_cik_year.csv
+  --out "$DATA_DIR/external/gvkey_cik_year.csv"
 
-just task bridge raw artifacts/full_with_peer/bridge_probe
-uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
+just task bridge raw "$ARTIFACTS_DIR/full_with_peer/bridge_probe"
+uv run python scripts/run_construct_overlap.py --study-dir "$ARTIFACTS_DIR/full_with_peer"
 ```
 
 - **Public candidate route while WRDS access is pending.**
@@ -358,15 +359,16 @@ just check
 - **Paper-facing core run.**
 
 ```bash
-just full full raw artifacts/full
+just full mode=full dataset=raw
 ```
 
 - **Peer-compatible model-family transfer.**
 
 ```bash
-just task study raw artifacts/full_with_peer \
+set -a; source .env; set +a
+just task study raw "$ARTIFACTS_DIR/full_with_peer" \
   extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
 ```
 
-- **Command boundary.** `just check` is the local quality gate; `just full full raw artifacts/full` is the paper-facing core run for data engineering and core experiments; `full_with_peer` adds the legacy and public-label peer model-family transfer suites. Use `--peer-target public` when only the public-label peer transfer needs to be refreshed.
+- **Command boundary.** `just check` is the local quality gate; `just full mode=full dataset=raw` is the paper-facing core run for data engineering and core experiments; `full_with_peer` adds the legacy and public-label peer model-family transfer suites. Use `--peer-target public` when only the public-label peer transfer needs to be refreshed.
 - **Detailed operations.** Component-level reruns and public-lake operational details are documented in [the repository home page](index.md), which includes the root `README.md`.

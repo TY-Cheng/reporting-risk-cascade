@@ -10,7 +10,7 @@ usage <- function() {
       "",
       "Options:",
       "  --out PATH              Output CSV path.",
-      "                          Default: data/external/farr_gvkey_ciks_raw.csv",
+      "                          Default: DATA_DIR/external/farr_gvkey_ciks_raw.csv",
       "  --as-of-year YEAR       End year for open-ended links.",
       "                          Default: current calendar year",
       "  --source-version TEXT   Override source_version column.",
@@ -25,8 +25,12 @@ usage <- function() {
 }
 
 parse_args <- function(args) {
+  data_dir <- Sys.getenv("DATA_DIR", unset = "data")
+  if (!nzchar(data_dir)) {
+    data_dir <- "data"
+  }
   opts <- list(
-    out = "data/external/farr_gvkey_ciks_raw.csv",
+    out = file.path(data_dir, "external", "farr_gvkey_ciks_raw.csv"),
     as_of_year = as.integer(format(Sys.Date(), "%Y")),
     source_version = "",
     install_missing = FALSE,

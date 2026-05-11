@@ -46,12 +46,10 @@ it is not the headline prediction target.
 
 ```text
 config/       YAML settings for benchmark, public cascade, public data, and study runs
-data/         local raw inputs and ignored public-lake data
 docs/         MkDocs source pages
 scripts/      thin command-line wrappers and operational scripts
 src/          reusable implementation modules
 tests/        tests for runtime behavior, docs, public lake, and model contracts
-artifacts/    generated outputs, sample panels, logs, and run reports
 doc/          local reference PDFs
 ```
 
@@ -62,23 +60,33 @@ Use `just` as the stable command surface. It loads `.env` and uses the external
 
 ```bash
 cp .env.example .env
+# Fill PROJECT_ROOT/DOCS_DIR/PAPER_DIR/ARTIFACTS_DIR for this checkout,
+# and keep DATA_DIR on the external drive.
 just setup
 just status
 ```
 
-The default local benchmark input is:
+This checkout should not contain a repo-local `data/` directory or symlink.
+Data engineering paths come from `.env`: `DATA_DIR` holds raw/public-lake data,
+and `ARTIFACTS_DIR` holds generated outputs, sample panels, logs, and run
+reports. `ARTIFACTS_DIR` can be repo-local `artifacts/` because it is small and
+gitignored; `DATA_DIR` should stay external.
+For direct shell commands that use `$DATA_DIR` or `$ARTIFACTS_DIR`, source the
+local environment first with `set -a; source .env; set +a`.
+
+The default benchmark input is:
 
 ```text
-data/raw_dataset_misstatement.parquet
+$DATA_DIR/raw_dataset_misstatement.parquet
 ```
 
 If only the legacy CSV or ZIP exists, keep it at one of these paths and
 materialize the Parquet once:
 
 ```text
-data/raw_dataset_misstatement.csv
-data/raw_dataset_misstatement.zip
-data/external/raw_dataset_misstatement.zip
+$DATA_DIR/raw_dataset_misstatement.csv
+$DATA_DIR/raw_dataset_misstatement.zip
+$DATA_DIR/external/raw_dataset_misstatement.zip
 ```
 
 ```bash
@@ -119,7 +127,7 @@ payloads before rebuilding.
 Paper-facing core run:
 
 ```bash
-just full full raw artifacts/full
+just full mode=full dataset=raw
 ```
 
 This runs setup, tests, lint, public-lake build or resume, and the core study
@@ -128,13 +136,13 @@ validation when inputs exist. If a full build has already completed earlier
 stages, resume from DAG markers:
 
 ```bash
-just full mode=full dataset=raw out_dir=artifacts/full resume=1
+just full mode=full dataset=raw resume=1
 ```
 
 Peer-compatible model-family transfer:
 
 ```bash
-just task study raw artifacts/full_with_peer \
+just task study raw "$ARTIFACTS_DIR/full_with_peer" \
   extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
 ```
 
@@ -148,11 +156,11 @@ the legacy benchmark peer suite.
 Component reruns:
 
 ```bash
-just task benchmark raw artifacts/benchmark
-just task cascade raw artifacts/public_cascade
-just task bridge raw artifacts/bridge_probe
-just task study raw artifacts/study
-uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
+just task benchmark raw
+just task cascade raw
+just task bridge raw
+just task study raw
+uv run python scripts/run_construct_overlap.py --study-dir "$ARTIFACTS_DIR/full_with_peer"
 just docs
 ```
 
@@ -167,7 +175,8 @@ captured:
 ```bash
 bash scripts/run_public_lake_full.sh --dry-run
 bash scripts/run_public_lake_full.sh --mode smoke --submissions-max-ciks 200 --fetch-workers 2 --engine duckdb --duckdb-threads 4 --duckdb-memory-limit 10GB --duckdb-max-temp-size 400GB --fsds-batch-size 4 --notes-batch-size 2 --storage-format parquet --notes-mode summary --fresh-build
-nohup bash scripts/run_public_lake_full.sh --mode full > artifacts/logs/public_lake_full/nohup.log 2>&1 &
+set -a; source .env; set +a
+nohup bash scripts/run_public_lake_full.sh --mode full > "$ARTIFACTS_DIR/logs/public_lake_full/nohup.log" 2>&1 &
 ```
 
 Large Silver and Gold tables use Parquet by default:
@@ -185,41 +194,41 @@ Markdown. Notes raw text is skipped unless `notes_mode="raw"` is requested.
 
 Benchmark:
 
-- `artifacts/benchmark/rolling_metrics.csv`
-- `artifacts/benchmark/timing_coverage.csv`
-- `artifacts/benchmark/feature_family_importance.csv`
-- `artifacts/benchmark/missing_profile_clusters.csv`
-- `artifacts/benchmark/benchmark_summary.md`
+- `$ARTIFACTS_DIR/benchmark/rolling_metrics.csv`
+- `$ARTIFACTS_DIR/benchmark/timing_coverage.csv`
+- `$ARTIFACTS_DIR/benchmark/feature_family_importance.csv`
+- `$ARTIFACTS_DIR/benchmark/missing_profile_clusters.csv`
+- `$ARTIFACTS_DIR/benchmark/benchmark_summary.md`
 
 Public cascade:
 
-- `data/public_lake/gold/issuer_origin_panel.parquet`
-- `data/public_lake/gold/filing_origin_panel.parquet`
-- `artifacts/public_cascade/public_cascade_metrics.csv`
-- `artifacts/public_cascade/public_cascade_predictions.parquet`
-- `artifacts/public_cascade/public_opacity_dml.csv`
-- `artifacts/public_cascade/public_cascade_summary.md`
+- `$DATA_DIR/public_lake/gold/issuer_origin_panel.parquet`
+- `$DATA_DIR/public_lake/gold/filing_origin_panel.parquet`
+- `$ARTIFACTS_DIR/public_cascade/public_cascade_metrics.csv`
+- `$ARTIFACTS_DIR/public_cascade/public_cascade_predictions.parquet`
+- `$ARTIFACTS_DIR/public_cascade/public_opacity_dml.csv`
+- `$ARTIFACTS_DIR/public_cascade/public_cascade_summary.md`
 
 Bridge and construct overlap:
 
-- `artifacts/bridge_probe/bridge_probe_summary.json`
-- `artifacts/bridge_probe/coverage_report.csv`
-- `artifacts/bridge_probe/multiplicity_report.csv`
-- `artifacts/full_with_peer/construct_overlap/construct_overlap_summary.md`
-- `artifacts/full_with_peer/construct_overlap/public_score_legacy_ranking.csv`
-- `artifacts/full_with_peer/construct_overlap/reciprocal_alignment.csv`
+- `$ARTIFACTS_DIR/bridge_probe/bridge_probe_summary.json`
+- `$ARTIFACTS_DIR/bridge_probe/coverage_report.csv`
+- `$ARTIFACTS_DIR/bridge_probe/multiplicity_report.csv`
+- `$ARTIFACTS_DIR/full_with_peer/construct_overlap/construct_overlap_summary.md`
+- `$ARTIFACTS_DIR/full_with_peer/construct_overlap/public_score_legacy_ranking.csv`
+- `$ARTIFACTS_DIR/full_with_peer/construct_overlap/reciprocal_alignment.csv`
 
 Peer-compatible model-family suites:
 
-- `artifacts/full_with_peer/peer_comparison/`
-- `artifacts/full_with_peer/public_peer_comparison/`
+- `$ARTIFACTS_DIR/full_with_peer/peer_comparison/`
+- `$ARTIFACTS_DIR/full_with_peer/public_peer_comparison/`
 
 ## Bridge Inputs
 
 The integration bridge is:
 
 ```text
-data/external/gvkey_cik_year.csv
+$DATA_DIR/external/gvkey_cik_year.csv
 ```
 
 The repo cannot infer this table from the legacy benchmark alone because the
@@ -231,7 +240,7 @@ institutional crosswalk:
 set -a; source .env; set +a
 uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --input path/to/wrds_cik_gvkey_link.csv \
-  --out data/external/gvkey_cik_year.csv \
+  --out "$DATA_DIR/external/gvkey_cik_year.csv" \
   --source wrds_compustat_cik_gvkey_link \
   --source-version "YYYY-MM-DD"
 
@@ -242,8 +251,8 @@ After replacing the bridge file in a peer-enabled study directory, refresh the
 bridge probe and construct-overlap layer without refitting models:
 
 ```bash
-just task bridge raw artifacts/full_with_peer/bridge_probe
-uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
+just task bridge raw "$ARTIFACTS_DIR/full_with_peer/bridge_probe"
+uv run python scripts/run_construct_overlap.py --study-dir "$ARTIFACTS_DIR/full_with_peer"
 ```
 
 When WRDS is unavailable, prepare a provenance-tagged candidate bridge from
@@ -253,8 +262,8 @@ When WRDS is unavailable, prepare a provenance-tagged candidate bridge from
 bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
 ```
 
-This exports `data/external/farr_gvkey_ciks_raw.csv`, normalizes annual links to
-`data/external/gvkey_cik_year.csv`, and runs the bridge probe. Treat this as a
+This exports `$DATA_DIR/external/farr_gvkey_ciks_raw.csv`, normalizes annual links to
+`$DATA_DIR/external/gvkey_cik_year.csv`, and runs the bridge probe. Treat this as a
 candidate bridge whose coverage and multiplicity must be reported, not as a
 silent substitute for a WRDS-verified table.
 
@@ -268,7 +277,7 @@ This exports `farr::aaer_dates`, `farr::aaer_firm_year`, and `farr::state_hq`.
 The AAER files support high-severity overlap diagnostics; they do not replace
 the main public-cascade labels. `farr::state_hq` is used as a date-bounded,
 public-origin headquarters-state metadata feature when
-`data/external/farr_state_hq.csv` exists.
+`$DATA_DIR/external/farr_state_hq.csv` exists.
 
 Accepted crosswalk columns are `gvkey`, `issuer_cik` or `cik`, plus either
 `data_year`/`fiscal_year`/`fyear` or `start_year` and `end_year`. Prepared files

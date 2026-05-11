@@ -576,6 +576,7 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
         "public_cascade.py",
         "public_peer_comparison.py",
         "public_lake.py",
+        "raw_dataset.py",
         "ranking_metrics.py",
         "sample_dataset.py",
         "table_io.py",

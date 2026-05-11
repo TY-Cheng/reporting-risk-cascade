@@ -5,16 +5,16 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/prepare_farr_gvkey_cik_bridge.sh [options]
 
-Export farr::gvkey_ciks, normalize it to data/external/gvkey_cik_year.csv,
+Export farr::gvkey_ciks, normalize it to DATA_DIR/external/gvkey_cik_year.csv,
 and optionally run the bridge probe.
 
 Options:
   --raw-out PATH          Raw farr export path.
-                          Default: data/external/farr_gvkey_ciks_raw.csv
+                          Default: DATA_DIR/external/farr_gvkey_ciks_raw.csv
   --out PATH              Normalized annual crosswalk path.
-                          Default: data/external/gvkey_cik_year.csv
+                          Default: DATA_DIR/external/gvkey_cik_year.csv
   --summary-json PATH     Crosswalk summary JSON.
-                          Default: artifacts/bridge_crosswalk/farr_crosswalk_summary.json
+                          Default: ARTIFACTS_DIR/bridge_crosswalk/farr_crosswalk_summary.json
   --as-of-year YEAR       End year for open-ended links.
                           Default: current calendar year
   --source-version TEXT   Override farr source version.
@@ -24,7 +24,7 @@ Options:
   --no-raw-filter         Do not restrict link years to raw benchmark years.
   --skip-bridge-probe     Prepare the crosswalk but do not run just task bridge.
   --bridge-out-dir PATH   Bridge probe output directory.
-                          Default: artifacts/bridge_probe
+                          Default: ARTIFACTS_DIR/bridge_probe
   --help                  Show this message.
 EOF
 }
@@ -39,16 +39,19 @@ if [ -f ".env" ]; then
   set +a
 fi
 
-raw_out="data/external/farr_gvkey_ciks_raw.csv"
-out="data/external/gvkey_cik_year.csv"
-summary_json="artifacts/bridge_crosswalk/farr_crosswalk_summary.json"
+DATA_DIR="${DATA_DIR:-data}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-artifacts}"
+
+raw_out="${DATA_DIR}/external/farr_gvkey_ciks_raw.csv"
+out="${DATA_DIR}/external/gvkey_cik_year.csv"
+summary_json="${ARTIFACTS_DIR}/bridge_crosswalk/farr_crosswalk_summary.json"
 as_of_year="$(date +%Y)"
 source_version=""
 install_missing=0
 repos="https://cloud.r-project.org"
 no_raw_filter=0
 run_bridge_probe=1
-bridge_out_dir="artifacts/bridge_probe"
+bridge_out_dir="${ARTIFACTS_DIR}/bridge_probe"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in

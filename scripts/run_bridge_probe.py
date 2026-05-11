@@ -21,7 +21,7 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import ARTIFACTS_DIR, LAKE_GOLD_DIR, LAKE_SILVER_DIR
+    from src import ARTIFACTS_DIR, DATA_DIR, LAKE_GOLD_DIR, LAKE_SILVER_DIR
 
     parser = argparse.ArgumentParser(description="Run public-only gvkey-CIK bridge probe")
     parser.add_argument(
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--crosswalk",
         type=Path,
-        default=REPO_ROOT / "data" / "external" / "gvkey_cik_year.csv",
+        default=DATA_DIR / "external" / "gvkey_cik_year.csv",
         help="Optional authoritative gvkey-CIK-year crosswalk",
     )
     parser.add_argument(

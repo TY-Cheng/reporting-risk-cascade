@@ -23,8 +23,27 @@ _check-env:
             exit 1; \
             ;; \
     esac
-    @test -n "${DIR_MANUSCRIPT}" || { echo "DIR_MANUSCRIPT is missing in .env"; exit 1; }
     @mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"
+
+_check-data-env: _check-env
+    @repo_root="{{ repo_root }}"; \
+    test -n "${DATA_DIR:-}" || { echo "DATA_DIR is missing in .env"; exit 1; }; \
+    test -n "${ARTIFACTS_DIR:-}" || { echo "ARTIFACTS_DIR is missing in .env"; exit 1; }; \
+    case "${DATA_DIR}" in \
+        /*) ;; \
+        *) echo "DATA_DIR must be an absolute path, got: ${DATA_DIR}"; exit 1 ;; \
+    esac; \
+    case "${DATA_DIR%/}" in \
+        "$repo_root"|"$repo_root"/*) \
+            echo "DATA_DIR must point outside this repo, got: ${DATA_DIR}"; \
+            exit 1; \
+            ;; \
+    esac
+    @repo_root="{{ repo_root }}"; \
+    case "${ARTIFACTS_DIR}" in \
+        /*) ;; \
+        *) echo "ARTIFACTS_DIR must be an absolute path, got: ${ARTIFACTS_DIR}"; exit 1 ;; \
+    esac
 
 _ruff:
     uv run ruff check src scripts tests
@@ -65,21 +84,28 @@ _test: _test-core _test-public-lake
 setup: _check-env
     uv sync
 
-status: _check-env
+status: _check-data-env
     @echo "UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT}"
-    @echo "DIR_MANUSCRIPT=${DIR_MANUSCRIPT}"
+    @echo "MANUSCRIPT_DIR=${MANUSCRIPT_DIR:-${DIR_MANUSCRIPT:-}}"
     @echo "PROJECT_ROOT=${PROJECT_ROOT}"
+    @echo "WORK_DIR=${WORK_DIR:-${DIR_WORK:-${PROJECT_ROOT}}}"
     @echo "DATA_DIR=${DATA_DIR}"
     @echo "DOCS_DIR=${DOCS_DIR}"
     @echo "PAPER_DIR=${PAPER_DIR}"
-    @echo "DIR_MANUSCRIPT=${DIR_MANUSCRIPT}"
+    @echo "ARTIFACTS_DIR=${ARTIFACTS_DIR}"
+    @echo "PUBLIC_LAKE_DIR=${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"
+    @echo "LAKE_BRONZE_DIR=${LAKE_BRONZE_DIR:-${DATA_DIR}/public_lake/bronze}"
+    @echo "LAKE_SILVER_DIR=${LAKE_SILVER_DIR:-${DATA_DIR}/public_lake/silver}"
+    @echo "LAKE_GOLD_DIR=${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"
+    @echo "RAW_DATASET_PATH=${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"
+    @echo "MANUSCRIPT_DIR=${MANUSCRIPT_DIR:-${DIR_MANUSCRIPT:-}}"
     @if [ -x "${UV_PROJECT_ENVIRONMENT}/bin/python" ]; then \
-        "${UV_PROJECT_ENVIRONMENT}/bin/python" -c "import sys; from src import PROJECT_ROOT, DATA_DIR, DOCS_DIR, PAPER_DIR, DIR_MANUSCRIPT, ARTIFACTS_DIR, RAW_DATASET_PATH, SAMPLE_DATASET_PATH; print('python_prefix', sys.prefix); print('python_project_root', PROJECT_ROOT); print('python_data_dir', DATA_DIR); print('python_docs_dir', DOCS_DIR); print('python_paper_dir', PAPER_DIR); print('python_dir_manuscript', DIR_MANUSCRIPT); print('python_artifacts_dir', ARTIFACTS_DIR); print('python_raw_dataset_path', RAW_DATASET_PATH); print('python_sample_dataset_path', SAMPLE_DATASET_PATH)"; \
+        "${UV_PROJECT_ENVIRONMENT}/bin/python" -c "import sys; from src import PROJECT_ROOT, WORK_DIR, DATA_DIR, DOCS_DIR, PAPER_DIR, MANUSCRIPT_DIR, ARTIFACTS_DIR, PUBLIC_LAKE_DIR, LAKE_BRONZE_DIR, LAKE_SILVER_DIR, LAKE_GOLD_DIR, RAW_DATASET_PATH, SAMPLE_DATASET_PATH; print('python_prefix', sys.prefix); print('python_project_root', PROJECT_ROOT); print('python_work_dir', WORK_DIR); print('python_data_dir', DATA_DIR); print('python_docs_dir', DOCS_DIR); print('python_paper_dir', PAPER_DIR); print('python_manuscript_dir', MANUSCRIPT_DIR); print('python_artifacts_dir', ARTIFACTS_DIR); print('python_public_lake_dir', PUBLIC_LAKE_DIR); print('python_lake_bronze_dir', LAKE_BRONZE_DIR); print('python_lake_silver_dir', LAKE_SILVER_DIR); print('python_lake_gold_dir', LAKE_GOLD_DIR); print('python_raw_dataset_path', RAW_DATASET_PATH); print('python_sample_dataset_path', SAMPLE_DATASET_PATH)"; \
     else \
         echo "python_prefix missing; run 'just setup'"; \
     fi
 
-task name="study" dataset="raw" out_dir="" extra="": _check-env
+task name="study" dataset="raw" out_dir="" extra="": _check-data-env
     @task_extra="{{ extra }}"; \
     case "$task_extra" in extra=*) task_extra="${task_extra#extra=}" ;; esac; \
     case "{{ name }}" in \
@@ -98,7 +124,7 @@ task name="study" dataset="raw" out_dir="" extra="": _check-env
             ;; \
     esac
 
-_run dataset="sample" out_dir="": _check-env
+_run dataset="sample" out_dir="": _check-data-env
     @if [ "{{ dataset }}" != "sample" ] && [ "{{ dataset }}" != "raw" ]; then \
         echo "dataset must be 'sample' or 'raw'"; \
         exit 1; \
@@ -109,13 +135,15 @@ _run dataset="sample" out_dir="": _check-env
         uv run python scripts/run_data_prep.py --dataset "{{ dataset }}"; \
     fi
 
-_analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
-    @if [ "{{ stage }}" = "benchmark" ]; then \
+_analysis stage="study" dataset="raw" out_dir="" extra="": _check-data-env
+    @raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"; \
+    sample_dataset_path="${SAMPLE_DATASET_PATH:-${ARTIFACTS_DIR}/sample_dataset_misstatement.parquet}"; \
+    if [ "{{ stage }}" = "benchmark" ]; then \
         if [ "{{ dataset }}" = "sample" ]; then \
-            raw_data="artifacts/sample_dataset_misstatement.parquet"; \
+            raw_data="$sample_dataset_path"; \
             uv run python scripts/generate_sample_dataset.py; \
         elif [ "{{ dataset }}" = "raw" ]; then \
-            raw_data="data/raw_dataset_misstatement.parquet"; \
+            raw_data="$raw_dataset_path"; \
             if [ ! -f "$raw_data" ]; then \
                 uv run python scripts/convert_raw_dataset.py; \
             fi; \
@@ -136,10 +164,10 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
         fi; \
     elif [ "{{ stage }}" = "bridge" ]; then \
         if [ "{{ dataset }}" = "sample" ]; then \
-            raw_data="artifacts/sample_dataset_misstatement.parquet"; \
+            raw_data="$sample_dataset_path"; \
             uv run python scripts/generate_sample_dataset.py; \
         elif [ "{{ dataset }}" = "raw" ]; then \
-            raw_data="data/raw_dataset_misstatement.parquet"; \
+            raw_data="$raw_dataset_path"; \
             if [ ! -f "$raw_data" ]; then \
                 uv run python scripts/convert_raw_dataset.py; \
             fi; \
@@ -154,10 +182,10 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
         fi; \
     elif [ "{{ stage }}" = "study" ]; then \
         if [ "{{ dataset }}" = "sample" ]; then \
-            raw_data="artifacts/sample_dataset_misstatement.parquet"; \
+            raw_data="$sample_dataset_path"; \
             uv run python scripts/generate_sample_dataset.py; \
         elif [ "{{ dataset }}" = "raw" ]; then \
-            raw_data="data/raw_dataset_misstatement.parquet"; \
+            raw_data="$raw_dataset_path"; \
             if [ ! -f "$raw_data" ]; then \
                 uv run python scripts/convert_raw_dataset.py; \
             fi; \
@@ -175,10 +203,10 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-env
         exit 1; \
     fi
 
-_fetch source="sec-bulk" extra="": _check-env
+_fetch source="sec-bulk" extra="": _check-data-env
     uv run python scripts/fetch_public_data.py --mode "{{ source }}" {{ extra }}
 
-data mode="full" strategy="fresh": _check-env
+data mode="full" strategy="fresh": _check-data-env
     @if [ "{{ mode }}" != "smoke" ] && [ "{{ mode }}" != "full" ]; then \
         echo "mode must be 'smoke' or 'full'"; \
         exit 1; \
@@ -206,8 +234,12 @@ data mode="full" strategy="fresh": _check-env
         $lake_args; \
     echo "Data engineering complete: raw dataset parquet plus public lake {{ mode }}."
 
-full *args: _check-env
+full *args: _check-data-env
     @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="4"; model_threads="2"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="400GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
+    raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"; \
+    sample_dataset_path="${SAMPLE_DATASET_PATH:-${ARTIFACTS_DIR}/sample_dataset_misstatement.parquet}"; \
+    lake_silver_dir="${LAKE_SILVER_DIR:-${DATA_DIR}/public_lake/silver}"; \
+    lake_gold_dir="${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"; \
     for arg in {{ args }}; do \
         case "$arg" in \
             mode=*) mode="${arg#mode=}" ;; \
@@ -286,27 +318,27 @@ full *args: _check-env
     just _test; \
     just _ruff; \
     uv run python scripts/convert_raw_dataset.py; \
-    if [ "$dataset" = "raw" ] && [ ! -f "data/raw_dataset_misstatement.parquet" ]; then \
-        echo "data/raw_dataset_misstatement.parquet is required for dataset=raw"; \
-        echo "Expected data/raw_dataset_misstatement.csv or data/external/raw_dataset_misstatement.zip as a materialization source."; \
+    if [ "$dataset" = "raw" ] && [ ! -f "$raw_dataset_path" ]; then \
+        echo "$raw_dataset_path is required for dataset=raw"; \
+        echo "Expected ${DATA_DIR}/raw_dataset_misstatement.csv, ${DATA_DIR}/raw_dataset_misstatement.zip, or ${DATA_DIR}/external/raw_dataset_misstatement.zip as a materialization source."; \
         exit 1; \
     fi; \
     run_out="$out_dir"; \
     if [ -z "$run_out" ]; then \
-        run_out="artifacts/full_${mode}_${dataset}"; \
+        run_out="${ARTIFACTS_DIR}/full_${mode}_${dataset}"; \
     fi; \
     if [ "$dataset" = "sample" ]; then \
         uv run python scripts/generate_sample_dataset.py; \
-        raw_data="artifacts/sample_dataset_misstatement.parquet"; \
+        raw_data="$sample_dataset_path"; \
     else \
-        raw_data="data/raw_dataset_misstatement.parquet"; \
+        raw_data="$raw_dataset_path"; \
     fi; \
     if [ "$mode" = "smoke" ]; then \
-        silver_dir="data/public_lake_smoke/silver"; \
-        gold_dir="data/public_lake_smoke/gold"; \
+        silver_dir="${DATA_DIR}/public_lake_smoke/silver"; \
+        gold_dir="${DATA_DIR}/public_lake_smoke/gold"; \
     else \
-        silver_dir="data/public_lake/silver"; \
-        gold_dir="data/public_lake/gold"; \
+        silver_dir="$lake_silver_dir"; \
+        gold_dir="$lake_gold_dir"; \
     fi; \
     if [ "$engine" = "duckdb" ] && [ -z "$duckdb_temp_directory" ]; then \
         duckdb_temp_directory="$silver_dir/._duckdb_tmp"; \

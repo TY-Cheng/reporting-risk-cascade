@@ -12,10 +12,13 @@ except ImportError:
 load_dotenv()
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT") or os.getenv("DIR_WORK") or _REPO_ROOT).expanduser()
+PROJECT_ROOT = Path(
+    os.getenv("PROJECT_ROOT") or os.getenv("WORK_DIR") or os.getenv("DIR_WORK") or _REPO_ROOT
+).expanduser()
 PROJECT_ROOT = PROJECT_ROOT.resolve()
 
-DIR_WORK = PROJECT_ROOT
+WORK_DIR = PROJECT_ROOT
+DIR_WORK = WORK_DIR
 DATA_DIR = Path(os.getenv("DATA_DIR") or PROJECT_ROOT / "data").expanduser().resolve()
 DOCS_DIR = Path(os.getenv("DOCS_DIR") or PROJECT_ROOT / "docs").expanduser().resolve()
 PAPER_DIR = Path(
@@ -23,10 +26,13 @@ PAPER_DIR = Path(
 ).expanduser()
 PAPER_DIR = PAPER_DIR.resolve()
 DOC_DIR = PAPER_DIR
-DIR_MANUSCRIPT = Path(
-    os.getenv("DIR_MANUSCRIPT") or PROJECT_ROOT.parent / f"{PROJECT_ROOT.name}-manuscript"
+MANUSCRIPT_DIR = Path(
+    os.getenv("MANUSCRIPT_DIR")
+    or os.getenv("DIR_MANUSCRIPT")
+    or PROJECT_ROOT.parent / f"{PROJECT_ROOT.name}-manuscript"
 ).expanduser()
-DIR_MANUSCRIPT = DIR_MANUSCRIPT.resolve()
+MANUSCRIPT_DIR = MANUSCRIPT_DIR.resolve()
+DIR_MANUSCRIPT = MANUSCRIPT_DIR
 ARTIFACTS_DIR = (
     Path(os.getenv("ARTIFACTS_DIR") or PROJECT_ROOT / "artifacts").expanduser().resolve()
 )
@@ -60,11 +66,11 @@ SEED_DEFAULT = int(os.getenv("SEED_DEFAULT", "42"))
 
 if __name__ == "__main__":
     print("PROJECT_ROOT:", PROJECT_ROOT)
-    print("DIR_WORK:", DIR_WORK)
+    print("WORK_DIR:", WORK_DIR)
     print("DATA_DIR:", DATA_DIR)
     print("DOCS_DIR:", DOCS_DIR)
     print("PAPER_DIR:", PAPER_DIR)
-    print("DIR_MANUSCRIPT:", DIR_MANUSCRIPT)
+    print("MANUSCRIPT_DIR:", MANUSCRIPT_DIR)
     print("ARTIFACTS_DIR:", ARTIFACTS_DIR)
     print("PUBLIC_LAKE_DIR:", PUBLIC_LAKE_DIR)
     print("LAKE_BRONZE_DIR:", LAKE_BRONZE_DIR)

@@ -28,9 +28,9 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Existing raw benchmark CSV or ZIP. Defaults to data/raw_dataset_misstatement.csv, "
-            "then data/raw_dataset_misstatement.zip, then "
-            "data/external/raw_dataset_misstatement.zip."
+            "Existing raw benchmark CSV or ZIP. Defaults to DATA_DIR/raw_dataset_misstatement.csv, "
+            "then DATA_DIR/raw_dataset_misstatement.zip, then "
+            "DATA_DIR/external/raw_dataset_misstatement.zip."
         ),
     )
     parser.add_argument(
@@ -63,6 +63,8 @@ def main() -> None:
     )
     if result.wrote_output:
         print(f"Wrote {result.rows_written} rows from {result.source_path} to {result.out_data}")
+    elif result.source_path is None:
+        print(f"Exists: {result.out_data}")
     else:
         print(f"Exists: {result.out_data} (source available: {result.source_path})")
 

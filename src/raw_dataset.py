@@ -15,7 +15,7 @@ RAW_DATASET_ZIP_NAME = "raw_dataset_misstatement.zip"
 
 @dataclass(frozen=True)
 class RawDatasetMaterialization:
-    source_path: Path
+    source_path: Path | None
     out_data: Path
     rows_written: int
     wrote_output: bool
@@ -79,9 +79,9 @@ def materialize_raw_dataset(
     out_data: Path = RAW_DATASET_PATH,
     overwrite: bool = False,
 ) -> RawDatasetMaterialization:
-    source = resolve_raw_dataset_source(source_path)
     out_data = out_data.expanduser()
     if out_data.exists() and not overwrite:
+        source = resolve_raw_dataset_source(source_path) if source_path is not None else None
         return RawDatasetMaterialization(
             source_path=source,
             out_data=out_data,
@@ -89,6 +89,7 @@ def materialize_raw_dataset(
             wrote_output=False,
         )
 
+    source = resolve_raw_dataset_source(source_path)
     frame = read_raw_dataset_source(source)
     write_table(frame, out_data, overwrite=True)
     return RawDatasetMaterialization(

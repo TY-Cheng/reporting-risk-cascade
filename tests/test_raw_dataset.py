@@ -38,6 +38,18 @@ def test_materialize_raw_dataset_from_zip(tmp_path: Path) -> None:
     assert no_op.rows_written == 0
 
 
+def test_materialize_raw_dataset_allows_existing_output_without_source(tmp_path: Path) -> None:
+    out_data = tmp_path / "raw_dataset_misstatement.parquet"
+    out_data.write_bytes(b"existing parquet placeholder")
+
+    no_op = materialize_raw_dataset(out_data=out_data)
+
+    assert no_op.source_path is None
+    assert no_op.out_data == out_data
+    assert not no_op.wrote_output
+    assert no_op.rows_written == 0
+
+
 def test_resolve_raw_dataset_source_requires_existing_input(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="Raw benchmark source not found"):
         resolve_raw_dataset_source(tmp_path / "missing.zip")

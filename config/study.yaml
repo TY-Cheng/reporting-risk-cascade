@@ -3,9 +3,9 @@ paper:
   subtitle: "Label Observability and the Public Reporting-Risk Cascade"
 
 inputs:
-  raw_data: "data/raw_dataset_misstatement.parquet"
-  issuer_origin_panel: "data/public_lake/gold/issuer_origin_panel.parquet"
-  gvkey_cik_crosswalk: "data/external/gvkey_cik_year.csv"
+  raw_data: "${DATA_DIR}/raw_dataset_misstatement.parquet"
+  issuer_origin_panel: "${LAKE_GOLD_DIR}/issuer_origin_panel.parquet"
+  gvkey_cik_crosswalk: "${DATA_DIR}/external/gvkey_cik_year.csv"
 
 outputs:
   benchmark_subdir: "benchmark"

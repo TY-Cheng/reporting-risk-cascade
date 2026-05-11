@@ -26,10 +26,10 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import RAW_DATASET_PATH
+    from src import ARTIFACTS_DIR, DATA_DIR, RAW_DATASET_PATH
 
     parser = argparse.ArgumentParser(
-        description="Prepare data/external/gvkey_cik_year.csv from an external source export"
+        description="Prepare DATA_DIR/external/gvkey_cik_year.csv from an external source export"
     )
     parser.add_argument(
         "--input",
@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=REPO_ROOT / "data" / "external" / "gvkey_cik_year.csv",
+        default=DATA_DIR / "external" / "gvkey_cik_year.csv",
         help="Normalized bridge crosswalk output",
     )
     parser.add_argument(
@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--summary-json",
         type=Path,
-        default=REPO_ROOT / "artifacts" / "bridge_crosswalk" / "crosswalk_summary.json",
+        default=ARTIFACTS_DIR / "bridge_crosswalk" / "crosswalk_summary.json",
         help="Summary JSON output",
     )
     return parser.parse_args()

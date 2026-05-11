@@ -198,10 +198,10 @@ hide:
 | Study manifest timestamp | `2026-04-27T02:27:29+00:00` |
 | Construct-overlap timestamp | `2026-04-27T02:56:13+00:00` |
 | Runtime | `parallel_jobs=4`, `model_threads=2`, `seed_policy=task-isolated` |
-| Benchmark input | `data/raw_dataset_misstatement.parquet` |
-| Public issuer panel | `data/public_lake/gold/issuer_origin_panel.parquet` |
-| Public filing panel | `data/public_lake/gold/filing_origin_panel.parquet` |
-| Bridge crosswalk | `data/external/gvkey_cik_year.csv` |
+| Benchmark input | `$DATA_DIR/raw_dataset_misstatement.parquet` |
+| Public issuer panel | `$DATA_DIR/public_lake/gold/issuer_origin_panel.parquet` |
+| Public filing panel | `$DATA_DIR/public_lake/gold/filing_origin_panel.parquet` |
+| Bridge crosswalk | `$DATA_DIR/external/gvkey_cik_year.csv` |
 | Construct overlap | `complete`, `validation_tier=candidate_farr` |
 | Peer comparison | `full`, legacy peer suite plus public-label peer suite |
 
@@ -221,7 +221,7 @@ Key readings:
 ```mermaid
 flowchart LR
     subgraph LEGACY["Legacy benchmark evidence: external benchmark, not SEC/PCAOB public lake"]
-        L0["Legacy input<br/>data/raw_dataset_misstatement.parquet<br/>82,908 gvkey x data_year rows<br/>9,156 firms, 2001-2019"]
+        L0["Legacy input<br/>$DATA_DIR/raw_dataset_misstatement.parquet<br/>82,908 gvkey x data_year rows<br/>9,156 firms, 2001-2019"]
         L1["Legacy X<br/>engineered accounting, audit, governance,<br/>market, industry, and missingness predictors<br/>exclude ids, labels, res_an*, post-outcome fields"]
         L2["Legacy Y<br/>detected misstatement firm-year<br/>naive, proxy_drop_observed,<br/>proxy_imputed_lag 1/2/3/5y<br/>external_timing not available in this run"]
         L3["Legacy model loops<br/>annual out-of-time test years<br/>rolling_5y, rolling_7y, rolling_10y, expanding<br/>core benchmark plus peer-compatible legacy suite<br/>Dechow / Perols / Bao / Bertomeu families"]

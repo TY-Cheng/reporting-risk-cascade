@@ -27,7 +27,7 @@ usage() {
 Usage: bash scripts/run_public_lake_full.sh [options]
 
 Options:
-  --mode full|smoke              Run against data/public_lake or data/public_lake_smoke.
+  --mode full|smoke              Run against DATA_DIR/public_lake or DATA_DIR/public_lake_smoke.
   --as-of-date YYYY-MM-DD        Censoring date for gold panels. Default: 2026-04-23.
   --submissions-max-ciks N       Optional cap for submissions.zip normalization.
   --dry-run                      Print commands without executing them.
@@ -196,6 +196,36 @@ if [[ -z "${UV_PROJECT_ENVIRONMENT:-}" ]]; then
     echo "UV_PROJECT_ENVIRONMENT is missing in .env" >&2
     exit 1
 fi
+DATA_DIR="${DATA_DIR:-${REPO_ROOT}/data}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-${REPO_ROOT}/artifacts}"
+PUBLIC_LAKE_DIR="${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"
+LAKE_BRONZE_DIR="${LAKE_BRONZE_DIR:-${PUBLIC_LAKE_DIR}/bronze}"
+LAKE_SILVER_DIR="${LAKE_SILVER_DIR:-${PUBLIC_LAKE_DIR}/silver}"
+LAKE_GOLD_DIR="${LAKE_GOLD_DIR:-${PUBLIC_LAKE_DIR}/gold}"
+PUBLIC_LAKE_SMOKE_DIR="${PUBLIC_LAKE_SMOKE_DIR:-${DATA_DIR}/public_lake_smoke}"
+
+case "${DATA_DIR}" in
+    /*)
+        ;;
+    *)
+        echo "DATA_DIR must be an absolute path, got: ${DATA_DIR}" >&2
+        exit 1
+        ;;
+esac
+case "${DATA_DIR%/}" in
+    "${PWD}"|"${PWD}/"*)
+        echo "DATA_DIR must point outside this repo, got: ${DATA_DIR}" >&2
+        exit 1
+        ;;
+esac
+case "${ARTIFACTS_DIR}" in
+    /*)
+        ;;
+    *)
+        echo "ARTIFACTS_DIR must be an absolute path, got: ${ARTIFACTS_DIR}" >&2
+        exit 1
+        ;;
+esac
 
 case "${UV_PROJECT_ENVIRONMENT}" in
     /*)
@@ -215,22 +245,22 @@ esac
 mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"
 
 RUN_ID="$(date -u +"%Y%m%dT%H%M%SZ")"
-LOG_DIR="artifacts/logs/public_lake_full/${RUN_ID}_${MODE}"
+LOG_DIR="${ARTIFACTS_DIR}/logs/public_lake_full/${RUN_ID}_${MODE}"
 mkdir -p "$LOG_DIR"
 exec > >(tee -a "$LOG_DIR/run.log") 2>&1
 
 if [[ "$MODE" = "smoke" ]]; then
-    BRONZE_DIR="data/public_lake_smoke/bronze"
-    SILVER_DIR="data/public_lake_smoke/silver"
-    GOLD_DIR="data/public_lake_smoke/gold"
-    CASCADE_OUT="artifacts/public_cascade_smoke"
+    BRONZE_DIR="${PUBLIC_LAKE_SMOKE_DIR}/bronze"
+    SILVER_DIR="${PUBLIC_LAKE_SMOKE_DIR}/silver"
+    GOLD_DIR="${PUBLIC_LAKE_SMOKE_DIR}/gold"
+    CASCADE_OUT="${ARTIFACTS_DIR}/public_cascade_smoke"
     SUBMISSIONS_MAX_CIKS="${SUBMISSIONS_MAX_CIKS:-200}"
     SOURCE_LIMIT_EXTRA="--limit-links 2 --list-only"
 else
-    BRONZE_DIR="data/public_lake/bronze"
-    SILVER_DIR="data/public_lake/silver"
-    GOLD_DIR="data/public_lake/gold"
-    CASCADE_OUT="artifacts/public_cascade_full"
+    BRONZE_DIR="${LAKE_BRONZE_DIR}"
+    SILVER_DIR="${LAKE_SILVER_DIR}"
+    GOLD_DIR="${LAKE_GOLD_DIR}"
+    CASCADE_OUT="${ARTIFACTS_DIR}/public_cascade_full"
     SOURCE_LIMIT_EXTRA=""
 fi
 if [[ "$ENGINE" = "duckdb" && -z "$DUCKDB_TEMP_DIRECTORY" ]]; then

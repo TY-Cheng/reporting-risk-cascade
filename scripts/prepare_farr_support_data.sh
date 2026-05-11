@@ -11,15 +11,15 @@ the current bridge, and the public-cascade AAER proxy.
 
 Options:
   --out-dir PATH          External data output directory.
-                          Default: data/external
+                          Default: DATA_DIR/external
   --artifacts-dir PATH    Diagnostic artifact directory.
-                          Default: artifacts/farr_support
+                          Default: ARTIFACTS_DIR/farr_support
   --raw-data PATH         Raw benchmark table.
-                          Default: data/raw_dataset_misstatement.parquet
+                          Default: RAW_DATASET_PATH
   --crosswalk PATH        GVKEY-CIK-year crosswalk.
-                          Default: data/external/gvkey_cik_year.csv
+                          Default: DATA_DIR/external/gvkey_cik_year.csv
   --issuer-origin PATH    Public issuer-origin panel.
-                          Default: data/public_lake/gold/issuer_origin_panel.parquet
+                          Default: LAKE_GOLD_DIR/issuer_origin_panel.parquet
   --source-version TEXT   Override farr source version.
   --install-missing       Install the R package farr if missing.
   --repos URL             CRAN repo for --install-missing.
@@ -39,11 +39,16 @@ if [ -f ".env" ]; then
   set +a
 fi
 
-out_dir="data/external"
-artifacts_dir="artifacts/farr_support"
-raw_data="data/raw_dataset_misstatement.parquet"
-crosswalk="data/external/gvkey_cik_year.csv"
-issuer_origin="data/public_lake/gold/issuer_origin_panel.parquet"
+DATA_DIR="${DATA_DIR:-data}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-artifacts}"
+RAW_DATASET_PATH="${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"
+LAKE_GOLD_DIR="${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"
+
+out_dir="${DATA_DIR}/external"
+artifacts_dir="${ARTIFACTS_DIR}/farr_support"
+raw_data="${RAW_DATASET_PATH}"
+crosswalk="${DATA_DIR}/external/gvkey_cik_year.csv"
+issuer_origin="${LAKE_GOLD_DIR}/issuer_origin_panel.parquet"
 source_version=""
 install_missing=0
 repos="https://cloud.r-project.org"

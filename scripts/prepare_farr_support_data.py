@@ -30,39 +30,39 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import RAW_DATASET_PATH
+    from src import ARTIFACTS_DIR, DATA_DIR, LAKE_GOLD_DIR, RAW_DATASET_PATH
 
     parser = argparse.ArgumentParser(description="Prepare farr AAER/state-HQ support artifacts")
     parser.add_argument(
         "--aaer-dates",
         type=Path,
-        default=REPO_ROOT / "data" / "external" / "farr_aaer_dates.csv",
+        default=DATA_DIR / "external" / "farr_aaer_dates.csv",
     )
     parser.add_argument(
         "--aaer-firm-year",
         type=Path,
-        default=REPO_ROOT / "data" / "external" / "farr_aaer_firm_year.csv",
+        default=DATA_DIR / "external" / "farr_aaer_firm_year.csv",
     )
     parser.add_argument(
         "--state-hq",
         type=Path,
-        default=REPO_ROOT / "data" / "external" / "farr_state_hq.csv",
+        default=DATA_DIR / "external" / "farr_state_hq.csv",
     )
     parser.add_argument("--raw-data", type=Path, default=RAW_DATASET_PATH)
     parser.add_argument(
         "--crosswalk",
         type=Path,
-        default=REPO_ROOT / "data" / "external" / "gvkey_cik_year.csv",
+        default=DATA_DIR / "external" / "gvkey_cik_year.csv",
     )
     parser.add_argument(
         "--issuer-origin",
         type=Path,
-        default=REPO_ROOT / "data" / "public_lake" / "gold" / "issuer_origin_panel.parquet",
+        default=LAKE_GOLD_DIR / "issuer_origin_panel.parquet",
     )
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=REPO_ROOT / "artifacts" / "farr_support",
+        default=ARTIFACTS_DIR / "farr_support",
     )
     return parser.parse_args()
 

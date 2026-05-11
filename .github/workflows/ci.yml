@@ -36,11 +36,15 @@ jobs:
 
       - name: Configure CI environment
         run: |
+          mkdir -p /tmp/reporting-risk-cascade-data /tmp/reporting-risk-cascade-manuscript
           cat > .env <<'EOF'
+          PROJECT_ROOT=${{ github.workspace }}
+          WORK_DIR=${{ github.workspace }}
+          DATA_DIR=/tmp/reporting-risk-cascade-data
+          ARTIFACTS_DIR=${{ github.workspace }}/artifacts
           UV_PROJECT_ENVIRONMENT=/tmp/reporting-risk-cascade-venv
-          DIR_MANUSCRIPT=/tmp/reporting-risk-cascade-manuscript
+          MANUSCRIPT_DIR=/tmp/reporting-risk-cascade-manuscript
           EOF
-          mkdir -p /tmp/reporting-risk-cascade-manuscript
 
       - name: Install dependencies
         run: uv sync --group docs
