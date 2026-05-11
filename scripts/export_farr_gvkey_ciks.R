@@ -25,12 +25,9 @@ usage <- function() {
 }
 
 parse_args <- function(args) {
-  data_dir <- Sys.getenv("DATA_DIR", unset = "data")
-  if (!nzchar(data_dir)) {
-    data_dir <- "data"
-  }
+  data_dir <- Sys.getenv("DATA_DIR", unset = "")
   opts <- list(
-    out = file.path(data_dir, "external", "farr_gvkey_ciks_raw.csv"),
+    out = "",
     as_of_year = as.integer(format(Sys.Date(), "%Y")),
     source_version = "",
     install_missing = FALSE,
@@ -66,6 +63,12 @@ parse_args <- function(args) {
     }
   }
 
+  if (!nzchar(opts$out)) {
+    if (!nzchar(data_dir)) {
+      stop("DATA_DIR is required when --out is not provided", call. = FALSE)
+    }
+    opts$out <- file.path(data_dir, "external", "farr_gvkey_ciks_raw.csv")
+  }
   if (is.na(opts$as_of_year) || opts$as_of_year < 1800 || opts$as_of_year > 2200) {
     stop("--as-of-year must be a four-digit year", call. = FALSE)
   }

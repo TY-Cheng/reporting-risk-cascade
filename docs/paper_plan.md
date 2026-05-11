@@ -156,9 +156,10 @@ just full mode=full dataset=raw
 - **Peer and overlap run.** The peer-enabled study is a separate run so the default workflow stays bounded:
 
 ```bash
-set -a; source .env; set +a
-just task study raw "$ARTIFACTS_DIR/full_with_peer" \
+just task study raw artifacts/full_with_peer \
   extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
+just snapshot
+just manuscript
 ```
 
 ### Legacy Benchmark Panel
@@ -221,8 +222,8 @@ uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --input path/to/wrds_cik_gvkey_link.csv \
   --out "$DATA_DIR/external/gvkey_cik_year.csv"
 
-just task bridge raw "$ARTIFACTS_DIR/full_with_peer/bridge_probe"
-uv run python scripts/run_construct_overlap.py --study-dir "$ARTIFACTS_DIR/full_with_peer"
+just task bridge raw artifacts/full_with_peer/bridge_probe
+uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
 ```
 
 - **Public candidate route while WRDS access is pending.**
@@ -365,10 +366,11 @@ just full mode=full dataset=raw
 - **Peer-compatible model-family transfer.**
 
 ```bash
-set -a; source .env; set +a
-just task study raw "$ARTIFACTS_DIR/full_with_peer" \
+just task study raw artifacts/full_with_peer \
   extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
+just snapshot
+just manuscript
 ```
 
-- **Command boundary.** `just check` is the local quality gate; `just full mode=full dataset=raw` is the paper-facing core run for data engineering and core experiments; `full_with_peer` adds the legacy and public-label peer model-family transfer suites. Use `--peer-target public` when only the public-label peer transfer needs to be refreshed.
+- **Command boundary.** `just check` is the local quality gate; `just full mode=full dataset=raw` is the paper-facing core run for data engineering and core experiments; `full_with_peer` adds the legacy and public-label peer model-family transfer suites; `just snapshot` refreshes the results snapshot from `artifacts/full_with_peer` and then runs `just check`; `just manuscript` builds paper-facing tables, figures, and result prose in `artifacts/manuscript_package`. Use `--peer-target public` when only the public-label peer transfer needs to be refreshed.
 - **Detailed operations.** Component-level reruns and public-lake operational details are documented in [the repository home page](index.md), which includes the root `README.md`.

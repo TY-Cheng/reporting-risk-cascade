@@ -142,7 +142,7 @@ just full mode=full dataset=raw resume=1
 Peer-compatible model-family transfer:
 
 ```bash
-just task study raw "$ARTIFACTS_DIR/full_with_peer" \
+just task study raw artifacts/full_with_peer \
   extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
 ```
 
@@ -153,6 +153,26 @@ legacy benchmark peer suite plus the public-label peer transfer suite on
 Use `--peer-target public` to refresh public-label peer outputs without rerunning
 the legacy benchmark peer suite.
 
+Refresh the docs snapshot and run the full quality gate after the peer run:
+
+```bash
+just snapshot
+```
+
+`just snapshot` regenerates `docs/results_snapshot.md` from
+`artifacts/full_with_peer` and then runs `just check`. For a non-peer current
+study snapshot, use `just snapshot artifacts/study allow_partial=1`.
+
+Build paper-facing tables, figures, and result prose:
+
+```bash
+just manuscript
+```
+
+This reads `artifacts/full_with_peer` and writes
+`artifacts/manuscript_package` with CSV/Markdown/LaTeX tables, PNG/PDF figures,
+and a manuscript-results narrative.
+
 Component reruns:
 
 ```bash
@@ -160,8 +180,7 @@ just task benchmark raw
 just task cascade raw
 just task bridge raw
 just task study raw
-uv run python scripts/run_construct_overlap.py --study-dir "$ARTIFACTS_DIR/full_with_peer"
-just docs
+just snapshot
 ```
 
 `just docs` first runs a strict clean MkDocs build, then serves the site on the
@@ -194,34 +213,40 @@ Markdown. Notes raw text is skipped unless `notes_mode="raw"` is requested.
 
 Benchmark:
 
-- `$ARTIFACTS_DIR/benchmark/rolling_metrics.csv`
-- `$ARTIFACTS_DIR/benchmark/timing_coverage.csv`
-- `$ARTIFACTS_DIR/benchmark/feature_family_importance.csv`
-- `$ARTIFACTS_DIR/benchmark/missing_profile_clusters.csv`
-- `$ARTIFACTS_DIR/benchmark/benchmark_summary.md`
+- `artifacts/full_with_peer/benchmark/rolling_metrics.csv`
+- `artifacts/full_with_peer/benchmark/timing_coverage.csv`
+- `artifacts/full_with_peer/benchmark/feature_family_importance.csv`
+- `artifacts/full_with_peer/benchmark/missing_profile_clusters.csv`
+- `artifacts/full_with_peer/benchmark/benchmark_summary.md`
 
 Public cascade:
 
 - `$DATA_DIR/public_lake/gold/issuer_origin_panel.parquet`
 - `$DATA_DIR/public_lake/gold/filing_origin_panel.parquet`
-- `$ARTIFACTS_DIR/public_cascade/public_cascade_metrics.csv`
-- `$ARTIFACTS_DIR/public_cascade/public_cascade_predictions.parquet`
-- `$ARTIFACTS_DIR/public_cascade/public_opacity_dml.csv`
-- `$ARTIFACTS_DIR/public_cascade/public_cascade_summary.md`
+- `artifacts/full_with_peer/public_cascade/public_cascade_metrics.csv`
+- `artifacts/full_with_peer/public_cascade/public_cascade_predictions.parquet`
+- `artifacts/full_with_peer/public_cascade/public_opacity_dml.csv`
+- `artifacts/full_with_peer/public_cascade/public_cascade_summary.md`
 
 Bridge and construct overlap:
 
-- `$ARTIFACTS_DIR/bridge_probe/bridge_probe_summary.json`
-- `$ARTIFACTS_DIR/bridge_probe/coverage_report.csv`
-- `$ARTIFACTS_DIR/bridge_probe/multiplicity_report.csv`
-- `$ARTIFACTS_DIR/full_with_peer/construct_overlap/construct_overlap_summary.md`
-- `$ARTIFACTS_DIR/full_with_peer/construct_overlap/public_score_legacy_ranking.csv`
-- `$ARTIFACTS_DIR/full_with_peer/construct_overlap/reciprocal_alignment.csv`
+- `artifacts/full_with_peer/bridge_probe/bridge_probe_summary.json`
+- `artifacts/full_with_peer/bridge_probe/coverage_report.csv`
+- `artifacts/full_with_peer/bridge_probe/multiplicity_report.csv`
+- `artifacts/full_with_peer/construct_overlap/construct_overlap_summary.md`
+- `artifacts/full_with_peer/construct_overlap/public_score_legacy_ranking.csv`
+- `artifacts/full_with_peer/construct_overlap/reciprocal_alignment.csv`
 
 Peer-compatible model-family suites:
 
-- `$ARTIFACTS_DIR/full_with_peer/peer_comparison/`
-- `$ARTIFACTS_DIR/full_with_peer/public_peer_comparison/`
+- `artifacts/full_with_peer/peer_comparison/`
+- `artifacts/full_with_peer/public_peer_comparison/`
+
+Manuscript package:
+
+- `artifacts/manuscript_package/results_narrative.md`
+- `artifacts/manuscript_package/tables/`
+- `artifacts/manuscript_package/figures/`
 
 ## Bridge Inputs
 
@@ -251,8 +276,8 @@ After replacing the bridge file in a peer-enabled study directory, refresh the
 bridge probe and construct-overlap layer without refitting models:
 
 ```bash
-just task bridge raw "$ARTIFACTS_DIR/full_with_peer/bridge_probe"
-uv run python scripts/run_construct_overlap.py --study-dir "$ARTIFACTS_DIR/full_with_peer"
+just task bridge raw artifacts/full_with_peer/bridge_probe
+uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
 ```
 
 When WRDS is unavailable, prepare a provenance-tagged candidate bridge from

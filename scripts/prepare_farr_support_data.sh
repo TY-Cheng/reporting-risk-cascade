@@ -39,8 +39,32 @@ if [ -f ".env" ]; then
   set +a
 fi
 
-DATA_DIR="${DATA_DIR:-data}"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-artifacts}"
+if [ -z "${DATA_DIR:-}" ]; then
+  echo "DATA_DIR is missing in .env; farr support data must be written to the external data root." >&2
+  exit 1
+fi
+case "${DATA_DIR}" in
+  /*) ;;
+  *)
+    echo "DATA_DIR must be an absolute path, got: ${DATA_DIR}" >&2
+    exit 1
+    ;;
+esac
+case "${DATA_DIR%/}" in
+  "${repo_root}"|"${repo_root}/"*)
+    echo "DATA_DIR must point outside this repo, got: ${DATA_DIR}" >&2
+    exit 1
+    ;;
+esac
+
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-${repo_root}/artifacts}"
+case "${ARTIFACTS_DIR}" in
+  /*) ;;
+  *)
+    echo "ARTIFACTS_DIR must be an absolute path, got: ${ARTIFACTS_DIR}" >&2
+    exit 1
+    ;;
+esac
 RAW_DATASET_PATH="${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"
 LAKE_GOLD_DIR="${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"
 

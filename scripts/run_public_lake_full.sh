@@ -196,7 +196,10 @@ if [[ -z "${UV_PROJECT_ENVIRONMENT:-}" ]]; then
     echo "UV_PROJECT_ENVIRONMENT is missing in .env" >&2
     exit 1
 fi
-DATA_DIR="${DATA_DIR:-${REPO_ROOT}/data}"
+if [[ -z "${DATA_DIR:-}" ]]; then
+    echo "DATA_DIR is missing in .env; public-lake data must be written to the external data root." >&2
+    exit 1
+fi
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${REPO_ROOT}/artifacts}"
 PUBLIC_LAKE_DIR="${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"
 LAKE_BRONZE_DIR="${LAKE_BRONZE_DIR:-${PUBLIC_LAKE_DIR}/bronze}"

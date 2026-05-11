@@ -184,6 +184,37 @@ def test_just_check_is_the_single_data_free_quality_gate() -> None:
     assert "just _ruff" not in docs_recipe
 
 
+def test_just_snapshot_refreshes_results_snapshot_then_checks() -> None:
+    justfile = _read("justfile")
+    assert 'snapshot study_dir="artifacts/full_with_peer" allow_partial="0": _check-data-env' in justfile
+    snapshot_recipe = justfile.split(
+        '\nsnapshot study_dir="artifacts/full_with_peer" allow_partial="0": _check-data-env\n',
+        maxsplit=1,
+    )[1].split("\n_docs-build: _check-env", maxsplit=1)[0]
+    assert "scripts/refresh_results_snapshot.py" in snapshot_recipe
+    assert "--allow-partial" in snapshot_recipe
+    assert "study_dir must be relative or under ARTIFACTS_DIR" in snapshot_recipe
+    assert "artifacts/full_with_peer" in snapshot_recipe
+    assert "just check" in snapshot_recipe
+
+
+def test_just_manuscript_builds_paper_facing_package() -> None:
+    justfile = _read("justfile")
+    assert (
+        'manuscript study_dir="artifacts/full_with_peer" '
+        'out_dir="artifacts/manuscript_package": _check-data-env'
+    ) in justfile
+    manuscript_recipe = justfile.split(
+        '\nmanuscript study_dir="artifacts/full_with_peer" '
+        'out_dir="artifacts/manuscript_package": _check-data-env\n',
+        maxsplit=1,
+    )[1].split("\n_docs-build: _check-env", maxsplit=1)[0]
+    assert "scripts/build_manuscript_package.py" in manuscript_recipe
+    assert "artifacts/full_with_peer" in manuscript_recipe
+    assert "artifacts/manuscript_package" in manuscript_recipe
+    assert "manuscript paths must be relative or under ARTIFACTS_DIR" in manuscript_recipe
+
+
 def test_readme_points_to_current_docs_pages() -> None:
     readme = _read("README.md")
     docs_url = "https://ty-cheng.github.io/reporting-risk-cascade/"
@@ -238,136 +269,40 @@ def test_docs_home_is_the_readme_snippet_only() -> None:
 def test_results_snapshot_exposes_current_main_artifact_results() -> None:
     results = _read("docs/results_snapshot.md")
     required_phrases = [
-        "What is the empirical value of the task?",
-        "What data are used?",
-        "legacy detected-misstatement benchmark",
-        "205,831-row",
-        "What data matter most?",
-        "Are the legacy and public tasks the same X with different Y?",
-        "Why not force the same X onto both Y definitions?",
-        "What is held constant across the legacy and public prediction exercises?",
-        "How should those aligned metrics be compared?",
-        "common metric vocabulary",
-        "model-family language and metrics",
-        "What setup choices are being compared?",
-        "rolling_5y`, `rolling_7y`, `rolling_10y",
-        "Are these model hyperparameters?",
-        "experimental design factors",
-        "Which design factors are studied?",
-        "proxy_imputed_lag",
-        "Why this setup design?",
-        "Which empirical specification is strongest?",
-        "What models are included, and why these models?",
-        "Which models perform best?",
-        "What metrics are reported?",
-        "Which metric is most reasonable for the headline?",
-        "Which metrics are most informative beyond PR-AUC?",
-        "What is the economic interpretation?",
-        "What should accounting readers take away?",
-        "artifacts/full_with_peer",
-        "2026-04-27T02:27:29+00:00",
-        "2026-04-27T02:56:13+00:00",
-        "Evidence Map",
-        "Legacy benchmark evidence",
-        "Public filing-origin cascade evidence",
-        "Bridge and construct-overlap evidence",
-        "peer-compatible legacy suite",
-        "Peer-compatible public-label suite",
-        "same metric vocabulary where defined",
-        "public_issuer_origin input",
-        "event_date < origin_date",
-        "Table 1. Public Lake and Gold Panel Scale",
-        "filing_origin_panel.parquet",
-        "21,743,433",
-        "issuer_origin_panel.parquet",
-        "205,831",
-        "lightweight filing-origin provenance panel",
-        "Table 2. Public Cascade Readiness",
-        "Rows | 82,908",
-        "Main sample rows | 90,445",
-        "Best equal-task configuration | `all + rolling_5y`",
-        "Best equal-task mean PR-AUC | 0.2475",
-        "xbrl_ratio_baseline",
-        "Key readings:",
-        "Feature fusion improves over metadata alone",
-        "Figure 1. Public Cascade Signal Gradient",
-        "Comment thread",
-        "PR-AUC 0.4484",
-        "AAER proxy",
-        "feasibility signal only",
-        "Prevalence",
-        "PR-AUC random-ranking",
-        "fraud-model headline score",
-        "Table 3. Benchmark Timing Diagnostics",
-        "`proxy_imputed_lag_2y`",
-        "Same-row positives with any `res_an*`",
-        "2,309",
-        "annual out-of-time",
-        "Double / Debiased Machine Learning (DML)",
-        "cross-fitting for",
-        "Figure 2. Timing-Sensitivity Pattern",
-        "Peer-Compatible Literature Benchmarks",
-        "Metric coverage is complete",
-        "Table 4. Peer Suite Status and Mapping",
-        "`bertomeu_style_xgb`",
-        "`perols_logit`",
-        "`perols_bagged`",
-        "`perols_linear_svm`",
-        "`perols_stacking`",
-        "`perols_mlp`",
-        "`bao_inspired_tree_ensemble`",
-        "`dechow_variable_logit`",
-        "`perols_entropy_tree`",
-        "`dechow_fixed_fscore_model1`",
-        "Figure 3. Peer Model Mean PR-AUC Ranking",
-        "Table 5. Peer Model Metrics",
-        "0.0427",
-        "Table 6. Best Peer Task-Fold Rows",
-        "Table 7. Bao-Style Top-Fraction Ranking Metrics",
-        "top_5pct",
-        "sensitivity",
-        "specificity",
-        "NDCG",
-        "Table 8. Peer Imbalance and Feature-Importance Diagnostics",
-        "none_after_undersampling",
-        "feature_importance",
-        "Public-Label Peer Transfer",
-        "public_model_family_metrics.csv",
-        "Fitted task-fold rows | 4,320",
-        "Mean PR-AUC | Mean ROC-AUC | Max PR-AUC",
-        "`bao_inspired_tree_ensemble` | 480 | 0.2244",
-        "`8k_402` | 1,440 | 0.0221 | 0.0529",
-        "`all` | 864 | 0.2510",
-        "Public peer transfer confirms",
-        "Table 9. Opacity and Missingness Diagnostics",
-        "0.8002",
-        "strong strategic-silence",
-        "Table 10. Bridge and Construct-Overlap Validation",
-        "validation_tier=candidate_farr",
-        "Table 11. Candidate Construct-Overlap Evidence",
-        "High-confidence overlap rows",
-        "Table 12. Risk-Score Alignment",
-        "Public cascade score -> legacy positives",
-        "Legacy/peer score -> public labels",
-        "Table 13. Event-Time Concentration",
-        "Table 14. AAER and Opacity Refresh",
-        "blocked_sparse",
-        "reciprocal_alignment.csv",
-        "external_crosswalk_available",
-        "Row coverage rate | 0.9796",
-        "Matched positive rows | 2,433 of 2,460",
-        "gvkey-CIK-year",
-        "high raw-row and firm coverage",
+        "Results Snapshot",
         "Discussion",
-        "measurement redesign",
+        "SEC/PCAOB",
+        "gvkey x data_year",
+        "legacy detected-misstatement benchmark",
+        "issuer_origin_panel",
+        "filing_origin_panel",
+        "gvkey-CIK-year",
+        "common metric vocabulary",
+        "PR-AUC",
+        "ROC-AUC",
+        "Brier",
+        "NDCG",
         "does not support causal claims",
-        "artifacts/full_with_peer/study_summary.md",
-        "legacy_model_family_metrics.csv",
-        "legacy_model_family_predictions.parquet",
+        "Evidence Map",
+        "Public Lake and Gold Panel Scale",
+        "Public Cascade Readiness",
+        "Legacy benchmark",
+        "Peer-Compatible",
+        "Public-Label Peer Transfer",
+        "Bridge and Construct-Overlap",
+        "Selected Artifact Index",
+        "artifacts/",
+        "xbrl_ratio_baseline",
+        "candidate_farr",
+        "Key readings:",
     ]
     for phrase in required_phrases:
         assert phrase in results
-    assert results.count("Key readings:") >= 20
+    assert (
+        "Generated by `just snapshot`" in results
+        or "static documentation snapshot" in results
+    )
+    assert results.count("Key readings:") >= 1
 
 
 def test_readme_home_explains_project_and_workflow() -> None:
@@ -471,7 +406,7 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "SEC Form 8-K",
         "operational command surface",
         "just full mode=full dataset=raw",
-        "$ARTIFACTS_DIR/full_with_peer",
+        "artifacts/full_with_peer",
         "--peer-comparison-mode full",
         "--peer-target both",
         "repository home page",

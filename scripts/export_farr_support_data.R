@@ -25,12 +25,9 @@ usage <- function() {
 }
 
 parse_args <- function(args) {
-  data_dir <- Sys.getenv("DATA_DIR", unset = "data")
-  if (!nzchar(data_dir)) {
-    data_dir <- "data"
-  }
+  data_dir <- Sys.getenv("DATA_DIR", unset = "")
   opts <- list(
-    out_dir = file.path(data_dir, "external"),
+    out_dir = "",
     source_version = "",
     install_missing = FALSE,
     repos = "https://cloud.r-project.org"
@@ -61,6 +58,12 @@ parse_args <- function(args) {
     } else {
       stop(sprintf("Unknown option: %s", arg), call. = FALSE)
     }
+  }
+  if (!nzchar(opts$out_dir)) {
+    if (!nzchar(data_dir)) {
+      stop("DATA_DIR is required when --out-dir is not provided", call. = FALSE)
+    }
+    opts$out_dir <- file.path(data_dir, "external")
   }
   opts
 }

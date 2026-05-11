@@ -125,12 +125,28 @@ task name="study" dataset="raw" out_dir="" extra="": _check-data-env
     esac
 
 _run dataset="sample" out_dir="": _check-data-env
-    @if [ "{{ dataset }}" != "sample" ] && [ "{{ dataset }}" != "raw" ]; then \
+    @out_dir_arg="{{ out_dir }}"; \
+    if [ -n "$out_dir_arg" ]; then \
+        case "$out_dir_arg" in \
+            /*) \
+                case "$out_dir_arg" in \
+                    "${ARTIFACTS_DIR}"|"${ARTIFACTS_DIR}"/*|"{{ repo_root }}"|"{{ repo_root }}"/*|/tmp/*) ;; \
+                    *) \
+                        echo "out_dir must be relative or under ARTIFACTS_DIR; got: $out_dir_arg"; \
+                        echo "If this came from an unset shell variable, use a repo-relative path like artifacts/full_with_peer."; \
+                        exit 1; \
+                        ;; \
+                esac; \
+                ;; \
+        esac; \
+    fi; \
+    if [ "{{ dataset }}" != "sample" ] && [ "{{ dataset }}" != "raw" ]; then \
         echo "dataset must be 'sample' or 'raw'"; \
         exit 1; \
     fi
-    @if [ -n "{{ out_dir }}" ]; then \
-        uv run python scripts/run_data_prep.py --dataset "{{ dataset }}" --out-dir "{{ out_dir }}"; \
+    @out_dir_arg="{{ out_dir }}"; \
+    if [ -n "$out_dir_arg" ]; then \
+        uv run python scripts/run_data_prep.py --dataset "{{ dataset }}" --out-dir "$out_dir_arg"; \
     else \
         uv run python scripts/run_data_prep.py --dataset "{{ dataset }}"; \
     fi
@@ -138,6 +154,21 @@ _run dataset="sample" out_dir="": _check-data-env
 _analysis stage="study" dataset="raw" out_dir="" extra="": _check-data-env
     @raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"; \
     sample_dataset_path="${SAMPLE_DATASET_PATH:-${ARTIFACTS_DIR}/sample_dataset_misstatement.parquet}"; \
+    out_dir_arg="{{ out_dir }}"; \
+    if [ -n "$out_dir_arg" ]; then \
+        case "$out_dir_arg" in \
+            /*) \
+                case "$out_dir_arg" in \
+                    "${ARTIFACTS_DIR}"|"${ARTIFACTS_DIR}"/*|"{{ repo_root }}"|"{{ repo_root }}"/*|/tmp/*) ;; \
+                    *) \
+                        echo "out_dir must be relative or under ARTIFACTS_DIR; got: $out_dir_arg"; \
+                        echo "If this came from an unset shell variable, use a repo-relative path like artifacts/full_with_peer."; \
+                        exit 1; \
+                        ;; \
+                esac; \
+                ;; \
+        esac; \
+    fi; \
     if [ "{{ stage }}" = "benchmark" ]; then \
         if [ "{{ dataset }}" = "sample" ]; then \
             raw_data="$sample_dataset_path"; \
@@ -151,14 +182,14 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-data-env
             echo "dataset must be 'sample' or 'raw'"; \
             exit 1; \
         fi; \
-        if [ -n "{{ out_dir }}" ]; then \
-            uv run python scripts/run_benchmark.py --raw-data "$raw_data" --out-dir "{{ out_dir }}" {{ extra }}; \
+        if [ -n "$out_dir_arg" ]; then \
+            uv run python scripts/run_benchmark.py --raw-data "$raw_data" --out-dir "$out_dir_arg" {{ extra }}; \
         else \
             uv run python scripts/run_benchmark.py --raw-data "$raw_data" {{ extra }}; \
         fi; \
     elif [ "{{ stage }}" = "cascade" ]; then \
-        if [ -n "{{ out_dir }}" ]; then \
-            uv run python scripts/run_public_cascade.py --out-dir "{{ out_dir }}" {{ extra }}; \
+        if [ -n "$out_dir_arg" ]; then \
+            uv run python scripts/run_public_cascade.py --out-dir "$out_dir_arg" {{ extra }}; \
         else \
             uv run python scripts/run_public_cascade.py {{ extra }}; \
         fi; \
@@ -175,8 +206,8 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-data-env
             echo "dataset must be 'sample' or 'raw'"; \
             exit 1; \
         fi; \
-        if [ -n "{{ out_dir }}" ]; then \
-            uv run python scripts/run_bridge_probe.py --raw-data "$raw_data" --out-dir "{{ out_dir }}" {{ extra }}; \
+        if [ -n "$out_dir_arg" ]; then \
+            uv run python scripts/run_bridge_probe.py --raw-data "$raw_data" --out-dir "$out_dir_arg" {{ extra }}; \
         else \
             uv run python scripts/run_bridge_probe.py --raw-data "$raw_data" {{ extra }}; \
         fi; \
@@ -193,8 +224,8 @@ _analysis stage="study" dataset="raw" out_dir="" extra="": _check-data-env
             echo "dataset must be 'sample' or 'raw'"; \
             exit 1; \
         fi; \
-        if [ -n "{{ out_dir }}" ]; then \
-            uv run python scripts/run_study.py --raw-data "$raw_data" --out-dir "{{ out_dir }}" {{ extra }}; \
+        if [ -n "$out_dir_arg" ]; then \
+            uv run python scripts/run_study.py --raw-data "$raw_data" --out-dir "$out_dir_arg" {{ extra }}; \
         else \
             uv run python scripts/run_study.py --raw-data "$raw_data" {{ extra }}; \
         fi; \
@@ -314,6 +345,23 @@ full *args: _check-data-env
         case "$numeric_arg" in ''|*[!0-9]*) echo "fetch_workers, model_jobs, model_threads, fsds_batch_size, and notes_batch_size must be positive integers"; exit 1 ;; esac; \
         if [ "$numeric_arg" -lt 1 ]; then echo "fetch_workers, model_jobs, model_threads, fsds_batch_size, and notes_batch_size must be positive integers"; exit 1; fi; \
     done; \
+    run_out="$out_dir"; \
+    if [ -z "$run_out" ]; then \
+        run_out="${ARTIFACTS_DIR}/full_${mode}_${dataset}"; \
+    else \
+        case "$run_out" in \
+            /*) \
+                case "$run_out" in \
+                    "${ARTIFACTS_DIR}"|"${ARTIFACTS_DIR}"/*|"{{ repo_root }}"|"{{ repo_root }}"/*|/tmp/*) ;; \
+                    *) \
+                        echo "out_dir must be relative or under ARTIFACTS_DIR; got: $run_out"; \
+                        echo "If this came from an unset shell variable, use a repo-relative path like artifacts/full_with_peer."; \
+                        exit 1; \
+                        ;; \
+                esac; \
+                ;; \
+        esac; \
+    fi; \
     just setup; \
     just _test; \
     just _ruff; \
@@ -322,10 +370,6 @@ full *args: _check-data-env
         echo "$raw_dataset_path is required for dataset=raw"; \
         echo "Expected ${DATA_DIR}/raw_dataset_misstatement.csv, ${DATA_DIR}/raw_dataset_misstatement.zip, or ${DATA_DIR}/external/raw_dataset_misstatement.zip as a materialization source."; \
         exit 1; \
-    fi; \
-    run_out="$out_dir"; \
-    if [ -z "$run_out" ]; then \
-        run_out="${ARTIFACTS_DIR}/full_${mode}_${dataset}"; \
     fi; \
     if [ "$dataset" = "sample" ]; then \
         uv run python scripts/generate_sample_dataset.py; \
@@ -386,6 +430,57 @@ docs: _docs-build
     done; \
     echo "No free docs port in 8001-8010"; \
     exit 1
+
+snapshot study_dir="artifacts/full_with_peer" allow_partial="0": _check-data-env
+    @study_dir_arg="{{ study_dir }}"; \
+    case "$study_dir_arg" in study_dir=*) study_dir_arg="${study_dir_arg#study_dir=}" ;; esac; \
+    if [ -n "$study_dir_arg" ]; then \
+        case "$study_dir_arg" in \
+            /*) \
+                case "$study_dir_arg" in \
+                    "${ARTIFACTS_DIR}"|"${ARTIFACTS_DIR}"/*|"{{ repo_root }}"|"{{ repo_root }}"/*|/tmp/*) ;; \
+                    *) \
+                        echo "study_dir must be relative or under ARTIFACTS_DIR; got: $study_dir_arg"; \
+                        echo "If this came from an unset shell variable, use a repo-relative path like artifacts/full_with_peer."; \
+                        exit 1; \
+                        ;; \
+                esac; \
+                ;; \
+        esac; \
+    fi; \
+    partial_flag=""; \
+    allow_partial_arg="{{ allow_partial }}"; \
+    case "$allow_partial_arg" in allow_partial=*) allow_partial_arg="${allow_partial_arg#allow_partial=}" ;; esac; \
+    case "$allow_partial_arg" in \
+        0) ;; \
+        1) partial_flag="--allow-partial" ;; \
+        *) echo "allow_partial must be 0 or 1"; exit 1 ;; \
+    esac; \
+    uv run python scripts/refresh_results_snapshot.py --study-dir "$study_dir_arg" $partial_flag
+    just check
+
+manuscript study_dir="artifacts/full_with_peer" out_dir="artifacts/manuscript_package": _check-data-env
+    @study_dir_arg="{{ study_dir }}"; \
+    out_dir_arg="{{ out_dir }}"; \
+    case "$study_dir_arg" in study_dir=*) study_dir_arg="${study_dir_arg#study_dir=}" ;; esac; \
+    case "$out_dir_arg" in out_dir=*) out_dir_arg="${out_dir_arg#out_dir=}" ;; esac; \
+    for path_arg in "$study_dir_arg" "$out_dir_arg"; do \
+        if [ -n "$path_arg" ]; then \
+            case "$path_arg" in \
+                /*) \
+                    case "$path_arg" in \
+                        "${ARTIFACTS_DIR}"|"${ARTIFACTS_DIR}"/*|"{{ repo_root }}"|"{{ repo_root }}"/*|/tmp/*) ;; \
+                        *) \
+                            echo "manuscript paths must be relative or under ARTIFACTS_DIR; got: $path_arg"; \
+                            echo "If this came from an unset shell variable, use repo-relative paths like artifacts/full_with_peer and artifacts/manuscript_package."; \
+                            exit 1; \
+                            ;; \
+                    esac; \
+                    ;; \
+            esac; \
+        fi; \
+    done; \
+    uv run python scripts/build_manuscript_package.py --study-dir "$study_dir_arg" --out-dir "$out_dir_arg"
 
 _docs-build: _check-env
     uv run --group docs mkdocs build --strict --clean
