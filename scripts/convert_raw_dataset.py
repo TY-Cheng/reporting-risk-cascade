@@ -20,7 +20,7 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import DATA_DIR
+    from src import RAW_DATASET_PATH
 
     parser = argparse.ArgumentParser(description="Convert raw benchmark CSV/ZIP to Parquet")
     parser.add_argument(
@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Existing raw benchmark CSV or ZIP. Defaults to DATA_DIR/raw_dataset_misstatement.csv, "
             "then DATA_DIR/raw_dataset_misstatement.zip, then "
+            "DATA_DIR/raw/raw_dataset_misstatement.csv, then "
+            "DATA_DIR/raw/raw_dataset_misstatement.zip, then "
             "DATA_DIR/external/raw_dataset_misstatement.zip."
         ),
     )
@@ -42,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out-data",
         type=Path,
-        default=DATA_DIR / "raw_dataset_misstatement.parquet",
+        default=RAW_DATASET_PATH,
         help="Output Parquet path",
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output")

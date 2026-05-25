@@ -58,12 +58,14 @@ _test-core:
         tests/test_peer_comparison.py \
         tests/test_public_cascade_interfaces.py \
         tests/test_public_peer_comparison.py \
+        tests/test_linkage.py \
         tests/test_raw_dataset.py \
         tests/test_table_io_sample.py \
         --cov=src.benchmark \
         --cov=src.bridge \
         --cov=src.construct_overlap \
         --cov=src.data_prep \
+        --cov=src.linkage \
         --cov=src.peer_comparison \
         --cov=src.public_cascade \
         --cov=src.public_peer_comparison \
@@ -97,7 +99,7 @@ status: _check-data-env
     @echo "LAKE_BRONZE_DIR=${LAKE_BRONZE_DIR:-${DATA_DIR}/public_lake/bronze}"
     @echo "LAKE_SILVER_DIR=${LAKE_SILVER_DIR:-${DATA_DIR}/public_lake/silver}"
     @echo "LAKE_GOLD_DIR=${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"
-    @echo "RAW_DATASET_PATH=${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"
+    @echo "RAW_DATASET_PATH=${RAW_DATASET_PATH:-${DATA_DIR}/raw/raw_dataset_misstatement.parquet}"
     @echo "MANUSCRIPT_DIR=${MANUSCRIPT_DIR:-${DIR_MANUSCRIPT:-}}"
     @if [ -x "${UV_PROJECT_ENVIRONMENT}/bin/python" ]; then \
         "${UV_PROJECT_ENVIRONMENT}/bin/python" -c "import sys; from src import PROJECT_ROOT, WORK_DIR, DATA_DIR, DOCS_DIR, PAPER_DIR, MANUSCRIPT_DIR, ARTIFACTS_DIR, PUBLIC_LAKE_DIR, LAKE_BRONZE_DIR, LAKE_SILVER_DIR, LAKE_GOLD_DIR, RAW_DATASET_PATH, SAMPLE_DATASET_PATH; print('python_prefix', sys.prefix); print('python_project_root', PROJECT_ROOT); print('python_work_dir', WORK_DIR); print('python_data_dir', DATA_DIR); print('python_docs_dir', DOCS_DIR); print('python_paper_dir', PAPER_DIR); print('python_manuscript_dir', MANUSCRIPT_DIR); print('python_artifacts_dir', ARTIFACTS_DIR); print('python_public_lake_dir', PUBLIC_LAKE_DIR); print('python_lake_bronze_dir', LAKE_BRONZE_DIR); print('python_lake_silver_dir', LAKE_SILVER_DIR); print('python_lake_gold_dir', LAKE_GOLD_DIR); print('python_raw_dataset_path', RAW_DATASET_PATH); print('python_sample_dataset_path', SAMPLE_DATASET_PATH)"; \
@@ -152,7 +154,7 @@ _run dataset="sample" out_dir="": _check-data-env
     fi
 
 _analysis stage="study" dataset="raw" out_dir="" extra="": _check-data-env
-    @raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"; \
+    @raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw/raw_dataset_misstatement.parquet}"; \
     sample_dataset_path="${SAMPLE_DATASET_PATH:-${ARTIFACTS_DIR}/sample_dataset_misstatement.parquet}"; \
     out_dir_arg="{{ out_dir }}"; \
     if [ -n "$out_dir_arg" ]; then \
@@ -263,11 +265,12 @@ data mode="full" strategy="fresh": _check-data-env
         --skip-setup \
         --skip-public-cascade \
         $lake_args; \
+    uv run python scripts/build_linkage_bridge.py; \
     echo "Data engineering complete: raw dataset parquet plus public lake {{ mode }}."
 
 full *args: _check-data-env
     @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="4"; model_threads="2"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="400GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
-    raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"; \
+    raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw/raw_dataset_misstatement.parquet}"; \
     sample_dataset_path="${SAMPLE_DATASET_PATH:-${ARTIFACTS_DIR}/sample_dataset_misstatement.parquet}"; \
     lake_silver_dir="${LAKE_SILVER_DIR:-${DATA_DIR}/public_lake/silver}"; \
     lake_gold_dir="${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"; \
@@ -368,7 +371,7 @@ full *args: _check-data-env
     uv run python scripts/convert_raw_dataset.py; \
     if [ "$dataset" = "raw" ] && [ ! -f "$raw_dataset_path" ]; then \
         echo "$raw_dataset_path is required for dataset=raw"; \
-        echo "Expected ${DATA_DIR}/raw_dataset_misstatement.csv, ${DATA_DIR}/raw_dataset_misstatement.zip, or ${DATA_DIR}/external/raw_dataset_misstatement.zip as a materialization source."; \
+        echo "Expected ${DATA_DIR}/raw_dataset_misstatement.csv, ${DATA_DIR}/raw_dataset_misstatement.zip, ${DATA_DIR}/raw/raw_dataset_misstatement.csv, ${DATA_DIR}/raw/raw_dataset_misstatement.zip, or ${DATA_DIR}/external/raw_dataset_misstatement.zip as a materialization source."; \
         exit 1; \
     fi; \
     if [ "$dataset" = "sample" ]; then \
@@ -405,6 +408,7 @@ full *args: _check-data-env
         --notes-batch-size "$notes_batch_size" \
         --skip-setup \
         --skip-public-cascade ${duckdb_temp_directory:+--duckdb-temp-directory "$duckdb_temp_directory"} $lake_args; \
+    uv run python scripts/build_linkage_bridge.py; \
     uv run python scripts/run_study.py \
         --raw-data "$raw_data" \
         --issuer-dim "$silver_dir/issuer_dim.parquet" \

@@ -51,10 +51,9 @@ DEFAULT_CONFIG_PATH = (
     .expanduser()
     .resolve()
 )
+_DEFAULT_RAW_DATASET_PATH = DATA_DIR / "raw" / "raw_dataset_misstatement.parquet"
 RAW_DATASET_PATH = (
-    Path(os.getenv("RAW_DATASET_PATH") or DATA_DIR / "raw_dataset_misstatement.parquet")
-    .expanduser()
-    .resolve()
+    Path(os.getenv("RAW_DATASET_PATH") or _DEFAULT_RAW_DATASET_PATH).expanduser().resolve()
 )
 SAMPLE_DATASET_PATH = (
     Path(os.getenv("SAMPLE_DATASET_PATH") or ARTIFACTS_DIR / "sample_dataset_misstatement.parquet")

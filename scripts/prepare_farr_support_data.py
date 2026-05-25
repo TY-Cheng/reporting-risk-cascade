@@ -31,6 +31,7 @@ def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
     from src import ARTIFACTS_DIR, DATA_DIR, LAKE_GOLD_DIR, RAW_DATASET_PATH
+    from src.linkage import DEFAULT_LINKAGE_OUT_DIR
 
     parser = argparse.ArgumentParser(description="Prepare farr AAER/state-HQ support artifacts")
     parser.add_argument(
@@ -52,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--crosswalk",
         type=Path,
-        default=DATA_DIR / "external" / "gvkey_cik_year.csv",
+        default=DEFAULT_LINKAGE_OUT_DIR / "gvkey_cik_year.csv",
     )
     parser.add_argument(
         "--issuer-origin",

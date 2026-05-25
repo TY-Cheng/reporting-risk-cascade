@@ -6,7 +6,7 @@ usage() {
 Usage: bash scripts/prepare_farr_gvkey_cik_bridge.sh [options]
 
 Export farr::gvkey_ciks, normalize it to DATA_DIR/external/gvkey_cik_year.csv,
-and optionally run the bridge probe.
+refresh the raw-primary linkage folder, and optionally run the bridge probe.
 
 Options:
   --raw-out PATH          Raw farr export path.
@@ -162,6 +162,7 @@ if [ "$no_raw_filter" -eq 1 ]; then
 fi
 
 uv run python scripts/prepare_gvkey_cik_crosswalk.py "${python_args[@]}"
+uv run python scripts/build_linkage_bridge.py --external-crosswalk "$out"
 
 if [ "$run_bridge_probe" -eq 1 ]; then
   just task bridge raw "$bridge_out_dir"
@@ -169,4 +170,5 @@ fi
 
 echo "Raw farr export: $raw_out"
 echo "Normalized crosswalk: $out"
+echo "Raw-primary bridge: ${DATA_DIR}/linkage/raw_primary_external_supplement/gvkey_cik_year.csv"
 echo "Crosswalk summary: $summary_json"

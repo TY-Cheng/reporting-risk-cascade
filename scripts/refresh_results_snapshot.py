@@ -507,8 +507,8 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "- **Data.** The workflow combines the legacy `gvkey x data_year` "
         "detected-misstatement benchmark, the public SEC/PCAOB lake, the gold "
-        "`issuer_origin_panel` and `filing_origin_panel`, and an external "
-        "`gvkey-CIK-year` bridge for overlap validation.",
+        "`issuer_origin_panel` and `filing_origin_panel`, and a raw-primary "
+        "`gvkey-CIK-year` bridge with external supplement rows for overlap validation.",
         "",
         "- **Models.** The core public cascade uses XGBoost over metadata, XBRL, "
         "text/notes, auditor, oversight, and all-feature sets. Peer-compatible "
@@ -558,7 +558,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "flowchart LR",
         '    L["Legacy benchmark<br/>timing, drift, missingness,<br/>peer-compatible metrics"]',
         '    P["Public filing-origin cascade<br/>comment threads, amendments,<br/>8-K Item 4.02, AAER support"]',
-        '    B["Bridge gate<br/>gvkey-CIK-year coverage<br/>candidate_farr unless WRDS supplied"]',
+        '    B["Bridge gate<br/>raw-primary gvkey-CIK-year coverage<br/>candidate evidence unless WRDS supplied"]',
         '    V["Construct-overlap checks<br/>co-occurrence, lift,<br/>reciprocal ranking, event time"]',
         '    S["Snapshot docs<br/>generated from artifacts<br/>checked by just snapshot"]',
         "    L --> B",
@@ -671,7 +671,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "non-identical constructs.",
         "- Public-cascade scores can rank legacy positives in the matched overlap; "
         "legacy/peer scores can also rank severe public correction labels.",
-        "- `candidate_farr` bridge evidence is useful for internal validation, but "
+        f"- `{validation_tier}` bridge evidence is useful for internal validation, but "
         "should be labeled clearly until a WRDS-grade bridge is available.",
         "",
         "## Selected Artifact Index",

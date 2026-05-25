@@ -77,7 +77,7 @@ local environment first with `set -a; source .env; set +a`.
 The default benchmark input is:
 
 ```text
-$DATA_DIR/raw_dataset_misstatement.parquet
+$DATA_DIR/raw/raw_dataset_misstatement.parquet
 ```
 
 If only the legacy CSV or ZIP exists, keep it at one of these paths and
@@ -86,6 +86,8 @@ materialize the Parquet once:
 ```text
 $DATA_DIR/raw_dataset_misstatement.csv
 $DATA_DIR/raw_dataset_misstatement.zip
+$DATA_DIR/raw/raw_dataset_misstatement.csv
+$DATA_DIR/raw/raw_dataset_misstatement.zip
 $DATA_DIR/external/raw_dataset_misstatement.zip
 ```
 
@@ -119,10 +121,13 @@ just data full force
 ```
 
 `just data` materializes the raw benchmark Parquet from CSV/ZIP when needed and
-builds the public lake without running the model study. The optional second
-argument controls refresh behavior: `fresh` rebuilds silver/gold from cached
-bronze, `resume` reuses DAG markers, and `force` re-downloads public source
-payloads before rebuilding.
+builds the public lake without running the model study. It also refreshes the
+raw-primary linkage folder at
+`$DATA_DIR/linkage/raw_primary_external_supplement/`, with public-overlap
+summaries for both `public_lake` and `public_lake_smoke` when those gold panels
+exist. The optional second argument controls refresh behavior: `fresh` rebuilds
+silver/gold from cached bronze, `resume` reuses DAG markers, and `force`
+re-downloads public source payloads before rebuilding.
 
 Paper-facing core run:
 
@@ -250,16 +255,33 @@ Manuscript package:
 
 ## Bridge Inputs
 
-The integration bridge is:
+The default integration bridge is the raw-primary derived linkage file:
 
 ```text
-$DATA_DIR/external/gvkey_cik_year.csv
+$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv
 ```
+
+It is built from the raw CIK-GVKEY link table as the primary source and the
+existing external bridge as a supplement for gvkey-years not covered by raw:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/build_linkage_bridge.py
+```
+
+The builder writes:
+
+- `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv`
+- `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year_conflicts.csv`
+- `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year_summary.json`
+- `$DATA_DIR/linkage/raw_primary_external_supplement/public_lake/coverage_summary.json`
+- `$DATA_DIR/linkage/raw_primary_external_supplement/public_lake_smoke/coverage_summary.json`
 
 The repo cannot infer this table from the legacy benchmark alone because the
 benchmark has `gvkey` and `data_year`, but not CIK, ticker, company name, CUSIP,
-or PERMNO. Prefer a WRDS/Compustat CIK-GVKEY link export or equivalent
-institutional crosswalk:
+or PERMNO. Raw CIK-GVKEY evidence should be preferred when present. If replacing
+or refreshing the external supplement, use a WRDS/Compustat CIK-GVKEY link
+export or equivalent institutional crosswalk:
 
 ```bash
 set -a; source .env; set +a
@@ -269,6 +291,7 @@ uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --source wrds_compustat_cik_gvkey_link \
   --source-version "YYYY-MM-DD"
 
+uv run python scripts/build_linkage_bridge.py
 just task bridge raw
 ```
 
@@ -287,10 +310,11 @@ When WRDS is unavailable, prepare a provenance-tagged candidate bridge from
 bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
 ```
 
-This exports `$DATA_DIR/external/farr_gvkey_ciks_raw.csv`, normalizes annual links to
-`$DATA_DIR/external/gvkey_cik_year.csv`, and runs the bridge probe. Treat this as a
-candidate bridge whose coverage and multiplicity must be reported, not as a
-silent substitute for a WRDS-verified table.
+This exports `$DATA_DIR/external/farr_gvkey_ciks_raw.csv`, normalizes annual
+links to `$DATA_DIR/external/gvkey_cik_year.csv`, refreshes the raw-primary
+linkage folder, and runs the bridge probe. Treat this as a candidate bridge
+whose coverage and multiplicity must be reported, not as a silent substitute
+for a WRDS-verified table.
 
 The same package provides support inputs:
 
@@ -310,22 +334,23 @@ retain provenance fields: `source`, `source_version`, `extracted_at`,
 `match_method`, and `match_score`.
 
 Construct-overlap validation reads those provenance fields to infer
-`validation_tier`: farr exports remain `candidate_farr`, while WRDS/Compustat
-source or match-method provenance is reported as `wrds_validated`. Mixed
-WRDS/farr crosswalks remain candidate evidence until the mixed-source rows are
-resolved.
+`validation_tier`: farr-only exports remain `candidate_farr`, the current
+raw-primary plus farr-supplement bridge is `candidate_mixed`, and
+WRDS/Compustat source or match-method provenance is reported as
+`wrds_validated` only when the bridge is no longer mixed with candidate rows.
 
 ## Current Gates
 
 1. The public-cascade run is the current non-metadata `xbrl_ratio_baseline`
    snapshot.
-2. `farr::gvkey_ciks` is the current high-coverage candidate bridge when WRDS is
-   unavailable; coverage, multiplicity, and inferred validation tier must be
-   reported.
+2. The raw-primary bridge is the current high-coverage candidate bridge when
+   WRDS is unavailable; coverage, multiplicity, raw/external conflicts, and
+   inferred validation tier must be reported.
 3. Candidate bridge overlap can support a related-but-non-identical construct
-   argument. The construct-overlap manifest should move from `candidate_farr` to
-   `wrds_validated` only after a provenance-tagged WRDS or equivalent crosswalk
-   is supplied and the overlap layer is rerun.
+   argument. The construct-overlap manifest currently reports
+   `candidate_mixed`; it should move to `wrds_validated` only after a
+   provenance-tagged WRDS or equivalent crosswalk is supplied and the overlap
+   layer is rerun.
 4. AAER is a high-severity enforcement descriptor and robustness anchor, not the headline
    prediction target.
 <!-- --8<-- [end:docs-home] -->

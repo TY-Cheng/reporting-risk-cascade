@@ -17,6 +17,7 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from . import DATA_DIR, PROJECT_ROOT
+from .linkage import DEFAULT_LINKAGE_OUT_DIR
 from .ranking_metrics import matlab_round_positive
 from .table_io import parquet_scan_sql, write_table
 
@@ -197,6 +198,12 @@ def _update_study_manifest_for_construct_overlap(
     if not path.exists():
         return
     study_manifest = _read_manifest(study_dir)
+    manifest_inputs = manifest.get("inputs", {}) if isinstance(manifest.get("inputs"), dict) else {}
+    if manifest_inputs:
+        inputs = study_manifest.setdefault("inputs", {})
+        for key in ["crosswalk", "issuer_origin_panel"]:
+            if manifest_inputs.get(key):
+                inputs[key] = manifest_inputs[key]
     components = study_manifest.setdefault("components", {})
     component: dict[str, Any] = {
         "run_status": manifest.get("run_status", "unknown"),
@@ -1259,7 +1266,7 @@ def run_construct_overlap(
     inputs = manifest_in.get("inputs", {}) if isinstance(manifest_in, dict) else {}
     crosswalk = _resolve_path(
         crosswalk_path or inputs.get("crosswalk"),
-        default=DATA_DIR / "external" / "gvkey_cik_year.csv",
+        default=DEFAULT_LINKAGE_OUT_DIR / "gvkey_cik_year.csv",
     )
     issuer_origin = _resolve_path(
         issuer_origin_panel_path or inputs.get("issuer_origin_panel"),

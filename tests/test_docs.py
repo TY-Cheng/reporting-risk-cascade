@@ -293,7 +293,7 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "Selected Artifact Index",
         "artifacts/",
         "xbrl_ratio_baseline",
-        "candidate_farr",
+        "candidate_mixed",
         "Key readings:",
     ]
     for phrase in required_phrases:

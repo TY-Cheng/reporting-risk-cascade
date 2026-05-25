@@ -6,7 +6,13 @@ from zipfile import ZipFile
 import pandas as pd
 import pytest
 
-from src.raw_dataset import materialize_raw_dataset, resolve_raw_dataset_source
+from src.raw_dataset import (
+    RAW_DATASET_CSV_NAME,
+    RAW_DATASET_ZIP_NAME,
+    default_raw_dataset_sources,
+    materialize_raw_dataset,
+    resolve_raw_dataset_source,
+)
 from src.table_io import read_table
 
 
@@ -53,3 +59,13 @@ def test_materialize_raw_dataset_allows_existing_output_without_source(tmp_path:
 def test_resolve_raw_dataset_source_requires_existing_input(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="Raw benchmark source not found"):
         resolve_raw_dataset_source(tmp_path / "missing.zip")
+
+
+def test_default_raw_dataset_sources_include_external_raw_subdir(tmp_path: Path) -> None:
+    assert default_raw_dataset_sources(tmp_path) == (
+        tmp_path / RAW_DATASET_CSV_NAME,
+        tmp_path / RAW_DATASET_ZIP_NAME,
+        tmp_path / "raw" / RAW_DATASET_CSV_NAME,
+        tmp_path / "raw" / RAW_DATASET_ZIP_NAME,
+        tmp_path / "external" / RAW_DATASET_ZIP_NAME,
+    )

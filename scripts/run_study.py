@@ -263,6 +263,7 @@ def main() -> None:
     from src.benchmark import run_benchmark
     from src.bridge import run_bridge_probe
     from src.construct_overlap import run_construct_overlap
+    from src.linkage import DEFAULT_LINKAGE_OUT_DIR
     from src.peer_comparison import run_peer_comparison
     from src.public_cascade import run_public_cascade
     from src.public_peer_comparison import run_public_peer_comparison
@@ -304,7 +305,7 @@ def main() -> None:
     )
     crosswalk = _resolve_project_path(
         args.crosswalk or inputs.get("gvkey_cik_crosswalk"),
-        default=DATA_DIR / "external" / "gvkey_cik_year.csv",
+        default=DEFAULT_LINKAGE_OUT_DIR / "gvkey_cik_year.csv",
         data_dir=DATA_DIR,
         artifacts_dir=ARTIFACTS_DIR,
     )

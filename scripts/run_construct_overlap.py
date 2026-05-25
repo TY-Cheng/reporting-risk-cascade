@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
     from src import ARTIFACTS_DIR, DATA_DIR
+    from src.linkage import DEFAULT_LINKAGE_OUT_DIR
 
     parser = argparse.ArgumentParser(description="Run construct-overlap validation")
     parser.add_argument(
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--crosswalk",
         type=Path,
-        default=DATA_DIR / "external" / "gvkey_cik_year.csv",
+        default=DEFAULT_LINKAGE_OUT_DIR / "gvkey_cik_year.csv",
         help="Provenance-tagged gvkey-CIK-year bridge; source/match_method determine validation tier",
     )
     parser.add_argument(

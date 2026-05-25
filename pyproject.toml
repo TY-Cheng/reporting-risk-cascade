@@ -58,6 +58,7 @@ source = [
     "src.benchmark",
     "src.bridge",
     "src.data_prep",
+    "src.linkage",
     "src.peer_comparison",
     "src.public_cascade",
     "src.ranking_metrics",

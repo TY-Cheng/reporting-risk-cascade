@@ -143,9 +143,9 @@ flowchart LR
 ### Reproduction Inputs
 
 - **Operational inputs.** A reproducible run needs the legacy benchmark file, the public SEC/PCAOB lake configuration, and the optional bridge/support exports:
-  - `$DATA_DIR/raw_dataset_misstatement.parquet` for the legacy `gvkey x data_year` benchmark.
+  - `$DATA_DIR/raw/raw_dataset_misstatement.parquet` for the legacy `gvkey x data_year` benchmark.
   - `config/public_data.yaml` and `config/study.yaml` for public-source and study defaults.
-  - `$DATA_DIR/external/gvkey_cik_year.csv` for bridge validation, generated from WRDS when available or from farr as the current candidate bridge.
+  - `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv` for bridge validation, generated from raw CIK-GVKEY links first and supplemented by the external bridge.
   - `$DATA_DIR/external/farr_aaer_firm_year.csv`, `$DATA_DIR/external/farr_aaer_dates.csv`, and `$DATA_DIR/external/farr_state_hq.csv` for AAER and headquarters-state support.
 - **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-04-23`. The stable full command is:
 
@@ -164,7 +164,7 @@ just manuscript
 
 ### Legacy Benchmark Panel
 
-- **File.** `$DATA_DIR/raw_dataset_misstatement.parquet`.
+- **File.** `$DATA_DIR/raw/raw_dataset_misstatement.parquet`.
 - **Grain.** `gvkey x data_year`.
 - **Coverage.** 2001-2019.
 - **Required fields.** `gvkey`, `data_year`, `misstatement firm-year`, `res_an0` to `res_an3`, `missing_*` flags, and accounting/audit/governance/market/industry predictors.
@@ -211,9 +211,10 @@ just manuscript
 
 ### Bridge and External Validation Inputs
 
-- **Bridge file.** `$DATA_DIR/external/gvkey_cik_year.csv`.
+- **Bridge file.** `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv`.
 - **Required fields.** `gvkey`, `issuer_cik`, a single year or start/end years, and provenance fields such as source, version, extraction date, match method, and match score.
 - **Bridge grain.** Bridge validation maps legacy `gvkey x data_year` rows to public `issuer_cik x fiscal_year` rows. It must report coverage, multiplicity, high-confidence and ambiguous matches, and unmatched diagnostics before overlap evidence is interpreted.
+- **Raw-primary rule.** `raw/CIK-GVKEY Link Table.csv` is treated as the primary bridge source. The existing external bridge supplies only gvkey-years that raw does not cover. Disjoint raw/external CIK sets for the same gvkey-year are written to `gvkey_cik_year_conflicts.csv`.
 - **WRDS-preferred route.**
 
 ```bash
@@ -222,6 +223,7 @@ uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --input path/to/wrds_cik_gvkey_link.csv \
   --out "$DATA_DIR/external/gvkey_cik_year.csv"
 
+uv run python scripts/build_linkage_bridge.py
 just task bridge raw artifacts/full_with_peer/bridge_probe
 uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
 ```
@@ -231,9 +233,10 @@ uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_p
 ```bash
 bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
 bash scripts/prepare_farr_support_data.sh --install-missing
+uv run python scripts/build_linkage_bridge.py
 ```
 
-- **Current candidate bridge.** `farr::gvkey_ciks` is the working high-coverage candidate bridge; it must be reported with coverage and multiplicity tables and should not be described as WRDS-verified.
+- **Current candidate bridge.** The raw-primary bridge is the working candidate bridge. It uses raw CIK-GVKEY links first and `farr::gvkey_ciks` as the current external supplement; it must be reported with coverage, multiplicity, conflict, and public-overlap tables and should not be described as WRDS-verified.
 - **Validation tier.** Construct-overlap outputs infer `validation_tier` from normalized crosswalk provenance: farr exports remain `candidate_farr`, WRDS/Compustat provenance is `wrds_validated`, and mixed-source bridges remain candidate evidence.
 - **AAER support.** `farr::aaer_firm_year` and `farr::aaer_dates` are external AAER validation anchors.
 - **Metadata support.** `farr::state_hq` is a date-bounded headquarters-state metadata control.
@@ -324,7 +327,7 @@ bash scripts/prepare_farr_support_data.sh --install-missing
 | Opacity | public-label DML implemented; refresh summary is separate from construct overlap | public-label PLR results must use `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` as primary outcomes |
 | Public lake | full public lake path implemented | refreshed source coverage, row counts, censoring, and reproducibility metadata |
 | Public cascade | current full-run state is `xbrl_ratio_baseline` | non-degenerate comment-thread, amendment, and 8-K Item 4.02 tasks; AAER framed as high-severity enforcement evidence |
-| Bridge overlap | farr candidate overlap implemented | coverage, multiplicity, reciprocal alignment, no silent many-to-many joins, and WRDS-preferred validation before final integrated claims |
+| Bridge overlap | raw-primary candidate/mixed-source overlap implemented | coverage, multiplicity, conflict reporting, reciprocal alignment, no silent many-to-many joins, and WRDS-preferred validation before final integrated claims |
 
 - **Data integrity gates.**
   - No post-`origin_date` event enters predictors.
@@ -332,7 +335,7 @@ bash scripts/prepare_farr_support_data.sh --install-missing
   - `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` stay outside default predictors.
   - Censoring masks are horizon-specific.
   - Crosswalk coverage and multiplicity are reported before overlap validation.
-  - Construct-overlap outputs carry `validation_tier = candidate_farr` under farr provenance and should flip to `wrds_validated` only after a provenance-tagged WRDS or equivalent bridge is supplied.
+  - Construct-overlap outputs carry `validation_tier = candidate_mixed` for the current raw-primary plus farr-supplement bridge, `validation_tier = candidate_farr` under farr-only provenance, and should flip to `wrds_validated` only after a provenance-tagged WRDS or equivalent bridge is supplied.
 - **Empirical sufficiency gates.**
   - Benchmark outputs non-empty rolling metrics, timing coverage, and missingness diagnostics.
   - Public cascade covers fiscal years 2011-2023 in the full panel.

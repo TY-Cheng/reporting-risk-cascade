@@ -17,7 +17,7 @@ Options:
   --raw-data PATH         Raw benchmark table.
                           Default: RAW_DATASET_PATH
   --crosswalk PATH        GVKEY-CIK-year crosswalk.
-                          Default: DATA_DIR/external/gvkey_cik_year.csv
+                          Default: DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv
   --issuer-origin PATH    Public issuer-origin panel.
                           Default: LAKE_GOLD_DIR/issuer_origin_panel.parquet
   --source-version TEXT   Override farr source version.
@@ -65,13 +65,13 @@ case "${ARTIFACTS_DIR}" in
     exit 1
     ;;
 esac
-RAW_DATASET_PATH="${RAW_DATASET_PATH:-${DATA_DIR}/raw_dataset_misstatement.parquet}"
+RAW_DATASET_PATH="${RAW_DATASET_PATH:-${DATA_DIR}/raw/raw_dataset_misstatement.parquet}"
 LAKE_GOLD_DIR="${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"
 
 out_dir="${DATA_DIR}/external"
 artifacts_dir="${ARTIFACTS_DIR}/farr_support"
 raw_data="${RAW_DATASET_PATH}"
-crosswalk="${DATA_DIR}/external/gvkey_cik_year.csv"
+crosswalk="${DATA_DIR}/linkage/raw_primary_external_supplement/gvkey_cik_year.csv"
 issuer_origin="${LAKE_GOLD_DIR}/issuer_origin_panel.parquet"
 source_version=""
 install_missing=0
