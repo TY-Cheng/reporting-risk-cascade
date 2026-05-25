@@ -30,9 +30,6 @@ sources:
   comment-letters:
     page_url: "https://www.sec.gov/answers/how-to-search-for-edgar-correspondence"
     note: "Use first public EDGAR date only; public threads correspond to UPLOAD/CORRESP."
-  aaer:
-    page_url: "https://www.sec.gov/enforcement/accounting-auditing-enforcement-releases"
-    note: "Stage 4 severity proxy only, not a complete enforcement universe."
   insider:
     page_url: "https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets"
   13f:

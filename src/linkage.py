@@ -1,7 +1,8 @@
-"""Build raw-primary gvkey-CIK-year linkage tables.
+"""Build raw-only gvkey-CIK-year linkage tables.
 
 The linkage layer is deliberately outside the SEC/PCAOB public lake. It
-combines identity/linkage exports that support the bridge validation layer.
+normalizes the raw CIK-GVKEY institutional link export that supports the bridge
+validation layer.
 """
 
 from __future__ import annotations
@@ -35,9 +36,8 @@ LINKAGE_OUTPUT_COLUMNS = (
     "raw_link_sources",
     "raw_link_descs",
 )
-DEFAULT_LINKAGE_SUBDIR = "raw_primary_external_supplement"
+DEFAULT_LINKAGE_SUBDIR = "raw_only"
 DEFAULT_RAW_CIK_GVKEY_LINK_PATH = DATA_DIR / "raw" / "CIK-GVKEY Link Table.csv"
-DEFAULT_EXTERNAL_CROSSWALK_PATH = DATA_DIR / "external" / "gvkey_cik_year.csv"
 DEFAULT_LINKAGE_OUT_DIR = DATA_DIR / "linkage" / DEFAULT_LINKAGE_SUBDIR
 VALID_LINK_DESC = "Valid CIK-GVKEY Link"
 
@@ -268,7 +268,7 @@ def normalize_raw_cik_gvkey_links(
         years = _years_from_dates(*span, raw_year_set=raw_years)
         raw_source = str(row.get("source", "") or "").strip()
         raw_desc = str(row.get("link_desc", "") or "").strip()
-        source = f"raw_cik_gvkey:{_source_slug(raw_source)}"
+        source = f"wrds_sec_analytics_cik_gvkey:{_source_slug(raw_source)}"
         for year in years:
             rows.append(
                 {
@@ -276,9 +276,9 @@ def normalize_raw_cik_gvkey_links(
                     "data_year": int(year),
                     "issuer_cik": issuer_cik,
                     "source": source,
-                    "source_version": "raw/CIK-GVKEY Link Table.csv",
+                    "source_version": "WRDS SEC Analytics Suite / CIK-GVKEY Link Table.csv",
                     "extracted_at": extracted_at,
-                    "match_method": f"raw_cik_gvkey_{date_rule}",
+                    "match_method": f"wrds_sec_analytics_cik_gvkey_{date_rule}",
                     "match_score": "1.0",
                     "bridge_priority": "raw_primary",
                     "bridge_origin": "raw",
@@ -573,7 +573,6 @@ def public_overlap_outputs(
 def build_raw_primary_linkage(
     *,
     raw_link_path: Path = DEFAULT_RAW_CIK_GVKEY_LINK_PATH,
-    external_crosswalk_path: Path = DEFAULT_EXTERNAL_CROSSWALK_PATH,
     raw_data_path: Path = RAW_DATASET_PATH,
     out_dir: Path = DEFAULT_LINKAGE_OUT_DIR,
     public_lake_panel_path: Path | None = None,
@@ -582,16 +581,11 @@ def build_raw_primary_linkage(
     date_rule: str = "intersection",
     extracted_at: str | None = None,
 ) -> LinkageBuildResult:
-    """Build the raw-primary linkage folder under DATA_DIR/linkage."""
+    """Build the raw-only linkage folder under DATA_DIR/linkage."""
 
     out_dir.mkdir(parents=True, exist_ok=True)
     raw_data = read_table(raw_data_path, low_memory=False) if raw_data_path.exists() else None
     raw_input = read_table(raw_link_path, low_memory=False)
-    external_input = (
-        read_table(external_crosswalk_path, low_memory=False)
-        if external_crosswalk_path.exists()
-        else pd.DataFrame()
-    )
 
     raw_normalized = normalize_raw_cik_gvkey_links(
         raw_input,
@@ -600,20 +594,13 @@ def build_raw_primary_linkage(
         date_rule=date_rule,
         extracted_at=extracted_at,
     )
-    external_normalized = normalize_external_crosswalk(external_input, raw_data=raw_data)
-    combined, external_supplement, conflicts = raw_primary_external_supplement(
-        raw_normalized,
-        external_normalized,
-    )
+    combined = raw_normalized.copy()
+    conflicts = _raw_external_conflicts(raw_normalized, pd.DataFrame())
 
     raw_path = out_dir / "raw_primary_gvkey_cik_year.csv"
-    external_path = out_dir / "external_normalized_gvkey_cik_year.csv"
-    supplement_path = out_dir / "external_supplement_gvkey_cik_year.csv"
     combined_path = out_dir / "gvkey_cik_year.csv"
     conflicts_path = out_dir / "gvkey_cik_year_conflicts.csv"
     write_table(raw_normalized, raw_path)
-    write_table(external_normalized, external_path)
-    write_table(external_supplement, supplement_path)
     write_table(combined, combined_path)
     write_table(conflicts, conflicts_path)
 
@@ -639,26 +626,20 @@ def build_raw_primary_linkage(
         "generated_at_utc": _utc_now(),
         "input_paths": {
             "raw_link_path": str(raw_link_path),
-            "external_crosswalk_path": str(external_crosswalk_path),
             "raw_data_path": str(raw_data_path),
         },
         "output_paths": {
             "raw_primary": str(raw_path),
-            "external_normalized": str(external_path),
-            "external_supplement": str(supplement_path),
             "combined": str(combined_path),
             "conflicts": str(conflicts_path),
         },
         "settings": {
             "include_name_mismatch": include_name_mismatch,
             "date_rule": date_rule,
-            "raw_priority": "raw gvkey-year rows replace external rows for the same gvkey-year",
+            "linkage_policy": "raw CIK-GVKEY link rows only; external gvkey-CIK rows are not used",
         },
         "raw_input": {"rows": int(len(raw_input))},
-        "external_input": {"rows": int(len(external_input))},
         "raw_primary": _linkage_stats(raw_normalized),
-        "external_normalized": _linkage_stats(external_normalized),
-        "external_supplement": _linkage_stats(external_supplement),
         "combined": _linkage_stats(combined),
         "conflicts": _conflict_stats(conflicts, raw_data),
         "raw_benchmark_coverage": _raw_coverage(combined, raw_data),

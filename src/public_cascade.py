@@ -32,7 +32,6 @@ TASKS = {
     "comment_thread": {"label": "label_comment_thread_365", "censor": "censored_365"},
     "amendment": {"label": "label_amendment_365", "censor": "censored_365"},
     "8k_402": {"label": "label_8k_402_365", "censor": "censored_365"},
-    "aaer_proxy": {"label": "label_aaer_proxy_730", "censor": "censored_730"},
 }
 TASK_EXCLUSION_COLS = {
     "8k_402": ("k402_item_metadata_unknown_365",),
@@ -59,7 +58,7 @@ IDENTIFIER_COLS = {
     "primary_doc_description",
 }
 
-MODEL_EXCLUDED_PREFIXES = ("source_available_", "public_date_", "vintage_")
+MODEL_EXCLUDED_PREFIXES = ("source_available_", "public_date_", "vintage_", "label_", "censored_")
 MODEL_EXCLUDED_COLS = {
     "items",
     "issuer_has_fpi_form",
@@ -73,7 +72,7 @@ MODEL_EXCLUDED_COLS = {
     "phone",
     "ein",
 }
-CATEGORICAL_FEATURE_COLS = {"sic", "form", "entity_type", "issuer_hq_state"}
+CATEGORICAL_FEATURE_COLS = {"sic", "form", "entity_type"}
 
 
 def stable_task_seed(base_seed: int, *parts: object) -> int:

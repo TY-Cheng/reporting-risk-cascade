@@ -201,6 +201,8 @@ def _public_lake_scale(report: dict[str, Any]) -> pd.DataFrame:
 
 def _public_task_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.DataFrame:
     positives = summary.get("task_positive_counts", {})
+    if "task" in metrics.columns:
+        metrics = metrics.loc[~metrics["task"].astype(str).str.contains("aaer", case=False)].copy()
     grouped = (
         metrics.groupby("task", dropna=False)
         .agg(
@@ -337,7 +339,7 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
         best = public_to_legacy.sort_values("top_decile_lift", ascending=False).iloc[0]
         rows.append(
             {
-                "Direction": "Public score to legacy positives",
+                "Direction": "Public score to benchmark positives",
                 "Model": best["model_id"],
                 "Target": best["task"],
                 "Feature_Set": best["feature_set"],
@@ -351,7 +353,7 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
         best = legacy_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
         rows.append(
             {
-                "Direction": "Legacy or peer score to public labels",
+                "Direction": "Detected-misstatement score to public labels",
                 "Model": best["model_id"],
                 "Target": best["target_public_label"],
                 "Feature_Set": best.get("feature_set", ""),
@@ -480,7 +482,7 @@ def _result_narrative(
         "",
         "The empirical object is a filing-origin public reporting-risk state: whether an "
         "issuer later enters an observable public review or correction channel after the "
-        "public information set available at the filing origin. The legacy detected-"
+        "public information set available at the filing origin. The detected-"
         "misstatement benchmark is retained as a diagnostic and construct-validation "
         "layer, not treated as the sole definition of reporting risk.",
         "",
@@ -491,16 +493,14 @@ def _result_narrative(
         "severity gradient. Comment-thread scrutiny is the most stable broad-review "
         f"signal (mean PR-AUC `{value(comment_row, 'Mean_PR_AUC')}`), amendments provide "
         f"a clear correction/friction channel (mean PR-AUC `{value(amendment_row, 'Mean_PR_AUC')}`), "
-        f"and 8-K Item 4.02 is rarer but still rankable (mean PR-AUC `{value(severe_row, 'Mean_PR_AUC')}`). "
-        "AAER remains a sparse high-severity support signal rather than a headline "
-        "prediction target.",
+        f"and 8-K Item 4.02 is rarer but still rankable (mean PR-AUC `{value(severe_row, 'Mean_PR_AUC')}`).",
         "",
         "## Peer-Compatible Model Families",
         "",
         "The peer suites are model-family transfer exercises. They align the public "
         "reporting-risk task with familiar Dechow, Perols, Bao, and Bertomeu-style "
         "vocabularies without claiming original-paper numeric replication. In the "
-        f"legacy benchmark peer suite, `{legacy_leader['Model'] if legacy_leader is not None else 'n/a'}` "
+        f"detected-misstatement peer benchmark, `{legacy_leader['Model'] if legacy_leader is not None else 'n/a'}` "
         f"has the highest mean PR-AUC (`{legacy_leader['Mean_PR_AUC'] if legacy_leader is not None else 'n/a'}`). "
         f"In the public-label peer suite, `{public_peer_leader['Model'] if public_peer_leader is not None else 'n/a'}` "
         f"leads on mean PR-AUC (`{public_peer_leader['Mean_PR_AUC'] if public_peer_leader is not None else 'n/a'}`). "
@@ -509,13 +509,14 @@ def _result_narrative(
         "",
         "## Construct-Overlap Evidence",
         "",
-        "The candidate bridge shows that public-cascade scores and legacy detected-"
-        "misstatement labels are related but non-identical. The strongest public-score "
-        "to legacy-positive row and the strongest reciprocal legacy/peer-score to public-"
-        "label row both show top-decile lift above one, supporting construct relatedness. "
-        f"The validation tier is `{validation_tier}`; this is useful for internal and "
-        "draft evidence, but an institutional WRDS-style bridge remains preferable for "
-        "final manuscript claims.",
+        "The WRDS-validated bridge shows that public-cascade scores and detected-"
+        "misstatement benchmark labels are related but non-identical. The strongest "
+        "public-score-to-benchmark-positive row and the strongest reciprocal "
+        "detected-misstatement-score-to-public-label row both show top-decile lift "
+        "above one, supporting construct relatedness. "
+        f"The validation tier is `{validation_tier}`; this supports manuscript-grade "
+        "integrated overlap claims while preserving the related-but-non-identical "
+        "construct boundary.",
         "",
         "## Claim Boundary",
         "",
@@ -611,19 +612,19 @@ def main() -> None:
             caption="Public cascade feature-family metrics",
             label="tab:feature-family-metrics",
         ),
-        "table_05_legacy_timing_metrics": _write_table_bundle(
+        "table_05_benchmark_timing_metrics": _write_table_bundle(
             legacy_timing,
             out_dir=tables_dir,
-            stem="table_05_legacy_timing_metrics",
-            caption="Legacy benchmark timing diagnostics",
-            label="tab:legacy-timing",
+            stem="table_05_benchmark_timing_metrics",
+            caption="Detected-misstatement benchmark timing diagnostics",
+            label="tab:benchmark-timing",
         ),
-        "table_06_legacy_peer_metrics": _write_table_bundle(
+        "table_06_detected_misstatement_peer_metrics": _write_table_bundle(
             legacy_peer,
             out_dir=tables_dir,
-            stem="table_06_legacy_peer_metrics",
-            caption="Legacy peer-compatible model-family metrics",
-            label="tab:legacy-peer",
+            stem="table_06_detected_misstatement_peer_metrics",
+            caption="Detected-misstatement peer-compatible model-family metrics",
+            label="tab:benchmark-peer",
         ),
         "table_07_public_peer_metrics": _write_table_bundle(
             public_peer,
@@ -667,13 +668,13 @@ def main() -> None:
             out_path=figures_dir / "figure_02_feature_family_pr_auc",
             color="#6a994e",
         ),
-        "figure_03_legacy_peer_pr_auc": _plot_bar(
+        "figure_03_detected_misstatement_peer_pr_auc": _plot_bar(
             legacy_peer,
             x="Model",
             y="Mean_PR_AUC",
-            title="Legacy peer-compatible model families",
+            title="Detected-misstatement peer-compatible model families",
             ylabel="Mean PR-AUC",
-            out_path=figures_dir / "figure_03_legacy_peer_pr_auc",
+            out_path=figures_dir / "figure_03_detected_misstatement_peer_pr_auc",
             color="#bc6c25",
         ),
         "figure_04_public_peer_pr_auc": _plot_bar(

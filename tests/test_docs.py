@@ -231,21 +231,19 @@ def test_readme_points_to_current_docs_pages() -> None:
     assert "[Future Work](future_work.md)" not in readme
 
 
-def test_farr_bridge_scripts_are_documented_and_provenance_tagged() -> None:
+def test_historical_farr_bridge_script_is_documented_as_non_default() -> None:
     readme = _read("README.md")
     plan = _read("docs/paper_plan.md")
     r_script = _read("scripts/export_farr_gvkey_ciks.R")
     shell_script = _read("scripts/prepare_farr_gvkey_cik_bridge.sh")
-    support_r_script = _read("scripts/export_farr_support_data.R")
-    support_shell_script = _read("scripts/prepare_farr_support_data.sh")
-    support_py_script = _read("scripts/prepare_farr_support_data.py")
+
+    assert "scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing" in readme
+    assert "farr::gvkey_ciks" in readme
+    assert "not part of the default bridge" in readme
+    assert "old farr support exports are no longer required" in readme
 
     for text in [readme, plan]:
-        assert "scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing" in text
-        assert "scripts/prepare_farr_support_data.sh --install-missing" in text
-        assert "farr::gvkey_ciks" in text
-        assert "farr::aaer_firm_year" in text
-        assert "farr::state_hq" in text
+        assert "no longer uses farr/external support files" in text
         assert "coverage" in text
         assert "multiplicity" in text
 
@@ -255,13 +253,6 @@ def test_farr_bridge_scripts_are_documented_and_provenance_tagged() -> None:
     assert "scripts/export_farr_gvkey_ciks.R" in shell_script
     assert "scripts/prepare_gvkey_cik_crosswalk.py" in shell_script
     assert "--skip-bridge-probe" in shell_script
-    assert "data(\"aaer_dates\", package = \"farr\"" in support_r_script
-    assert "data(\"aaer_firm_year\", package = \"farr\"" in support_r_script
-    assert "data(\"state_hq\", package = \"farr\"" in support_r_script
-    assert "source = \"farr_state_hq\"" in support_r_script
-    assert "scripts/export_farr_support_data.R" in support_shell_script
-    assert "scripts/prepare_farr_support_data.py" in support_shell_script
-    assert "farr_aaer_public_proxy_overlap.csv" in support_py_script
 
 
 def test_docs_home_is_the_readme_snippet_only() -> None:
@@ -277,7 +268,7 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "Results Overview",
         "SEC/PCAOB",
         "gvkey x data_year",
-        "legacy detected-misstatement benchmark",
+        "detected-misstatement benchmark",
         "issuer_origin_panel",
         "filing_origin_panel",
         "gvkey-CIK-year",
@@ -294,26 +285,25 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "Experiment 3: Opacity and Public Review/Correction Risk",
         "Experiment 4: Public Cascade Construction",
         "Experiment 5: Public Cascade Prediction",
-        "Experiment 6: Old Benchmark and Public Cascade Overlap",
+        "Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap",
         "Full Window Summary",
         "Strongest Structural-Break Diagnostics",
         "Public Cascade Fit and Skip Status",
         "Public Lake and Gold Panel Scale",
         "Public Cascade Readiness",
         "Public Task Metrics",
-        "Legacy Benchmark",
+        "Detected-Misstatement Benchmark",
         "Peer-Compatible",
         "Public-Label Peer Transfer",
         "Label Contingency and Lift",
         "Event-Time Concentration",
-        "AAER High-Severity Support Status",
         "Tables, Figures, and Artifact Index",
         "Manuscript Package Tables and Figures",
         "Full Study Artifact Inventory",
         "Selected Artifact Index",
         "artifacts/",
         "xbrl_ratio_baseline",
-        "candidate_mixed",
+        "wrds_validated",
         "Key Readings",
     ]
     for phrase in required_phrases:
@@ -382,7 +372,7 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "metric-compatible ranking evidence",
         "Peer models and metrics",
         "bridge-based overlap validation",
-        "legacy detected-misstatement labels",
+        "detected-misstatement benchmark labels",
         "ex post detected misconduct",
         "review-and-correction risk rather than unobserved fraud occurrence",
         "does not by itself identify unobserved fraud occurrence, causal effects",
@@ -406,7 +396,7 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Public filing-origin cascade",
         "Bridge and interpretation layer",
         "external benchmark, not SEC/PCAOB public lake",
-        "legacy peer suite",
+        "detected-misstatement peer suite",
         "public-label peer suite",
         "same metric vocabulary as benchmark",
         "Construct-overlap checks",
@@ -418,12 +408,10 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Concept Drift and Model Shelf-Life",
         "Opacity and Public Review/Correction Risk",
         "Public Cascade Prediction",
-        "Old Benchmark and Public Cascade Overlap",
-        "[SEC Accounting and Auditing Enforcement Releases](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases)",
+        "Detected-Misstatement Benchmark and Public Cascade Overlap",
         "[SEC Inline eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl)",
         "label_comment_thread_365",
         "label_8k_402_365",
-        "label_aaer_proxy_730",
         "broad amendment/friction signal",
         "Brier Skill Score",
         "native missing-value handling",
@@ -466,7 +454,7 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
         "Public cascade",
         "current full-run state is `xbrl_ratio_baseline`",
         "Bridge overlap",
-        "Legacy Benchmark Labels",
+        "Detected-Misstatement Benchmark Labels",
         "timing_coverage.csv",
         "timing_claim_status",
         "proxy_drop_observed",
@@ -480,15 +468,16 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
         "xbrl_ratio_*",
         "xbrl_ratio_baseline",
         "Claim Boundaries",
-        "Bridge and External Validation Inputs",
+        "Bridge Validation Inputs",
         "bridge_probe_summary.json",
         "coverage_report.csv",
         "construct_overlap/public_score_legacy_ranking.csv",
         "construct_overlap/reciprocal_alignment.csv",
-        "validation_tier = candidate_farr",
+        "validation_tier = wrds_validated",
+        "validation_tier = wrds_validated",
         "raw_identifier_blocker",
         "Evidence Gates",
-        "Zero-positive or sparse AAER robustness tasks",
+        "default pipeline no longer uses farr/external support files",
         "just check",
         "just full mode=full dataset=raw",
         "--peer-comparison-mode full",
@@ -518,7 +507,7 @@ def test_paper_plan_documents_prior_literature_and_intended_contribution() -> No
         "not same-estimand performance rankings",
         "does not mechanically force an earlier-stage label",
         "Dechow-style scores",
-        "legacy model zoo",
+        "benchmark model zoo",
         "Bao-style top-fraction balanced accuracy",
         "Metric-compatible",
         "not PR-AUC comparators",
@@ -540,24 +529,24 @@ def test_faq_explains_cross_audience_design_and_current_boundaries() -> None:
         "public review-and-correction cascade",
         "public observability states",
         "not interchangeable with fraud",
-        "legacy detected-misstatement benchmarks",
+        "detected-misstatement benchmark",
         "raw `CIK-GVKEY Link Table.csv`",
-        "external bridge only for `gvkey x year` rows not covered by raw",
+        "Do not supplement missing raw `gvkey x year` rows with farr/external",
         "Disjoint raw/external conflict `gvkey x year` cells",
         "Raw benchmark rows affected by those conflicts",
         "372",
         "24",
         "public_lake_smoke",
-        "linkage/raw_primary_external_supplement",
-        "The public-cascade model does not need the legacy bridge",
-        "No. The legacy benchmark uses a `gvkey x data_year` feature table",
+        "linkage/raw_only",
+        "The public-cascade model does not need the benchmark-to-public bridge",
+        "No. The detected-misstatement benchmark uses a `gvkey x data_year` feature table",
         "PR-AUC is the primary headline ranking metric",
         "Comparisons are valid within the same task, split, feature family, and label definition",
-        "`all + rolling_7y`",
+        "`all + expanding`",
         "feature-fusion gain, not XBRL dominance",
         "`bertomeu_style_xgb`",
         "`bao_inspired_tree_ensemble`",
-        "candidate_mixed",
+        "wrds_validated",
         "The paper plan is the design contract",
         "The results snapshot is the artifact-backed current evidence report",
     ]
@@ -611,7 +600,7 @@ def test_development_audit_prompt_targets_code_against_paper_plan() -> None:
         "conventional output directory name",
         "--peer-comparison-mode",
         "--peer-target",
-        "validation_tier = candidate_farr",
+        "validation_tier = wrds_validated",
         "mapping_attrition_rate",
         "origin_date is the focal public filing date",
         "event_date < origin_date",
@@ -621,7 +610,7 @@ def test_development_audit_prompt_targets_code_against_paper_plan() -> None:
         "task-status tables",
         "manifests",
         "blockers",
-        "severity_tail_sparse_not_headline",
+        "AAER absent from the paper-facing labels",
         "model-selection optimism",
         "xbrl_coverage_* by fiscal year",
         "uv.lock",
@@ -659,7 +648,9 @@ def test_development_audit_prompt_is_public_data_first() -> None:
     prompt = _read("docs/development_audit_prompt.md")
     required_phrases = [
         "public-data-first",
-        "Do not treat absence of WRDS or Audit Analytics as a code bug",
+        "Do not treat absence of Audit Analytics or other unprovided paid databases",
+        "raw-only WRDS SEC Analytics Suite bridge",
+        "validation_tier = wrds_validated",
         "Fallback hierarchy",
         "Public Data Utilization Audit",
         "Blocker Resolution Matrix",
@@ -683,7 +674,7 @@ def test_manuscript_audit_prompt_targets_manuscript_quality_and_terms() -> None:
         "reporting-risk-cascade-manuscript",
         "pre-disclosure reporting-risk state",
         "public comment-letter scrutiny",
-        "AAER high-severity enforcement proxy",
+        "public Item 4.02 material-correction proxy",
         "DML-style high-dimensional adjustment",
         "formulaic prose",
         "Claim-strength ladder",
@@ -724,7 +715,7 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
     required_phrases = [
         "public-data-first",
         "artifact-backed",
-        "Do not make absence of WRDS/Audit Analytics sound like a fatal manuscript flaw",
+        "Do not make absence of Audit Analytics or other unprovided commercial datasets",
         "Do not recommend paid data as required for the current v1 paper",
         "benchmark layer",
         "public cascade layer",
@@ -732,14 +723,14 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
         "public-data-only design",
         "public-data support ledger",
         "bridge-gate assessment",
-        "candidate_farr",
+        "WRDS-validated construct-overlap",
         "feature fusion, not XBRL dominance",
-        "AAER appendix/status-only",
-        "headline public tasks exclude aaer_proxy",
+        "AAER dropped from the paper-facing design",
+        "headline public tasks are comment_thread, amendment, and 8k_402",
         "feature fusion helps, metadata remains strong",
         "rare but rankable",
         "common-sample / coverage caveat",
-        "candidate-level construct-overlap",
+        "WRDS-validated construct-overlap",
         "reciprocal risk-score alignment",
         "event-time concentration",
         "single-fold 2020 8k_402",
@@ -748,7 +739,6 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
         "comment_thread_365",
         "amendment_365",
         "8k_402_365",
-        "aaer_proxy_730",
         "Do not browse for live pricing",
     ]
     for phrase in required_phrases:

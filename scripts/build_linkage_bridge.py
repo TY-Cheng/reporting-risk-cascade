@@ -1,4 +1,4 @@
-"""Build the raw-primary gvkey-CIK-year linkage folder."""
+"""Build the raw-only gvkey-CIK-year linkage folder."""
 
 from __future__ import annotations
 
@@ -21,15 +21,14 @@ def parse_args() -> argparse.Namespace:
 
     from src import DATA_DIR, RAW_DATASET_PATH
     from src.linkage import (
-        DEFAULT_EXTERNAL_CROSSWALK_PATH,
         DEFAULT_LINKAGE_OUT_DIR,
         DEFAULT_RAW_CIK_GVKEY_LINK_PATH,
     )
 
     parser = argparse.ArgumentParser(
         description=(
-            "Build DATA_DIR/linkage/raw_primary_external_supplement with raw CIK-GVKEY "
-            "links as primary evidence and external gvkey-CIK-year rows as supplements."
+            "Build DATA_DIR/linkage/raw_only with raw CIK-GVKEY links as the sole "
+            "gvkey-CIK-year bridge evidence."
         )
     )
     parser.add_argument(
@@ -37,12 +36,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_RAW_CIK_GVKEY_LINK_PATH,
         help="Raw CIK-GVKEY Link Table.csv input",
-    )
-    parser.add_argument(
-        "--external-crosswalk",
-        type=Path,
-        default=DEFAULT_EXTERNAL_CROSSWALK_PATH,
-        help="Existing external gvkey_cik_year.csv supplement",
     )
     parser.add_argument(
         "--raw-data",
@@ -90,7 +83,6 @@ def main() -> None:
     args = parse_args()
     result = build_raw_primary_linkage(
         raw_link_path=args.raw_link,
-        external_crosswalk_path=args.external_crosswalk,
         raw_data_path=args.raw_data,
         out_dir=args.out_dir,
         public_lake_panel_path=args.public_lake_panel,

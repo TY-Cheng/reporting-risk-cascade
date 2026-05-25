@@ -227,6 +227,9 @@ def _best_equal_task_config(metrics: pd.DataFrame) -> pd.Series | None:
 def _public_task_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list[list[str]]:
     if metrics.empty or "task" not in metrics.columns:
         return []
+    metrics = metrics.loc[~metrics["task"].astype(str).str.contains("aaer", case=False)].copy()
+    if metrics.empty:
+        return []
     grouped = (
         metrics.groupby("task", dropna=False)
         .agg(
@@ -256,6 +259,10 @@ def _public_task_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list[li
 
 def _public_feature_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list[list[str]]:
     if metrics.empty or "feature_set" not in metrics.columns:
+        return []
+    if "task" in metrics.columns:
+        metrics = metrics.loc[~metrics["task"].astype(str).str.contains("aaer", case=False)].copy()
+    if metrics.empty:
         return []
     grouped = (
         metrics.groupby("feature_set", dropna=False)
@@ -396,6 +403,10 @@ def _public_peer_task_rows(path: Path) -> list[list[str]]:
 def _status_count_rows(path: Path) -> list[list[str]]:
     frame = _read_csv(path)
     if frame.empty or "status" not in frame.columns:
+        return []
+    if "task" in frame.columns:
+        frame = frame.loc[~frame["task"].astype(str).str.contains("aaer", case=False)].copy()
+    if frame.empty:
         return []
     group_cols = ["status"]
     if "reason_code" in frame.columns:
@@ -568,6 +579,10 @@ def _event_time_rows(study_dir: Path) -> list[list[str]]:
     frame = _read_csv(study_dir / "construct_overlap" / "event_time_concentration.csv")
     if frame.empty:
         return []
+    if "public_label" in frame.columns:
+        frame = frame.loc[~frame["public_label"].astype(str).str.contains("aaer", case=False)].copy()
+    if frame.empty:
+        return []
     columns = [
         "relative_year",
         "public_label",
@@ -594,22 +609,6 @@ def _event_time_rows(study_dir: Path) -> list[list[str]]:
                 _fmt(bool(row["balanced_window"])),
             ]
         )
-    return rows
-
-
-def _aaer_support_rows(study_dir: Path) -> list[list[str]]:
-    frame = _read_csv(study_dir / "construct_overlap" / "farr_aaer_ranking_lift.csv")
-    if frame.empty:
-        return []
-    grouped = (
-        frame.groupby("metric_status", dropna=False)
-        .agg(rows=("metric_status", "size"), aaer_pos=("n_farr_aaer_positives_in_overlap", "max"))
-        .reset_index()
-        .sort_values("rows", ascending=False)
-    )
-    rows = []
-    for _, row in grouped.iterrows():
-        rows.append([_code(row["metric_status"]), _fmt(row["rows"]), _fmt(row["aaer_pos"])])
     return rows
 
 
@@ -663,7 +662,7 @@ def _construct_alignment_rows(study_dir: Path) -> list[list[str]]:
         best = public_to_legacy.sort_values("top_decile_lift", ascending=False).iloc[0]
         rows.append(
             [
-                "Public cascade score -> legacy positives",
+                "Public cascade score -> benchmark positives",
                 _code(best.get("model_id")),
                 _code(best.get("task")),
                 _fmt(best.get("pr_auc")),
@@ -675,7 +674,7 @@ def _construct_alignment_rows(study_dir: Path) -> list[list[str]]:
         best = legacy_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
         rows.append(
             [
-                "Legacy/peer score -> public labels",
+                "Detected-misstatement score -> public labels",
                 _code(best.get("model_id")),
                 _code(best.get("target_public_label")),
                 _fmt(best.get("pr_auc")),
@@ -721,6 +720,21 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
     public_lake_report = _latest_public_lake_report()
     public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
     benchmark_metrics = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
+    public_task_positive_counts = {
+        key: value
+        for key, value in (public_summary.get("task_positive_counts") or {}).items()
+        if "aaer" not in str(key).lower()
+    }
+    public_task_exclusion_counts = {
+        key: value
+        for key, value in (public_summary.get("task_exclusion_counts") or {}).items()
+        if "aaer" not in str(key).lower()
+    }
+    zero_positive_tasks = [
+        task
+        for task in (public_summary.get("zero_positive_tasks") or [])
+        if "aaer" not in str(task).lower()
+    ]
 
     best_public = _best_equal_task_config(public_metrics)
     if public_summary.get("best_feature_set") and public_summary.get("best_train_window"):
@@ -759,12 +773,12 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "- **Research question.** Can filing-origin public SEC/PCAOB information predict "
         "whether an issuer later enters observable public review-and-correction channels, "
         "and how does this public reporting-risk construct relate to, but differ from, "
-        "legacy detected-misstatement benchmarks?",
+        "the detected-misstatement benchmark?",
         "",
-        "- **Data.** The workflow combines the legacy `gvkey x data_year` "
+        "- **Data.** The workflow combines the `gvkey x data_year` "
         "detected-misstatement benchmark, the public SEC/PCAOB lake, the gold "
-        "`issuer_origin_panel` and `filing_origin_panel`, and a raw-primary "
-        "`gvkey-CIK-year` bridge with external supplement rows for overlap validation.",
+        "`issuer_origin_panel` and `filing_origin_panel`, and a raw-only "
+        "`gvkey-CIK-year` bridge for overlap validation.",
         "",
         "- **Models.** The core public cascade uses XGBoost over metadata, XBRL, "
         "text/notes, auditor, oversight, and all-feature sets. Peer-compatible "
@@ -777,9 +791,8 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "- **Current best public-cascade specification.** " + best_public_text + ".",
         "",
-        f"- **Bridge boundary.** Construct overlap is `{validation_tier}`; WRDS or "
-        "equivalent institutional bridge evidence remains preferred for final "
-        "manuscript-grade integrated claims.",
+        f"- **Bridge boundary.** Construct overlap is `{validation_tier}` using the "
+        "confirmed WRDS SEC Analytics Suite CIK-GVKEY bridge.",
         "",
         "- **Sellable claim.** The strongest current framing is a measurement-and-ranking "
         "paper on filing-origin public reporting-risk states. It does not support causal "
@@ -812,10 +825,10 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "```mermaid",
         "flowchart LR",
-        '    L["Experiment 1-2<br/>legacy timing and drift"]',
+        '    L["Experiment 1-2<br/>benchmark timing and drift"]',
         '    O["Experiment 3<br/>opacity and public labels"]',
         '    P["Experiment 4-5<br/>public cascade construction and prediction"]',
-        '    B["Experiment 6<br/>raw-primary bridge and construct overlap"]',
+        '    B["Experiment 6<br/>raw-only bridge and construct overlap"]',
         '    D["Discussion<br/>claim boundary and manuscript tables/figures"]',
         "    L --> D",
         "    O --> D",
@@ -825,10 +838,10 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "## Experiment 1: Label Observability and Detection Timing",
         "",
-        "This experiment reads legacy detected-misstatement performance as an "
+        "This experiment reads detected-misstatement benchmark performance as an "
         "observability diagnostic rather than a true-fraud detection result.",
         "",
-        "### Legacy Benchmark Panel",
+        "### Detected-Misstatement Benchmark Panel",
         "",
         _table(["Field", "Value"], _benchmark_panel_rows(study_dir)),
         "",
@@ -917,9 +930,9 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                 ["Main sample rows", _fmt(public_summary.get("n_rows"))],
                 ["Fiscal-year span", "-".join(map(str, public_summary.get("sample_years", [])))],
                 ["Domestic US GAAP only", _fmt(public_summary.get("domestic_only"))],
-                ["Task positive counts", _code(public_summary.get("task_positive_counts"))],
-                ["Task exclusion counts", _code(public_summary.get("task_exclusion_counts"))],
-                ["Zero-positive tasks", _code(public_summary.get("zero_positive_tasks"))],
+                ["Task positive counts", _code(public_task_positive_counts)],
+                ["Task exclusion counts", _code(public_task_exclusion_counts)],
+                ["Zero-positive tasks", _code(zero_positive_tasks or "none")],
                 ["Task status counts", _code(public_summary.get("task_status_counts"))],
                 ["Readiness level", _code(public_summary.get("cascade_readiness_level"))],
             ],
@@ -959,7 +972,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             _public_feature_rows(public_metrics, public_summary),
         ),
         "",
-        "### Legacy Peer-Compatible Literature Benchmarks",
+        "### Detected-Misstatement Peer-Compatible Literature Benchmarks",
         "",
         "These rows are present only when the peer-enabled study has run. They are "
         "model-family transfer and metric-language alignment, not exact replications "
@@ -970,7 +983,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             _peer_model_rows(study_dir / "peer_comparison" / "legacy_model_family_metrics.csv"),
         ),
         "",
-        "### Legacy Peer Fit and Skip Status",
+        "### Detected-Misstatement Peer Fit and Skip Status",
         "",
         _table(
             ["Status", "Reason", "Rows"],
@@ -1004,11 +1017,11 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             ),
         ),
         "",
-        "## Experiment 6: Old Benchmark and Public Cascade Overlap",
+        "## Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap",
         "",
-        "This experiment is the integrated-paper gate. The current bridge is "
-        "raw-primary plus farr-supplement and remains `candidate_mixed` until "
-        "WRDS-equivalent evidence is supplied.",
+        "This experiment is the integrated-paper gate. The current bridge is the "
+        "confirmed WRDS SEC Analytics Suite CIK-GVKEY link export, used as a "
+        "raw-only `gvkey-CIK-year` bridge.",
         "",
         "### Bridge Coverage",
         "",
@@ -1019,7 +1032,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "### Overlap Sample Flow",
         "",
-        _table(["Bridge tier", "Rows", "Legacy positives"], _overlap_sample_flow_rows(study_dir)),
+        _table(["Bridge tier", "Rows", "Benchmark positives"], _overlap_sample_flow_rows(study_dir)),
         "",
         "### Construct-Overlap Ranking Alignment",
         "",
@@ -1035,11 +1048,11 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                 "Public label",
                 "Bridge tier",
                 "Rows",
-                "Legacy positives",
+                "Benchmark positives",
                 "Public positives",
                 "Both positive",
-                "Lift public given legacy",
-                "Lift legacy given public",
+                "Lift public given benchmark",
+                "Lift benchmark given public",
             ],
             _label_contingency_rows(study_dir),
         ),
@@ -1072,7 +1085,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             ),
         ),
         "",
-        "### Legacy-Positive Public-Label Co-occurrence",
+        "### Benchmark-Positive Public-Label Co-occurrence",
         "",
         _table(
             [
@@ -1080,8 +1093,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                 "Comment",
                 "Amendment",
                 "8-K 4.02",
-                "AAER",
-                "Legacy positives",
+                "Benchmark positives",
                 "Share",
                 "Display count",
             ],
@@ -1092,7 +1104,6 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                     "label_comment_thread_365",
                     "label_amendment_365",
                     "label_8k_402_365",
-                    "label_aaer_proxy_730",
                     "n_legacy_positives",
                     "pct_of_legacy_positives",
                     "display_count",
@@ -1106,32 +1117,26 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             [
                 "Relative year",
                 "Public label",
-                "Legacy pos rows",
-                "Legacy neg rows",
-                "Rate if legacy pos",
-                "Rate if legacy neg",
+                "Benchmark pos rows",
+                "Benchmark neg rows",
+                "Rate if benchmark pos",
+                "Rate if benchmark neg",
                 "Difference",
                 "Balanced window",
             ],
             _event_time_rows(study_dir),
         ),
         "",
-        "### AAER High-Severity Support Status",
-        "",
-        _table(["Metric status", "Rows", "AAER positives in overlap"], _aaer_support_rows(study_dir)),
-        "",
         "## Discussion",
         "",
         "### Key Readings",
         "",
-        "- Public labels and legacy detected-misstatement labels are related but "
+        "- Public labels and detected-misstatement benchmark labels are related but "
         "non-identical constructs.",
-        "- Public-cascade scores can rank legacy positives in the matched overlap; "
-        "legacy/peer scores can also rank severe public correction labels.",
-        f"- `{validation_tier}` bridge evidence is useful for internal validation, but "
-        "should be labeled clearly until a WRDS-grade bridge is available.",
-        "- Sparse AAER ranking positives remain a blocker for using AAER as a headline "
-        "ranking target.",
+        "- Public-cascade scores can rank benchmark positives in the matched overlap; "
+        "detected-misstatement scores can also rank severe public correction labels.",
+        f"- `{validation_tier}` bridge evidence supports the integrated "
+        "benchmark-to-public construct-overlap interpretation.",
         "",
         "### Claim Boundaries",
         "",
@@ -1139,11 +1144,8 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "causal proof of fraud occurrence.",
         "- Comment letters are public scrutiny signals, not the complete SEC review "
         "universe.",
-        "- AAER is a rare high-severity enforcement indicator, not a complete enforcement "
-        "universe.",
-        "- Candidate raw-primary plus farr-supplement overlap can support a "
-        "related-but-non-identical construct argument, but not final WRDS-quality "
-        "validation.",
+        "- WRDS-validated raw-only overlap can support a related-but-non-identical "
+        "construct argument, while still not supporting causal fraud-occurrence claims.",
         "",
         "## Tables, Figures, and Artifact Index",
         "",

@@ -31,8 +31,7 @@ def parse_args() -> argparse.Namespace:
             "Existing raw benchmark CSV or ZIP. Defaults to DATA_DIR/raw_dataset_misstatement.csv, "
             "then DATA_DIR/raw_dataset_misstatement.zip, then "
             "DATA_DIR/raw/raw_dataset_misstatement.csv, then "
-            "DATA_DIR/raw/raw_dataset_misstatement.zip, then "
-            "DATA_DIR/external/raw_dataset_misstatement.zip."
+            "DATA_DIR/raw/raw_dataset_misstatement.zip."
         ),
     )
     parser.add_argument(

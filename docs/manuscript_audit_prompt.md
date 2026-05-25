@@ -25,12 +25,15 @@ manuscript, repository outputs, and paper_plan.md disagree, identify the mismatc
 and say which document should change.
 
 Data and evidence stance:
-This manuscript audit is public-data-first. Assume the current paper does not
-have WRDS, Audit Analytics, CRSP, Compustat, FactSet, Refinitiv, RavenPack, or
-other institutional data unless the user explicitly provides it. The paper's
-current reproducible evidence must come from public SEC/PCAOB/EDGAR sources and
-the local raw_dataset_misstatement.parquet benchmark layer.
-Do not make absence of WRDS/Audit Analytics sound like a fatal manuscript flaw.
+This manuscript audit is public-data-first for the public cascade. The current
+paper has a collaborator-provided WRDS SEC Analytics Suite CIK-GVKEY bridge, but
+does not rely on Audit Analytics, FactSet, Refinitiv, RavenPack, or other
+commercial outcome databases unless the user explicitly provides them. The
+paper's current reproducible evidence must come from public SEC/PCAOB/EDGAR
+sources, the WRDS bridge, and the local raw_dataset_misstatement.parquet
+benchmark layer.
+Do not make absence of Audit Analytics or other unprovided commercial datasets
+sound like a fatal manuscript flaw.
 Do not recommend paid data as required for the current v1 paper.
 Paid APIs and institutional databases may appear only as optional validation,
 enrichment, limitation, or future-work paths unless the manuscript already
@@ -50,8 +53,8 @@ Evidence hierarchy for claims:
 Claim-strength ladder:
 - reportable finding: directly supported by current generated artifacts and safe
   to use in the main text.
-- candidate evidence: useful and artifact-backed, but dependent on candidate_farr,
-  sparse labels, or another stated validation limit.
+- candidate evidence: useful and artifact-backed, but dependent on sparse labels,
+  incomplete coverage, or another stated validation limit.
 - diagnostic only: useful for motivation, design checks, or appendices, but not a
   standalone paper claim.
 - not supported: absent, contradicted, or too speculative for the current paper.
@@ -62,7 +65,7 @@ The paper is a measurement redesign, not an uninterpreted model-ranking exercise
   naive timing, drift, and missingness problems; and
 - a public cascade layer using filing-native SEC/PCAOB first-public-date events
   to estimate a pre-disclosure reporting-risk state for public scrutiny,
-  correction, and enforcement-proxy outcomes.
+  correction, and public Item 4.02 material-correction outcomes.
 
 The bridge gate matters for overlap validation, but the public cascade result
 must not be held hostage by unavailable raw-side identifiers. If the gvkey-CIK-
@@ -122,10 +125,10 @@ Audit dimensions:
 - Does it avoid implying that Audit Analytics, WRDS, CRSP, Compustat, or other
   institutional data are required for the v1 paper?
 - Does it cite public-source documentation when making claims about SEC comment
-  letters, FSDS/Notes availability, EDGAR first-public dates, PCAOB Form AP, PCAOB
-  inspections, or AAER pages?
-- Does it make clear that AAER pages are a high-severity enforcement proxy rather than a complete
-  enforcement universe or a stable prediction target?
+  letters, FSDS/Notes availability, EDGAR first-public dates, PCAOB Form AP, or
+  PCAOB inspections?
+- Does it make clear that AAER dropped from the paper-facing design
+  because positives are too sparse for stable ranking?
 - Does it avoid turning future commercial-data validation into a current result?
 
 3. Terminology discipline
@@ -134,18 +137,19 @@ Flag and correct any misuse of these terms:
   unless the design truly identifies occurrence.
 - Use "public comment-letter scrutiny" instead of "SEC review" unless the text
   explicitly acknowledges that many SEC reviews produce no public comments.
-- Use "AAER high-severity enforcement proxy" instead of "complete enforcement universe,"
-  "enforcement prediction," or "unobserved fraud occurrence."
+- Use "public Item 4.02 material-correction proxy" for the severe public
+  correction outcome; avoid "enforcement prediction" or "unobserved fraud
+  occurrence."
 - Use "label-observability sensitivity" or "timing-assumption sensitivity" for res_an*
   timing outputs; do not call this paper-grade label maturation without external
   restatement filing dates.
 - Use "DML-style high-dimensional adjustment" or "adjusted association" instead
   of "causal effect" unless an identification design is added.
-- Use "public cascade" for the headline comment/amendment/8-K outcomes; keep
-  AAER as AAER appendix/status-only high-severity support unless the manuscript
-  has enough positives across out-of-time folds for stable ranking evaluation.
+- Use "public cascade" for the headline comment/amendment/8-K outcomes. AAER is
+  dropped from the paper-facing design and should not appear as a headline,
+  appendix robustness, or coequal public-cascade task.
 - Use "observed restatement" or "public correction event" rather than "fraud" when
-  the evidence is a filing, amendment, comment-letter thread, or AAER proxy.
+  the evidence is a filing, amendment, comment-letter thread, or 8-K Item 4.02 event.
 - Use "evidence layer" or "benchmark layer" instead of implying the raw CSV and
   public lake are already a single integrated panel when the bridge gate has not
   passed.
@@ -173,17 +177,14 @@ Flag and correct any misuse of these terms:
   generated tables.
 - Flag claims that generalize beyond the sample window, available public sources,
   or censoring design.
-- Check whether zero-positive AAER tasks are reported as blockers rather than
-  interpreted as negative evidence.
 - Check whether all labels are described with their actual horizon and timing:
-  comment_thread_365, amendment_365, 8k_402_365, and aaer_proxy_730.
-- Check whether the headline public tasks exclude aaer_proxy: the main
-  manuscript should treat comment_thread_365, amendment_365, and 8k_402_365 as
-  the three primary public outcomes. If aaer_proxy_730 appears, it must be
-  labeled as appendix/status-only high-severity support, not a coequal task.
+  comment_thread_365, amendment_365, and 8k_402_365.
+- Check whether the headline public tasks are comment_thread, amendment, and 8k_402.
+  If AAER appears in a manuscript table, flag it as stale output from an abandoned
+  design.
 - Do not allow AAER to enter headline public-cascade means, best-window
-  selection, feature-family rankings, model-family rankings, or main prediction
-  claims unless the table is explicitly labeled as appendix robustness.
+  selection, feature-family rankings, model-family rankings, appendix robustness,
+  or main prediction claims.
 - Check whether public cascade outcomes are interpreted as public events, not as
   complete latent misstatement occurrence.
 - Check whether artifact-backed claims distinguish readiness diagnostics from
@@ -212,9 +213,8 @@ Flag and correct any misuse of these terms:
   feature families.
 - Treat public-label peer transfer as model-family transfer and metric-language
   alignment, not original-paper replication or performance superiority.
-- Treat candidate-level construct-overlap, reciprocal risk-score alignment, and
-  event-time concentration as candidate evidence while validation_tier remains
-  candidate_farr.
+- Treat WRDS-validated construct-overlap, reciprocal risk-score alignment, and
+  event-time concentration as reportable related-construct evidence.
 - Describe 8-K Item 4.02 as rare but rankable; flag any manuscript that promotes
   the single-fold 2020 8k_402 result over model-family or feature-family
   averages as the headline.
@@ -263,7 +263,7 @@ Flag and correct any misuse of these terms:
   novelty must come from the filing-origin estimand, cascade structure, or
   reproducible public-data design.
 - Check whether institutional details for SEC comment letters, 8-K Item 4.02,
-  XBRL, Form AP, AAER, and first-public-date construction are accurate and
+  XBRL, Form AP, and first-public-date construction are accurate and
   supported by public documentation or appropriate literature.
 - Flag uncited claims, stale claims, and suspicious author-year mismatches.
 - If live web verification is needed, use primary sources only and state which
@@ -310,13 +310,14 @@ mechanism-driven.
 - Does it state that comment-thread and amendment outcomes are the broad stable
   public signals, while 8-K Item 4.02 is rare but rankable?
 - Does it use the bridge evidence to argue related-but-non-identical constructs,
-  not equivalence between legacy misstatement labels and public labels?
-- Does it keep AAER as appendix/status-only high-severity support and avoid
-  stable enforcement prediction language?
+  not equivalence between detected-misstatement benchmark labels and public labels?
+- Does it state clearly that AAER is dropped from the paper-facing design and
+  avoid stable enforcement prediction language?
 - Does it report peer-compatible model families as a check on accounting ML
   comparability, not as a claim of superiority over prior studies?
-- Does it avoid burying the strongest limitation: current integrated evidence is
-  candidate-level until a WRDS-quality bridge is supplied?
+- Does it keep the strongest limitation accurate: the current integrated
+  evidence is WRDS-bridged related-construct evidence, not causal evidence of
+  unobserved fraud occurrence?
 - Does it distinguish static snapshot numbers from live artifact evidence when
   quoting current results?
 
@@ -375,8 +376,8 @@ Constraints:
 - Do not edit files unless explicitly asked.
 - Do not invent empirical findings.
 - Do not invent data availability.
-- Do not require WRDS, Audit Analytics, CRSP, Compustat, FactSet, Refinitiv, or
-  other institutional data for the current v1 paper.
+- Do not require Audit Analytics, FactSet, Refinitiv, RavenPack, or other
+  commercial outcome data for the current v1 paper.
 - Do not add multimodal, graph, LLM, or causal-identification claims unless the
   manuscript has evidence and paper_plan.md permits them.
 - Do not browse for live pricing or data licenses unless explicitly asked.

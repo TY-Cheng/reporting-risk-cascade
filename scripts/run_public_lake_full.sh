@@ -405,7 +405,6 @@ fi
 run_step "status" just status
 start_fetch "sec-bulk" ""
 start_fetch "form-ap" ""
-start_fetch "aaer" "${SOURCE_LIMIT_EXTRA}"
 start_fetch "pcaob-inspections" "${SOURCE_LIMIT_EXTRA}"
 start_fetch "fsds" "--start-year 2011 --end-year 2023 ${SOURCE_LIMIT_EXTRA}"
 start_fetch "notes" "--start-year 2020 --end-year 2023 ${SOURCE_LIMIT_EXTRA}"

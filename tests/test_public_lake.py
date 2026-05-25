@@ -500,25 +500,6 @@ def test_fetch_source_assets_downloads_listing_and_refreshes_invalid_cache(
         return dest
 
     monkeypatch.setattr(public_lake, "_download_file", fake_download)
-    monkeypatch.setattr(
-        public_lake,
-        "_extract_aaer_release_links",
-        lambda *args, **kwargs: pd.DataFrame(
-            [
-                {
-                    "page_url": "https://www.sec.gov/aaer",
-                    "url": "https://www.sec.gov/aaer-1.html",
-                    "basename": "aaer-1.html",
-                    "suffix": ".html",
-                }
-            ]
-        ),
-    )
-
-    aaer_manifest = fetch_source_assets(mode="aaer", bronze_dir=bronze, list_only=False)
-    assert set(aaer_manifest["status"]) == {"downloaded"}
-    assert downloaded == ["aaer_listing.html", "aaer-1.html"]
-
     page_frame = pd.DataFrame(
         [
             {
@@ -1868,19 +1849,6 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         ],
     )
     _write_csv_gz(
-        silver / "aaer_event.csv.gz",
-        [
-            {
-                "release_url": "https://example.com/aaer",
-                "release_title": "Alpha Beta",
-                "event_date": "2022-08-01",
-                "issuer_cik": "0000000001",
-                "aaer_match_score": 1.0,
-                "aaer_match_method": "token_all",
-            }
-        ],
-    )
-    _write_csv_gz(
         silver / "xbrl_fact.csv.gz",
         [
             {
@@ -1905,18 +1873,6 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         silver / "note_text.csv.gz",
         [{"adsh": "a-annual", "tag": "DebtTextBlock", "note_text": "short note"}],
     )
-    (tmp_path / "external").mkdir()
-    pd.DataFrame(
-        [
-            {
-                "issuer_cik": "0000000001",
-                "ba_state": "CA",
-                "min_date": "2020-01-01",
-                "max_date": "2022-12-31",
-            }
-        ]
-    ).to_csv(tmp_path / "external" / "farr_state_hq.csv", index=False)
-
     build_gold_panels(
         silver_dir=silver,
         gold_dir=gold_pandas,
@@ -1938,9 +1894,7 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         "label_amendment_365",
         "label_8k_402_365",
         "k402_item_metadata_unknown_365",
-        "label_aaer_proxy_730",
         "censored_365",
-        "censored_730",
         "xbrl_fact_count",
         "xbrl_unique_tags",
         "xbrl_ratio_leverage",

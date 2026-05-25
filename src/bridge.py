@@ -2,10 +2,10 @@
 Public-only bridge feasibility probe.
 
 This module deliberately does not infer an authoritative historical crosswalk.
-It can use a provenance-tagged external gvkey-CIK-year crosswalk, or it can
-report whether the old gvkey benchmark panel has enough public identifiers to
-attempt a candidate bridge. In both cases it writes coverage and multiplicity
-reports before any overlap analysis is allowed.
+It can use a provenance-tagged gvkey-CIK-year crosswalk, or it can report
+whether the old gvkey benchmark panel has enough public identifiers to attempt a
+bridge. In both cases it writes coverage and multiplicity reports before any
+overlap analysis is allowed.
 """
 
 from __future__ import annotations
@@ -796,11 +796,11 @@ def run_bridge_probe(
 
     raw = read_table(raw_data_path, low_memory=False)
     raw_identifier_cols = _raw_identifier_columns(raw)
-    external_crosswalk = _read_table_if_exists(crosswalk_path)
-    if not external_crosswalk.empty:
+    bridge_crosswalk = _read_table_if_exists(crosswalk_path)
+    if not bridge_crosswalk.empty:
         candidates = _external_crosswalk_candidates(
             raw,
-            external_crosswalk,
+            bridge_crosswalk,
             firm_col=firm_col,
             year_col=year_col,
             target_col=target_col,
@@ -808,11 +808,7 @@ def run_bridge_probe(
         public = _read_table_if_exists(issuer_origin_panel_path)
         if public.empty:
             public = _read_table_if_exists(issuer_dim_path)
-        status = (
-            "external_crosswalk_available"
-            if not candidates.empty
-            else "external_crosswalk_no_matches"
-        )
+        status = "crosswalk_available" if not candidates.empty else "crosswalk_no_matches"
         return _write_candidate_outputs(
             out_dir=out_dir,
             raw=raw,
@@ -823,8 +819,8 @@ def run_bridge_probe(
             target_col=target_col,
             raw_identifier_cols=raw_identifier_cols,
             public_rows=int(len(public)),
-            candidate_source="external_crosswalk",
-            blocker="external crosswalk did not match raw gvkey-year rows"
+            candidate_source="gvkey_cik_year_crosswalk",
+            blocker="gvkey-CIK-year crosswalk did not match raw gvkey-year rows"
             if candidates.empty
             else None,
             extra_summary=_public_overlap_stats(candidates, public),

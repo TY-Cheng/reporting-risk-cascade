@@ -156,7 +156,6 @@ def _row_count_report(silver_dir: Path, gold_dir: Path) -> Tuple[Dict[str, int],
         "note_summary": silver_dir / "note_summary.parquet",
         "comment_thread": silver_dir / "comment_thread.csv.gz",
         "correction_event": silver_dir / "correction_event.csv.gz",
-        "aaer_event": silver_dir / "aaer_event.csv.gz",
         "issuer_origin_panel": gold_dir / "issuer_origin_panel.parquet",
         "filing_origin_panel": gold_dir / "filing_origin_panel.parquet",
     }

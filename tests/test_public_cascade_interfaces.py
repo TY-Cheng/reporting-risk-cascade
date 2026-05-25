@@ -37,9 +37,9 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
             "censored_365": [0],
             "label_amendment_365": [0],
             "label_8k_402_365": [0],
-            "k402_item_metadata_unknown_365": [1],
             "label_aaer_proxy_730": [0],
             "censored_730": [0],
+            "k402_item_metadata_unknown_365": [1],
             "xbrl_fact_count": [10],
             "note_text_count": [1],
             "form_ap_event_count": [1],
@@ -62,7 +62,9 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
     assert "public_date_notes" not in all_features
     assert "vintage_notes" not in all_features
     assert "label_comment_thread_365" not in all_features
+    assert "label_aaer_proxy_730" not in all_features
     assert "censored_365" not in all_features
+    assert "censored_730" not in all_features
     assert "k402_item_metadata_unknown_365" not in all_features
 
 
@@ -125,9 +127,7 @@ def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
             "label_comment_thread_365": [0, 0],
             "label_amendment_365": [0, 0],
             "label_8k_402_365": [0, 0],
-            "label_aaer_proxy_730": [0, 0],
             "censored_365": [0, 0],
-            "censored_730": [0, 0],
         }
     )
     assert (
@@ -184,9 +184,9 @@ def test_public_opacity_dml_uses_public_labels_not_legacy_misstatement() -> None
                     "label_comment_thread_365": int(opaque or (year + issuer_id) % 7 == 0),
                     "label_amendment_365": int(opaque and year % 2 == 0),
                     "label_8k_402_365": int(opaque and issuer_id % 2 == 0),
-                    "label_aaer_proxy_730": 0,
-                    "censored_365": 0,
+                    "label_aaer_proxy_730": int(issuer_id == 1 and year >= 2015),
                     "censored_730": 0,
+                    "censored_365": 0,
                 }
             )
     panel = pd.DataFrame(rows)
@@ -206,6 +206,7 @@ def test_public_opacity_dml_uses_public_labels_not_legacy_misstatement() -> None
     assert set(dml["outcome"]) == {"comment_thread", "amendment", "8k_402"}
     assert set(dml["status"]) == {"fit"}
     assert meta["n_opacity_components"] >= 2
+    assert not any(str(col).startswith(("label_", "censored_")) for col in meta["control_columns"])
 
 
 def test_public_cascade_skips_zero_positive_tasks_without_metrics(
@@ -231,9 +232,7 @@ def test_public_cascade_skips_zero_positive_tasks_without_metrics(
                 "label_comment_thread_365": 0,
                 "label_amendment_365": 0,
                 "label_8k_402_365": 0,
-                "label_aaer_proxy_730": 0,
                 "censored_365": 0,
-                "censored_730": 0,
                 "xbrl_fact_count": 10 + year,
             }
         )
@@ -265,10 +264,10 @@ model:
     metrics = pd.read_csv(result["metrics_csv"])
     task_status = pd.read_csv(result["task_status_csv"])
 
-    assert "aaer_proxy" in summary["zero_positive_tasks"]
+    assert set(summary["zero_positive_tasks"]) == {"comment_thread", "amendment", "8k_402"}
     assert metrics.empty
     assert set(task_status["status"]) == {"skipped_one_class_train"}
-    assert "aaer_proxy" in set(task_status["task"])
+    assert set(task_status["task"]) == {"comment_thread", "amendment", "8k_402"}
     assert summary["cascade_readiness_level"] == "metadata_baseline"
 
 
@@ -298,9 +297,7 @@ def test_public_cascade_excludes_8k402_item_metadata_unknown_rows(tmp_path: Path
                     "label_amendment_365": int((year + issuer_id) % 4 == 0),
                     "label_8k_402_365": pd.NA if unknown else int((year + issuer_id) % 2 == 0),
                     "k402_item_metadata_unknown_365": unknown,
-                    "label_aaer_proxy_730": int((year + issuer_id) % 5 == 0),
                     "censored_365": 0,
-                    "censored_730": 0,
                     "xbrl_ratio_leverage": 0.2 + issuer_id / 100 + year / 10000,
                 }
             )
@@ -360,9 +357,7 @@ def test_xbrl_ratio_features_unlock_xbrl_readiness_level(tmp_path: Path) -> None
                 "label_comment_thread_365": 0,
                 "label_amendment_365": 0,
                 "label_8k_402_365": 0,
-                "label_aaer_proxy_730": 0,
                 "censored_365": 0,
-                "censored_730": 0,
                 "xbrl_ratio_leverage": 0.2 + year / 10000,
                 "xbrl_coverage_assets": 1,
             }
@@ -418,9 +413,7 @@ def test_public_cascade_parallel_matches_serial_status_keys(tmp_path: Path) -> N
                 "label_comment_thread_365": 0,
                 "label_amendment_365": 0,
                 "label_8k_402_365": 0,
-                "label_aaer_proxy_730": 0,
                 "censored_365": 0,
-                "censored_730": 0,
                 "xbrl_ratio_leverage": 0.2 + year / 10000,
             }
         )
@@ -488,9 +481,7 @@ def test_public_cascade_trains_nonzero_positive_tasks_and_writes_predictions(
                     "label_comment_thread_365": int((year + issuer_id) % 4 == 0),
                     "label_amendment_365": int((year + issuer_id) % 5 == 0),
                     "label_8k_402_365": int((year + issuer_id) % 6 == 0),
-                    "label_aaer_proxy_730": int((year + issuer_id) % 7 == 0),
                     "censored_365": 0,
-                    "censored_730": 0,
                     "xbrl_ratio_leverage": 0.2 + issuer_id / 100 + year / 10000,
                     "xbrl_coverage_assets": 1,
                 }
@@ -548,7 +539,7 @@ model:
 
 
 @pytest.mark.parametrize(
-    "mode", ["sec-index", "sec-download", "filings-index", "filings-download"]
+    "mode", ["sec-index", "sec-download", "filings-index", "filings-download", "aaer"]
 )
 def test_fetch_cli_rejects_removed_non_current_modes(
     mode: str, monkeypatch: pytest.MonkeyPatch
@@ -584,15 +575,12 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
     }
     assert script_files == {
         "convert_raw_dataset.py",
-        "export_farr_support_data.R",
         "export_farr_gvkey_ciks.R",
         "fetch_public_data.py",
         "generate_sample_dataset.py",
         "build_manuscript_package.py",
         "build_linkage_bridge.py",
         "monitor_public_lake.py",
-        "prepare_farr_support_data.py",
-        "prepare_farr_support_data.sh",
         "prepare_farr_gvkey_cik_bridge.sh",
         "prepare_gvkey_cik_crosswalk.py",
         "refresh_results_snapshot.py",

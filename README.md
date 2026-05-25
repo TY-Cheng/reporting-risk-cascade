@@ -7,21 +7,20 @@ publicly observable review-and-correction process can be predicted from
 information available when an issuer files, rather than treating an ex post
 detected misstatement label as the only empirical target.
 
-The current paper has two linked evidence layers. The legacy benchmark layer
-uses a `gvkey x data_year` detected-misstatement panel to diagnose timing,
+The current paper has two linked evidence layers. The detected-misstatement
+benchmark layer uses a `gvkey x data_year` panel to diagnose timing,
 observability, drift, and missingness. The public cascade layer builds an
 issuer-year panel from SEC and PCAOB sources and predicts subsequent public
-scrutiny, amendment or filing friction, Item 4.02 non-reliance, and rare
-AAER high-severity enforcement indicators.
+scrutiny, amendment or filing friction, and Item 4.02 non-reliance.
 
 ## Research Object
 
 | Layer | Unit | Role |
 | --- | --- | --- |
-| Legacy benchmark | `gvkey x data_year` | Diagnostic benchmark for detected-misstatement labels, timing assumptions, concept drift, and missingness. |
-| Public lake | SEC/PCAOB filings and events | Public-data construction layer for filings, XBRL, Notes summaries, Form AP, PCAOB inspections, comment letters, amendments, 8-K Item 4.02, and AAER support data. |
+| Detected-misstatement benchmark | `gvkey x data_year` | Diagnostic benchmark for detected-misstatement labels, timing assumptions, concept drift, and missingness. |
+| Public lake | SEC/PCAOB filings and events | Public-data construction layer for filings, XBRL, Notes summaries, Form AP, PCAOB inspections, comment letters, amendments, and 8-K Item 4.02. |
 | Public cascade | `issuer_cik x fiscal_year` | Main filing-origin prediction target for public review-and-correction risk. |
-| Bridge validation | `gvkey-CIK-year` | Construct-overlap layer linking legacy detected-misstatement labels to public cascade labels and scores. |
+| Bridge validation | `gvkey-CIK-year` | Construct-overlap layer linking detected-misstatement benchmark labels to public cascade labels and scores. |
 
 Documentation site: [Reporting Risk Cascade](https://ty-cheng.github.io/reporting-risk-cascade/).
 The detailed research design is in [Paper Plan](https://ty-cheng.github.io/reporting-risk-cascade/paper_plan/).
@@ -38,10 +37,6 @@ The public cascade is a multi-label outcome design. These labels are public obse
 | `label_comment_thread_365` | 365 days | SEC comment-letter scrutiny after the filing origin. | [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) and public EDGAR correspondence. |
 | `label_amendment_365` | 365 days | Amended filing, correction, or filing-friction signal. | [SEC EDGAR filing access](https://www.sec.gov/edgar/search-and-access) and amended filing form metadata. |
 | `label_8k_402_365` | 365 days | Item 4.02 non-reliance or material-correction signal. | [SEC Form 8-K](https://www.sec.gov/files/form8-k.pdf), Item 4.02. |
-| `label_aaer_proxy_730` | 730 days | Rare high-severity enforcement indicator. | [SEC Accounting and Auditing Enforcement Releases](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) and `farr::aaer_*` support data. |
-
-AAER is retained as high-severity enforcement evidence because it is sparse and selective;
-it is not the headline prediction target.
 
 ## Repository Layout
 
@@ -82,7 +77,7 @@ The default benchmark input is:
 $DATA_DIR/raw/raw_dataset_misstatement.parquet
 ```
 
-If only the legacy CSV or ZIP exists, keep it at one of these paths and
+If only the source CSV or ZIP exists, keep it at one of these paths and
 materialize the Parquet once:
 
 ```text
@@ -90,7 +85,6 @@ $DATA_DIR/raw_dataset_misstatement.csv
 $DATA_DIR/raw_dataset_misstatement.zip
 $DATA_DIR/raw/raw_dataset_misstatement.csv
 $DATA_DIR/raw/raw_dataset_misstatement.zip
-$DATA_DIR/external/raw_dataset_misstatement.zip
 ```
 
 ```bash
@@ -99,7 +93,7 @@ uv run python scripts/convert_raw_dataset.py
 
 A clean GitHub checkout without the benchmark data can run `just check` and
 fixture-based smoke checks. Benchmark, study, and full workflows require the
-raw benchmark Parquet or a materializable legacy CSV/ZIP.
+raw benchmark Parquet or a materializable source CSV/ZIP.
 
 ## Execution Contract
 
@@ -124,8 +118,8 @@ just data full force
 
 `just data` materializes the raw benchmark Parquet from CSV/ZIP when needed and
 builds the public lake without running the model study. It also refreshes the
-raw-primary linkage folder at
-`$DATA_DIR/linkage/raw_primary_external_supplement/`, with public-overlap
+raw-only linkage folder at
+`$DATA_DIR/linkage/raw_only/`, with public-overlap
 summaries for both `public_lake` and `public_lake_smoke` when those gold panels
 exist. The optional second argument controls refresh behavior: `fresh` rebuilds
 silver/gold from cached bronze, `resume` reuses DAG markers, and `force`
@@ -154,11 +148,11 @@ just task study raw artifacts/full_with_peer \
 ```
 
 This reruns the study layer against the completed public lake and adds the
-legacy benchmark peer suite plus the public-label peer transfer suite on
-`issuer_origin_panel.parquet`. The public peer suite covers `comment_thread`,
-`amendment`, and `8k_402`; `aaer_proxy` remains a sparse high-severity status.
+detected-misstatement peer benchmark plus the public-label peer transfer suite
+on `issuer_origin_panel.parquet`. The public peer suite covers
+`comment_thread`, `amendment`, and `8k_402`.
 Use `--peer-target public` to refresh public-label peer outputs without rerunning
-the legacy benchmark peer suite.
+the detected-misstatement peer benchmark.
 
 Refresh the docs snapshot and run the full quality gate after the peer run:
 
@@ -260,11 +254,11 @@ Manuscript package:
 The default integration bridge is the raw-primary derived linkage file:
 
 ```text
-$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv
+$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv
 ```
 
-It is built from the raw CIK-GVKEY link table as the primary source and the
-existing external bridge as a supplement for gvkey-years not covered by raw:
+It is built only from the raw `CIK-GVKEY Link Table.csv`. The old farr/external
+gvkey-CIK bridge is no longer used in the default integration bridge:
 
 ```bash
 set -a; source .env; set +a
@@ -273,28 +267,29 @@ uv run python scripts/build_linkage_bridge.py
 
 The builder writes:
 
-- `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv`
-- `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year_conflicts.csv`
-- `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year_summary.json`
-- `$DATA_DIR/linkage/raw_primary_external_supplement/public_lake/coverage_summary.json`
-- `$DATA_DIR/linkage/raw_primary_external_supplement/public_lake_smoke/coverage_summary.json`
+- `$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv`
+- `$DATA_DIR/linkage/raw_only/raw_primary_gvkey_cik_year.csv`
+- `$DATA_DIR/linkage/raw_only/gvkey_cik_year_conflicts.csv`
+- `$DATA_DIR/linkage/raw_only/gvkey_cik_year_summary.json`
+- `$DATA_DIR/linkage/raw_only/public_lake/coverage_summary.json`
+- `$DATA_DIR/linkage/raw_only/public_lake_smoke/coverage_summary.json`
 
-The repo cannot infer this table from the legacy benchmark alone because the
-benchmark has `gvkey` and `data_year`, but not CIK, ticker, company name, CUSIP,
-or PERMNO. Raw CIK-GVKEY evidence should be preferred when present. If replacing
-or refreshing the external supplement, use a WRDS/Compustat CIK-GVKEY link
-export or equivalent institutional crosswalk:
+The repo cannot infer this table from the detected-misstatement benchmark alone
+because the benchmark has `gvkey` and `data_year`, but not CIK, ticker, company
+name, CUSIP, or PERMNO. The raw CIK-GVKEY evidence is the default bridge. If a
+provenance-tagged WRDS/Compustat export is later supplied, it should be evaluated
+as an alternative bridge rather than silently supplementing the raw bridge:
 
 ```bash
 set -a; source .env; set +a
 uv run python scripts/prepare_gvkey_cik_crosswalk.py \
   --input path/to/wrds_cik_gvkey_link.csv \
-  --out "$DATA_DIR/external/gvkey_cik_year.csv" \
+  --out "$DATA_DIR/linkage/wrds_candidate/gvkey_cik_year.csv" \
   --source wrds_compustat_cik_gvkey_link \
   --source-version "YYYY-MM-DD"
 
-uv run python scripts/build_linkage_bridge.py
-just task bridge raw
+just task bridge raw artifacts/wrds_candidate_bridge_probe \
+  extra="--crosswalk $DATA_DIR/linkage/wrds_candidate/gvkey_cik_year.csv"
 ```
 
 After replacing the bridge file in a peer-enabled study directory, refresh the
@@ -305,30 +300,24 @@ just task bridge raw artifacts/full_with_peer/bridge_probe
 uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
 ```
 
-When WRDS is unavailable, prepare a provenance-tagged candidate bridge from
-`farr::gvkey_ciks`:
+The historical `farr::gvkey_ciks` bridge export script remains in the repository
+for reproducibility, but it is not part of the default bridge and does not feed
+the current paper-facing pipeline:
 
 ```bash
 bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
 ```
 
-This exports `$DATA_DIR/external/farr_gvkey_ciks_raw.csv`, normalizes annual
-links to `$DATA_DIR/external/gvkey_cik_year.csv`, refreshes the raw-primary
-linkage folder, and runs the bridge probe. Treat this as a candidate bridge
-whose coverage and multiplicity must be reported, not as a silent substitute
-for a WRDS-verified table.
+This exports `$DATA_DIR/external/farr_gvkey_ciks_raw.csv` and normalizes annual
+links to `$DATA_DIR/external/gvkey_cik_year.csv` for historical comparison only.
+It does not supplement `$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv`.
 
-The same package provides support inputs:
-
-```bash
-bash scripts/prepare_farr_support_data.sh --install-missing
-```
-
-This exports `farr::aaer_dates`, `farr::aaer_firm_year`, and `farr::state_hq`.
-The AAER files support high-severity overlap diagnostics; they do not replace
-the main public-cascade labels. `farr::state_hq` is used as a date-bounded,
-public-origin headquarters-state metadata feature when
-`$DATA_DIR/external/farr_state_hq.csv` exists.
+The old farr support exports are no longer required. `farr::state_hq` was the
+only external support file with unique information not present in the raw WRDS
+bridge: date-bounded headquarters/business-address state. The default pipeline
+no longer uses farr/external support files; it drops that optional metadata
+feature so the bridge and public-cascade claims do not depend on
+`$DATA_DIR/external`.
 
 Accepted crosswalk columns are `gvkey`, `issuer_cik` or `cik`, plus either
 `data_year`/`fiscal_year`/`fyear` or `start_year` and `end_year`. Prepared files
@@ -336,23 +325,20 @@ retain provenance fields: `source`, `source_version`, `extracted_at`,
 `match_method`, and `match_score`.
 
 Construct-overlap validation reads those provenance fields to infer
-`validation_tier`: farr-only exports remain `candidate_farr`, the current
-raw-primary plus farr-supplement bridge is `candidate_mixed`, and
-WRDS/Compustat source or match-method provenance is reported as
-`wrds_validated` only when the bridge is no longer mixed with candidate rows.
+`validation_tier`: the current raw-only WRDS SEC Analytics Suite CIK-GVKEY export
+is `wrds_validated`; historical farr-only exports remain candidate diagnostics
+only if run manually.
 
 ## Current Gates
 
 1. The public-cascade run is the current non-metadata `xbrl_ratio_baseline`
    snapshot.
-2. The raw-primary bridge is the current high-coverage candidate bridge when
-   WRDS is unavailable; coverage, multiplicity, raw/external conflicts, and
-   inferred validation tier must be reported.
+2. The raw-only bridge is the current high-coverage WRDS-validated bridge;
+   coverage, multiplicity, and inferred validation tier must be reported.
 3. Candidate bridge overlap can support a related-but-non-identical construct
-   argument. The construct-overlap manifest currently reports
-   `candidate_mixed`; it should move to `wrds_validated` only after a
-   provenance-tagged WRDS or equivalent crosswalk is supplied and the overlap
-   layer is rerun.
-4. AAER is a high-severity enforcement descriptor and robustness anchor, not the headline
-   prediction target.
+   argument. The construct-overlap manifest should report `wrds_validated` after
+   the overlap layer is rerun with the raw-only WRDS bridge.
+4. AAER and farr support files are dropped from the paper-facing design because
+   AAER positives are too sparse for a stable ranking target and external files
+   are no longer needed for the bridge.
 <!-- --8<-- [end:docs-home] -->

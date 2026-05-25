@@ -17,7 +17,7 @@ from src.table_io import read_table
 
 
 def test_materialize_raw_dataset_from_zip(tmp_path: Path) -> None:
-    source_dir = tmp_path / "external"
+    source_dir = tmp_path / "raw"
     source_dir.mkdir()
     source = source_dir / "raw_dataset_misstatement.zip"
     frame = pd.DataFrame(
@@ -61,11 +61,10 @@ def test_resolve_raw_dataset_source_requires_existing_input(tmp_path: Path) -> N
         resolve_raw_dataset_source(tmp_path / "missing.zip")
 
 
-def test_default_raw_dataset_sources_include_external_raw_subdir(tmp_path: Path) -> None:
+def test_default_raw_dataset_sources_are_raw_only(tmp_path: Path) -> None:
     assert default_raw_dataset_sources(tmp_path) == (
         tmp_path / RAW_DATASET_CSV_NAME,
         tmp_path / RAW_DATASET_ZIP_NAME,
         tmp_path / "raw" / RAW_DATASET_CSV_NAME,
         tmp_path / "raw" / RAW_DATASET_ZIP_NAME,
-        tmp_path / "external" / RAW_DATASET_ZIP_NAME,
     )

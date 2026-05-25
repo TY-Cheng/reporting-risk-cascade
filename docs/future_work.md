@@ -115,7 +115,6 @@ Then add graph/document nodes:
 - PCAOB inspection nodes
 - public comment-thread nodes
 - correction-event nodes
-- AAER proxy event nodes
 
 Optional later sources:
 
@@ -133,7 +132,7 @@ classifier:
 - occurrence-risk proxy head: XBRL and 10-K narrative signals
 - public scrutiny head: comment-letter and monitoring features
 - correction head: amendment and 8-K Item 4.02 labels
-- severity proxy head: AAER proxy and disclosure-framing labels
+- severity proxy head: disclosure-framing labels
 
 Candidate model families:
 

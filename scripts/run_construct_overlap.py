@@ -25,7 +25,7 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import ARTIFACTS_DIR, DATA_DIR
+    from src import ARTIFACTS_DIR
     from src.linkage import DEFAULT_LINKAGE_OUT_DIR
 
     parser = argparse.ArgumentParser(description="Run construct-overlap validation")
@@ -59,18 +59,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Public issuer-origin panel; defaults to study manifest input",
     )
-    parser.add_argument(
-        "--farr-aaer-firm-year",
-        type=Path,
-        default=DATA_DIR / "external" / "farr_aaer_firm_year.csv",
-        help="farr AAER firm-year support file",
-    )
-    parser.add_argument(
-        "--farr-aaer-dates",
-        type=Path,
-        default=DATA_DIR / "external" / "farr_aaer_dates.csv",
-        help="farr AAER date support file",
-    )
     return parser.parse_args()
 
 
@@ -86,8 +74,6 @@ def main() -> None:
         opacity_out_dir=args.opacity_out_dir,
         crosswalk_path=args.crosswalk,
         issuer_origin_panel_path=args.issuer_origin_panel,
-        farr_aaer_firm_year_path=args.farr_aaer_firm_year,
-        farr_aaer_dates_path=args.farr_aaer_dates,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
 

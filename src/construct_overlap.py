@@ -1,8 +1,7 @@
-"""Construct-overlap validation between legacy and public-cascade labels.
+"""Construct-overlap validation between benchmark and public-cascade labels.
 
 This module is intentionally a validation layer. It reuses existing study
-artifacts and farr support data; it does not rebuild the public lake or refit
-models.
+artifacts; it does not rebuild the public lake or refit models.
 """
 
 from __future__ import annotations
@@ -26,7 +25,6 @@ PUBLIC_LABELS = [
     "label_comment_thread_365",
     "label_amendment_365",
     "label_8k_402_365",
-    "label_aaer_proxy_730",
 ]
 RES_AN_COLS = ["res_an0", "res_an1", "res_an2", "res_an3"]
 BOOTSTRAP_REPS = 1000
@@ -103,7 +101,9 @@ def _label_column(columns: set[str]) -> str:
     ]:
         if candidate in columns:
             return candidate
-    raise ValueError("legacy benchmark table is missing a misstatement label column")
+    raise ValueError(
+        "detected-misstatement benchmark table is missing a misstatement label column"
+    )
 
 
 def _read_manifest(study_dir: Path) -> dict[str, Any]:
@@ -163,21 +163,30 @@ def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
     )
     evidence_text = frame.apply(lambda row: " ".join(str(value) for value in row), axis=1).str.lower()
     has_wrds = evidence_text.str.contains(r"\bwrds\b|wrds_", regex=True).any()
-    has_raw = evidence_text.str.contains(r"raw_cik_gvkey|raw_primary", regex=True).any()
+    has_raw = evidence_text.str.contains(
+        r"raw_cik_gvkey|raw_primary|wrds_sec_analytics_cik_gvkey",
+        regex=True,
+    ).any()
     has_farr = evidence_text.str.contains("farr|gvkey_ciks", regex=True).any()
 
-    if has_wrds and not has_farr and not has_raw:
-        bridge_source = source_values[0] if len(source_values) == 1 else "wrds_compustat_crosswalk"
+    if has_wrds and not has_farr:
+        all_wrds_sec_analytics = bool(source_values) and all(
+            "wrds_sec_analytics_cik_gvkey" in value for value in source_values
+        )
+        if all_wrds_sec_analytics:
+            bridge_source = "wrds_sec_analytics_cik_gvkey_link"
+        else:
+            bridge_source = source_values[0] if len(source_values) == 1 else "wrds_compustat_crosswalk"
         validation_tier = "wrds_validated"
-    elif has_wrds and (has_farr or has_raw):
+    elif has_wrds and has_farr:
         bridge_source = "mixed_wrds_farr_crosswalk"
         validation_tier = "candidate_mixed"
     elif has_raw and has_farr:
-        bridge_source = "raw_primary_farr_supplement"
+        bridge_source = "mixed_wrds_farr_crosswalk"
         validation_tier = "candidate_mixed"
     elif has_raw:
-        bridge_source = "raw_primary_cik_gvkey_link"
-        validation_tier = "candidate_external"
+        bridge_source = "wrds_sec_analytics_cik_gvkey_link"
+        validation_tier = "wrds_validated"
     elif has_farr:
         bridge_source = "farr_candidate"
         validation_tier = "candidate_farr"
@@ -377,8 +386,9 @@ def _setup_base_tables(
         GROUP BY 1, 2
         """
     )
+    bridge_label_select = ",\n          ".join(f"p.{label}" for label in PUBLIC_LABELS)
     con.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP TABLE bridge_join AS
         SELECT
           r.*,
@@ -387,10 +397,7 @@ def _setup_base_tables(
           p.origin_date_min,
           p.origin_date_max,
           COALESCE(p.annual_public_row_count, 0) AS annual_public_row_count,
-          p.label_comment_thread_365,
-          p.label_amendment_365,
-          p.label_8k_402_365,
-          p.label_aaer_proxy_730
+          {bridge_label_select}
         FROM raw_norm r
         LEFT JOIN crosswalk_norm x
           ON r.gvkey = x.gvkey AND r.data_year = x.data_year
@@ -482,13 +489,6 @@ def _write_overlap_core(con: Any, out_dir: Path) -> pd.DataFrame:
     extra = pd.DataFrame(
         [
             {"bridge_tier": "full_raw", "rows": len(panel), "legacy_positives": panel["legacy_label"].sum()},
-            {
-                "bridge_tier": "aaer_subset",
-                "rows": int(panel["label_aaer_proxy_730"].sum()),
-                "legacy_positives": int(
-                    (panel["label_aaer_proxy_730"].eq(1) & panel["legacy_label"].eq(1)).sum()
-                ),
-            },
         ]
     )
     _write_csv(pd.concat([extra, flow], ignore_index=True), out_dir / "overlap_sample_flow.csv")
@@ -897,7 +897,6 @@ def _event_time(con: Any, out_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
               a.label_comment_thread_365,
               a.label_amendment_365,
               a.label_8k_402_365,
-              a.label_aaer_proxy_730,
               a.origin_date_min
             FROM overlap_panel p
             LEFT JOIN public_annual a
@@ -960,141 +959,12 @@ def _event_time(con: Any, out_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     return concentration, coverage
 
 
-def _normalize_gvkey_series(series: pd.Series) -> pd.Series:
-    text = series.astype("string").str.strip().str.replace(r"[^0-9]", "", regex=True)
-    numeric = pd.to_numeric(text, errors="coerce")
-    return numeric.astype("Int64").astype("string").mask(numeric.isna())
-
-
-def _expand_farr_aaer(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame(columns=["p_aaer", "gvkey", "data_year"])
-    frame = pd.read_csv(path)
-    required = {"p_aaer", "gvkey", "min_year", "max_year"}
-    if not required.issubset(frame.columns):
-        raise ValueError(f"{path} is missing required farr AAER columns: {required}")
-    work = frame.copy()
-    work["gvkey"] = _normalize_gvkey_series(work["gvkey"])
-    work["min_year"] = pd.to_numeric(work["min_year"], errors="coerce").astype("Int64")
-    work["max_year"] = pd.to_numeric(work["max_year"], errors="coerce").astype("Int64")
-    rows: list[dict[str, Any]] = []
-    for item in work.dropna(subset=["p_aaer", "gvkey", "min_year", "max_year"]).itertuples():
-        for year in range(int(item.min_year), int(item.max_year) + 1):
-            rows.append({"p_aaer": str(item.p_aaer), "gvkey": str(item.gvkey), "data_year": year})
-    return pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
-
-
-def _aaer_outputs(
-    con: Any,
-    *,
-    out_dir: Path,
-    farr_aaer_firm_year_path: Path,
-    farr_aaer_dates_path: Path,
-    public_ranking_source: pd.DataFrame,
-    bridge_source: str,
-) -> None:
-    expanded = _expand_farr_aaer(farr_aaer_firm_year_path)
-    if expanded.empty:
-        _write_csv(expanded, out_dir / "farr_aaer_benchmark_overlap.csv")
-        _write_csv(expanded, out_dir / "farr_aaer_public_overlap.csv")
-        _write_csv(pd.DataFrame(), out_dir / "farr_aaer_ranking_lift.csv")
-        _write_csv(pd.DataFrame(), out_dir / "farr_aaer_lag_distribution.csv")
-        return
-    con.register("farr_aaer_expanded", expanded)
-    benchmark = con.execute(
-        """
-        SELECT
-          p.gvkey,
-          p.data_year,
-          p.legacy_label AS observed_label,
-          CASE WHEN a.p_aaer IS NULL THEN 0 ELSE 1 END AS farr_aaer_firm_year,
-          COALESCE(STRING_AGG(DISTINCT a.p_aaer, ';' ORDER BY a.p_aaer), '') AS p_aaer
-        FROM overlap_panel p
-        LEFT JOIN farr_aaer_expanded a ON p.gvkey = a.gvkey AND p.data_year = a.data_year
-        GROUP BY p.gvkey, p.data_year, p.legacy_label, CASE WHEN a.p_aaer IS NULL THEN 0 ELSE 1 END
-        ORDER BY p.data_year, p.gvkey
-        """
-    ).fetchdf()
-    _write_csv(benchmark, out_dir / "farr_aaer_benchmark_overlap.csv")
-    public = con.execute(
-        """
-        SELECT
-          p.gvkey,
-          p.data_year,
-          p.issuer_ciks,
-          p.bridge_tier,
-          p.legacy_label,
-          p.label_comment_thread_365,
-          p.label_amendment_365,
-          p.label_8k_402_365,
-          p.label_aaer_proxy_730,
-          CASE WHEN a.p_aaer IS NULL THEN 0 ELSE 1 END AS farr_aaer_firm_year,
-          COALESCE(STRING_AGG(DISTINCT a.p_aaer, ';' ORDER BY a.p_aaer), '') AS p_aaer
-        FROM overlap_panel p
-        LEFT JOIN farr_aaer_expanded a ON p.gvkey = a.gvkey AND p.data_year = a.data_year
-        GROUP BY ALL
-        ORDER BY p.data_year, p.gvkey
-        """
-    ).fetchdf()
-    _write_csv(public, out_dir / "farr_aaer_public_overlap.csv")
-
-    if public_ranking_source.empty:
-        ranking = pd.DataFrame()
-    else:
-        source = public_ranking_source.merge(
-            public[["gvkey", "data_year", "farr_aaer_firm_year"]],
-            on=["gvkey", "data_year"],
-            how="left",
-        )
-        source["farr_aaer_firm_year"] = source["farr_aaer_firm_year"].fillna(0).astype(int)
-        rows = _score_metric_rows(
-            source,
-            group_cols=[
-                "model_id",
-                "task",
-                "feature_set",
-                "train_window",
-                "score_aggregation",
-                "bridge_tier",
-            ],
-            target_col="farr_aaer_firm_year",
-            score_col="score",
-            count_prefix="farr_aaer",
-            bridge_source=bridge_source,
-        )
-        ranking = pd.DataFrame(rows)
-    _write_csv(ranking, out_dir / "farr_aaer_ranking_lift.csv")
-
-    if farr_aaer_dates_path.exists():
-        dates = pd.read_csv(farr_aaer_dates_path)
-        if {"aaer_num", "aaer_date"}.issubset(dates.columns):
-            dates = dates.copy()
-            dates["p_aaer"] = dates["aaer_num"].astype(str).str.extract(r"(\d+)")[0]
-            dates["aaer_date"] = pd.to_datetime(dates["aaer_date"], errors="coerce", format="mixed")
-            lag_rows = expanded.merge(dates[["p_aaer", "aaer_date"]], on="p_aaer", how="left")
-            lag_rows["aaer_year"] = lag_rows["aaer_date"].dt.year
-            lag_rows["lag_years"] = lag_rows["aaer_year"] - pd.to_numeric(
-                lag_rows["data_year"], errors="coerce"
-            )
-            lag_dist = (
-                lag_rows.dropna(subset=["lag_years"])
-                .groupby("lag_years", as_index=False)
-                .agg(n_events=("p_aaer", "nunique"), min_aaer_date=("aaer_date", "min"), max_aaer_date=("aaer_date", "max"))
-            )
-        else:
-            lag_dist = pd.DataFrame()
-    else:
-        lag_dist = pd.DataFrame()
-    _write_csv(lag_dist, out_dir / "farr_aaer_lag_distribution.csv")
-
-
 def _res_an_proxy_coverage(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
     rows = []
     any_res = panel[RES_AN_COLS].fillna(0).astype(int).sum(axis=1).gt(0)
     for scope, mask in {
         "all_rows": pd.Series(True, index=panel.index),
         "legacy_positive_rows": panel["legacy_label"].eq(1),
-        "aaer_proxy_rows": panel["label_aaer_proxy_730"].eq(1),
     }.items():
         sample = panel.loc[mask]
         sample_any = any_res.loc[mask]
@@ -1189,14 +1059,15 @@ def _write_summary(
         "",
         "| Question | Artifact |",
         "| --- | --- |",
-        "| How many legacy rows enter the overlap? | `overlap_sample_flow.csv` |",
+        "| How many benchmark rows enter the overlap? | `overlap_sample_flow.csv` |",
         "| Does bridge aggregation affect public-label rates? | `aggregation_sensitivity.csv` |",
-        "| Do public labels overlap legacy detected misstatement? | `label_contingency_lift.csv` |",
-        "| Do public scores rank legacy positives? | `public_score_legacy_ranking.csv` |",
-        "| Do legacy scores rank public labels? | `reciprocal_alignment.csv` |",
-        "| Which public labels co-occur among legacy positives? | `legacy_positive_public_label_cooccurrence.csv` |",
-        "| When do public labels concentrate around legacy years? | `event_time_concentration.csv` |",
-        "| How does the AAER severity tail align? | `farr_aaer_ranking_lift.csv` |",
+        "| Do public labels overlap detected-misstatement benchmark labels? | "
+        "`label_contingency_lift.csv` |",
+        "| Do public scores rank benchmark positives? | `public_score_legacy_ranking.csv` |",
+        "| Do benchmark scores rank public labels? | `reciprocal_alignment.csv` |",
+        "| Which public labels co-occur among benchmark positives? | "
+        "`legacy_positive_public_label_cooccurrence.csv` |",
+        "| When do public labels concentrate around benchmark years? | `event_time_concentration.csv` |",
         "",
         "## Evidence Tier",
         "",
@@ -1215,16 +1086,17 @@ def _write_summary(
     else:
         row = best.iloc[0]
         lines.append(
-            f"In the {matched_sample_label}, legacy misstatement firm-years are "
+            f"In the {matched_sample_label}, detected-misstatement benchmark "
+            "firm-years are "
             f"enriched in the top decile of public review-and-correction risk scores "
             f"(best top-decile lift = {row['top_decile_lift']:.2f}), but most high-risk "
-            "public-cascade firm-years do not correspond to legacy detected-misstatement "
-            "positives. Among legacy-positive firm-years, a measurable share exhibits at "
+            "public-cascade firm-years do not correspond to detected-misstatement "
+            "benchmark positives. Among benchmark-positive firm-years, a measurable "
+            "share exhibits at "
             "least one public review-and-correction label within the event-time window. "
             "This pattern is consistent with related but non-identical constructs: the "
-            "public cascade captures a broader set of review-and-correction events that "
-            "includes, but is not limited to, legacy detected misstatements and "
-            "AAER-like high-severity enforcement events."
+            "public cascade captures a broader set of review-and-correction events "
+            "than detected-misstatement benchmark positives."
         )
     lines.extend(
         [
@@ -1232,7 +1104,6 @@ def _write_summary(
             "## Notes",
             "",
             "- Public-label event-time rows are descriptive rates only; no significance tests are reported.",
-            "- AAER rows are high-severity enforcement support, not a complete enforcement universe.",
         ]
     )
     if validation_tier == "wrds_validated":
@@ -1261,8 +1132,6 @@ def run_construct_overlap(
     opacity_out_dir: Path | None = None,
     crosswalk_path: Path | None = None,
     issuer_origin_panel_path: Path | None = None,
-    farr_aaer_firm_year_path: Path | None = None,
-    farr_aaer_dates_path: Path | None = None,
 ) -> dict[str, Any]:
     study_dir = Path(study_dir)
     out_dir = Path(out_dir or study_dir / "construct_overlap")
@@ -1278,14 +1147,6 @@ def run_construct_overlap(
     issuer_origin = _resolve_path(
         issuer_origin_panel_path or inputs.get("issuer_origin_panel"),
         default=DATA_DIR / "public_lake" / "gold" / "issuer_origin_panel.parquet",
-    )
-    farr_aaer_firm_year = _resolve_path(
-        farr_aaer_firm_year_path,
-        default=DATA_DIR / "external" / "farr_aaer_firm_year.csv",
-    )
-    farr_aaer_dates = _resolve_path(
-        farr_aaer_dates_path,
-        default=DATA_DIR / "external" / "farr_aaer_dates.csv",
     )
     required = {
         "master_panel": study_dir / "benchmark" / "master_panel.parquet",
@@ -1345,47 +1206,14 @@ def run_construct_overlap(
             bridge_source=bridge_source,
         )
         _event_time(con, out_dir)
-        high_public_scores = con.execute(
-            """
-            SELECT
-              r.gvkey,
-              r.data_year,
-              s.feature_set,
-              s.train_window,
-              s.task,
-              AVG(s.probability) AS score,
-              'public_cascade' AS model_id,
-              'mean' AS score_aggregation,
-              'high_confidence' AS bridge_tier
-            FROM raw_norm r
-            JOIN bridge_tiers t ON r.raw_row_id = t.raw_row_id
-            JOIN crosswalk_norm x ON r.gvkey = x.gvkey AND r.data_year = x.data_year
-            JOIN public_prediction_norm s ON x.issuer_cik = s.issuer_cik AND r.data_year = s.data_year
-            WHERE t.bridge_tier = 'high_confidence'
-            GROUP BY r.gvkey, r.data_year, s.feature_set, s.train_window, s.task
-            """
-        ).fetchdf()
-        _aaer_outputs(
-            con,
-            out_dir=out_dir,
-            farr_aaer_firm_year_path=farr_aaer_firm_year,
-            farr_aaer_dates_path=farr_aaer_dates,
-            public_ranking_source=high_public_scores,
-            bridge_source=bridge_source,
-        )
         _res_an_proxy_coverage(panel, out_dir)
         aggregation = pd.read_csv(out_dir / "aggregation_sensitivity.csv")
     finally:
         con.close()
 
     opacity_status = _opacity_refresh(study_dir, opacity_out_dir)
-    blockers = []
-    sparse_files = []
-    aaer_ranking = pd.read_csv(out_dir / "farr_aaer_ranking_lift.csv")
-    if not aaer_ranking.empty and "metric_status" in aaer_ranking.columns:
-        if aaer_ranking["metric_status"].eq("blocked_sparse").all():
-            blockers.append({"code": "blocked_sparse", "detail": "farr AAER ranking positives below threshold"})
-            sparse_files.append("farr_aaer_ranking_lift.csv")
+    blockers: list[dict[str, str]] = []
+    sparse_files: list[str] = []
     manifest = {
         "created_at": _utc_now(),
         "run_status": "complete",
@@ -1400,8 +1228,6 @@ def run_construct_overlap(
         "inputs": {
             "crosswalk": str(crosswalk),
             "issuer_origin_panel": str(issuer_origin),
-            "farr_aaer_firm_year": str(farr_aaer_firm_year),
-            "farr_aaer_dates": str(farr_aaer_dates),
         },
     }
     _write_json(manifest, out_dir / "construct_overlap_manifest.json")

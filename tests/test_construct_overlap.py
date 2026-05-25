@@ -18,8 +18,8 @@ def _write_toy_study(
     tmp_path: Path,
     *,
     with_opacity: bool = True,
-    crosswalk_source: str = "farr_gvkey_ciks",
-    match_method: str = "farr_gvkey_ciks_date_range",
+    crosswalk_source: str = "wrds_sec_analytics_cik_gvkey_link",
+    match_method: str = "wrds_sec_analytics_cik_gvkey_intersection",
 ) -> tuple[Path, Path, Path]:
     study = tmp_path / "study"
     benchmark = study / "benchmark"
@@ -28,10 +28,10 @@ def _write_toy_study(
     benchmark.mkdir(parents=True)
     cascade.mkdir(parents=True)
     peer.mkdir(parents=True)
-    external = tmp_path / "external"
-    external.mkdir()
+    linkage = tmp_path / "linkage"
+    linkage.mkdir()
     public_panel = tmp_path / "issuer_origin_panel.parquet"
-    crosswalk = external / "gvkey_cik_year.csv"
+    crosswalk = linkage / "gvkey_cik_year.csv"
 
     raw_rows = []
     crosswalk_rows = []
@@ -39,8 +39,6 @@ def _write_toy_study(
     public_predictions = []
     benchmark_predictions = []
     peer_predictions = []
-    aaer_rows = []
-    aaer_dates = []
 
     for idx in range(40):
         gvkey = str(1000 + idx)
@@ -76,7 +74,6 @@ def _write_toy_study(
                 "label_comment_thread_365": public_label,
                 "label_amendment_365": int(idx < 12),
                 "label_8k_402_365": int(idx < 5),
-                "label_aaer_proxy_730": int(idx < 2),
             }
         )
         public_predictions.append(
@@ -113,25 +110,6 @@ def _write_toy_study(
                 "observed_label": legacy,
             }
         )
-        if idx < 12:
-            p_aaer = str(7000 + idx)
-            aaer_rows.append(
-                {
-                    "p_aaer": p_aaer,
-                    "gvkey": gvkey,
-                    "min_year": 2018,
-                    "max_year": 2018,
-                }
-            )
-            aaer_dates.append(
-                {
-                    "aaer_num": f"AAER-{p_aaer}",
-                    "aaer_date": "2020-06-30",
-                    "aaer_desc": "toy",
-                    "year": 2020,
-                }
-            )
-
     # One ambiguous row: two CIKs in the same gvkey-year, one public label.
     raw_rows.append(
         {
@@ -164,7 +142,6 @@ def _write_toy_study(
                 "label_comment_thread_365": label,
                 "label_amendment_365": label,
                 "label_8k_402_365": 0,
-                "label_aaer_proxy_730": 0,
             }
         )
         public_predictions.append(
@@ -208,8 +185,6 @@ def _write_toy_study(
     write_table(pd.DataFrame(public_predictions), cascade / "public_cascade_predictions.parquet")
     write_table(pd.DataFrame(peer_predictions), peer / "legacy_model_family_predictions.parquet")
     pd.DataFrame(crosswalk_rows).to_csv(crosswalk, index=False)
-    pd.DataFrame(aaer_rows).to_csv(external / "farr_aaer_firm_year.csv", index=False)
-    pd.DataFrame(aaer_dates).to_csv(external / "farr_aaer_dates.csv", index=False)
     if with_opacity:
         pd.DataFrame(
             {
@@ -246,7 +221,7 @@ def _write_toy_study(
     return study, crosswalk, public_panel
 
 
-def test_construct_overlap_end_to_end_writes_candidate_validation_artifacts(
+def test_construct_overlap_end_to_end_writes_validation_artifacts(
     tmp_path: Path,
 ) -> None:
     study, crosswalk, public_panel = _write_toy_study(tmp_path)
@@ -254,17 +229,15 @@ def test_construct_overlap_end_to_end_writes_candidate_validation_artifacts(
         study_dir=study,
         crosswalk_path=crosswalk,
         issuer_origin_panel_path=public_panel,
-        farr_aaer_firm_year_path=tmp_path / "external" / "farr_aaer_firm_year.csv",
-        farr_aaer_dates_path=tmp_path / "external" / "farr_aaer_dates.csv",
     )
     out = study / "construct_overlap"
 
     assert result["run_status"] == "complete"
-    assert result["validation_tier"] == "candidate_farr"
+    assert result["validation_tier"] == "wrds_validated"
     study_manifest = json.loads((study / "study_run_manifest.json").read_text(encoding="utf-8"))
     construct_component = study_manifest["components"]["construct_overlap"]
     assert construct_component["run_status"] == "complete"
-    assert construct_component["validation_tier"] == "candidate_farr"
+    assert construct_component["validation_tier"] == "wrds_validated"
     assert construct_component["out_dir"] == str(out)
     assert construct_component["manifest_json"] == str(out / "construct_overlap_manifest.json")
     assert construct_component["summary_md"] == str(out / "construct_overlap_summary.md")
@@ -280,10 +253,6 @@ def test_construct_overlap_end_to_end_writes_candidate_validation_artifacts(
         "legacy_positive_public_label_cooccurrence.csv",
         "event_time_concentration.csv",
         "event_time_coverage.csv",
-        "farr_aaer_benchmark_overlap.csv",
-        "farr_aaer_public_overlap.csv",
-        "farr_aaer_ranking_lift.csv",
-        "farr_aaer_lag_distribution.csv",
         "res_an_proxy_coverage.csv",
     ]
     for name in expected:
@@ -330,7 +299,7 @@ def test_construct_overlap_end_to_end_writes_candidate_validation_artifacts(
         "top_decile_lift_ci_high",
         "bridge_source",
     }.issubset(ranking.columns)
-    assert set(ranking["bridge_source"]) == {"farr_candidate"}
+    assert set(ranking["bridge_source"]) == {"wrds_sec_analytics_cik_gvkey_link"}
 
     reciprocal = pd.read_csv(out / "reciprocal_alignment.csv")
     assert {
@@ -350,7 +319,6 @@ def test_construct_overlap_end_to_end_writes_candidate_validation_artifacts(
         "label_comment_thread_365",
         "label_amendment_365",
         "label_8k_402_365",
-        "label_aaer_proxy_730",
         "n_legacy_positives",
         "pct_of_legacy_positives",
         "display_count",
@@ -358,7 +326,7 @@ def test_construct_overlap_end_to_end_writes_candidate_validation_artifacts(
 
     summary = (out / "construct_overlap_summary.md").read_text(encoding="utf-8")
     assert "related but non-identical constructs" in summary
-    assert "candidate validation" in summary
+    assert "WRDS/Compustat provenance" in summary
 
 
 def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance(
@@ -373,8 +341,6 @@ def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance
         study_dir=study,
         crosswalk_path=crosswalk,
         issuer_origin_panel_path=public_panel,
-        farr_aaer_firm_year_path=tmp_path / "external" / "farr_aaer_firm_year.csv",
-        farr_aaer_dates_path=tmp_path / "external" / "farr_aaer_dates.csv",
     )
     out = study / "construct_overlap"
 
@@ -390,7 +356,9 @@ def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance
     assert study_manifest["components"]["construct_overlap"]["validation_tier"] == "wrds_validated"
 
 
-def test_raw_compustat_link_provenance_is_not_wrds_validated(tmp_path: Path) -> None:
+def test_raw_compustat_link_provenance_is_wrds_validated(
+    tmp_path: Path,
+) -> None:
     crosswalk = tmp_path / "raw_crosswalk.csv"
     pd.DataFrame(
         [
@@ -398,19 +366,19 @@ def test_raw_compustat_link_provenance_is_not_wrds_validated(tmp_path: Path) -> 
                 "gvkey": "1000",
                 "data_year": 2018,
                 "issuer_cik": "0000320000",
-                "source": "raw_cik_gvkey:compustat_company",
-                "match_method": "raw_cik_gvkey_intersection",
+                "source": "wrds_sec_analytics_cik_gvkey:compustat_company",
+                "match_method": "wrds_sec_analytics_cik_gvkey_intersection",
             }
         ]
     ).to_csv(crosswalk, index=False)
 
     evidence = _bridge_evidence_from_crosswalk(crosswalk)
 
-    assert evidence["bridge_source"] == "raw_primary_cik_gvkey_link"
-    assert evidence["validation_tier"] == "candidate_external"
+    assert evidence["bridge_source"] == "wrds_sec_analytics_cik_gvkey_link"
+    assert evidence["validation_tier"] == "wrds_validated"
 
 
-def test_raw_primary_farr_supplement_reports_candidate_mixed_source(tmp_path: Path) -> None:
+def test_mixed_raw_farr_crosswalk_reports_candidate_mixed_source(tmp_path: Path) -> None:
     crosswalk = tmp_path / "mixed_crosswalk.csv"
     pd.DataFrame(
         [
@@ -418,8 +386,8 @@ def test_raw_primary_farr_supplement_reports_candidate_mixed_source(tmp_path: Pa
                 "gvkey": "1000",
                 "data_year": 2018,
                 "issuer_cik": "0000320000",
-                "source": "raw_cik_gvkey:compustat_company",
-                "match_method": "raw_cik_gvkey_intersection",
+                "source": "wrds_sec_analytics_cik_gvkey:compustat_company",
+                "match_method": "wrds_sec_analytics_cik_gvkey_intersection",
             },
             {
                 "gvkey": "1001",
@@ -433,7 +401,7 @@ def test_raw_primary_farr_supplement_reports_candidate_mixed_source(tmp_path: Pa
 
     evidence = _bridge_evidence_from_crosswalk(crosswalk)
 
-    assert evidence["bridge_source"] == "raw_primary_farr_supplement"
+    assert evidence["bridge_source"] == "mixed_wrds_farr_crosswalk"
     assert evidence["validation_tier"] == "candidate_mixed"
 
 
@@ -443,8 +411,6 @@ def test_construct_overlap_missing_opacity_writes_blocker_without_failing(tmp_pa
         study_dir=study,
         crosswalk_path=crosswalk,
         issuer_origin_panel_path=public_panel,
-        farr_aaer_firm_year_path=tmp_path / "external" / "farr_aaer_firm_year.csv",
-        farr_aaer_dates_path=tmp_path / "external" / "farr_aaer_dates.csv",
     )
     blockers = json.loads(
         (study / "opacity_validation_refresh" / "opacity_validation_blockers.json").read_text(

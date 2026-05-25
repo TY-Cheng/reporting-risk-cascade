@@ -1,7 +1,7 @@
 """Benchmark-only peer-compatible model-family comparison.
 
-This module stays inside the legacy benchmark task. It transfers peer model
-families into the repo's own folds and labels; it does not replicate
+This module stays inside the detected-misstatement benchmark task. It transfers
+peer model families into the repo's own folds and labels; it does not replicate
 original-paper samples or run public-cascade overlap analysis.
 """
 
@@ -1052,10 +1052,11 @@ def _summary_markdown(
     lines = [
         "# Peer Comparison Summary",
         "",
-        "- Scope: benchmark-only legacy peer-compatible comparison.",
+        "- Scope: detected-misstatement benchmark-only peer-compatible comparison.",
         "- This is not original-paper numeric replication and not same-estimand performance-ranking evidence.",
-        "- `bao_style_ensemble` is reserved for raw-number-compatible inputs. The legacy benchmark "
-        "defaults to `bao_inspired_tree_ensemble` when the raw-number gate does not pass.",
+        "- `bao_style_ensemble` is reserved for raw-number-compatible inputs. The "
+        "detected-misstatement benchmark defaults to `bao_inspired_tree_ensemble` "
+        "when the raw-number gate does not pass.",
         f"- Mode: `{mode}`",
         "",
         "## Status Counts",
@@ -1173,7 +1174,10 @@ def run_peer_comparison(
         variables=BAO_VARIABLES,
         construction_match="proxy",
         scale_match="proxy",
-        notes="Legacy benchmark is engineered/mixed input, not presumed raw-number compatible.",
+        notes=(
+            "Detected-misstatement benchmark is engineered/mixed input, not "
+            "presumed raw-number compatible."
+        ),
     )
     mapping_df = pd.concat([dechow_mapping, dechow_fixed_mapping, bao_mapping], ignore_index=True)
     mapping_by_peer = {
@@ -1202,7 +1206,7 @@ def run_peer_comparison(
     implementation_differences = [
         "Peer families run on repo-native benchmark folds, not original-paper samples.",
         "Dechow fixed-score skips unless published coefficients and mappings are usable.",
-        "Bao legacy benchmark adapter is named inspired unless raw-number gate passes.",
+        "Bao benchmark adapter is named inspired unless raw-number gate passes.",
     ]
 
     specs = _model_specs(

@@ -27,7 +27,6 @@ def default_raw_dataset_sources(data_dir: Path = DATA_DIR) -> tuple[Path, ...]:
         data_dir / RAW_DATASET_ZIP_NAME,
         data_dir / "raw" / RAW_DATASET_CSV_NAME,
         data_dir / "raw" / RAW_DATASET_ZIP_NAME,
-        data_dir / "external" / RAW_DATASET_ZIP_NAME,
     )
 
 

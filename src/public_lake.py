@@ -238,7 +238,6 @@ SOURCE_SPECS: Dict[str, SourceSpec] = {
         page_url=SEC_CORRESPONDENCE_URL,
         note="Uses SEC daily master indexes and filters UPLOAD/CORRESP forms.",
     ),
-    "aaer": SourceSpec(name="aaer", kind="aaer", page_url=SEC_AAER_URL),
     "insider": SourceSpec(name="insider", kind="page", page_url=SEC_INSIDER_PAGE_URL),
     "13f": SourceSpec(name="13f", kind="page", page_url=SEC_13F_PAGE_URL),
     "edgar-logs": SourceSpec(name="edgar-logs", kind="page", page_url=SEC_EDGAR_LOGS_PAGE_URL),
@@ -986,18 +985,7 @@ def _read_farr_state_hq(
     duckdb_temp_directory: Path | str | None = None,
     duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
 ) -> pd.DataFrame:
-    state_hq_path = _external_data_path_from_silver(silver_dir, "farr_state_hq.csv")
-    if not state_hq_path.exists():
-        return pd.DataFrame()
-    return _read_csv_with_engine(
-        state_hq_path,
-        date_cols=["min_date", "max_date"],
-        engine=engine,
-        duckdb_threads=duckdb_threads,
-        duckdb_memory_limit=duckdb_memory_limit,
-        duckdb_temp_directory=duckdb_temp_directory,
-        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
-    )
+    return pd.DataFrame()
 
 
 def _add_state_hq_features(issuer_panel: pd.DataFrame, state_hq: pd.DataFrame) -> pd.DataFrame:
@@ -3650,28 +3638,15 @@ def _create_duckdb_note_summary_view(con: Any, *, silver_dir: Path) -> bool:
 
 
 def _create_duckdb_state_hq_view(con: Any, *, silver_dir: Path) -> int:
-    state_hq_path = _external_data_path_from_silver(silver_dir, "farr_state_hq.csv")
-    _duckdb_source_or_empty(
-        con=con,
-        view_name="state_hq_gold",
-        path=state_hq_path,
-        empty_columns=(
-            ("issuer_cik", "VARCHAR"),
-            ("ba_state", "VARCHAR"),
-            ("min_date", "TIMESTAMP"),
-            ("max_date", "TIMESTAMP"),
-        ),
-    )
     con.execute(
-        f"""
+        """
         CREATE OR REPLACE TEMP VIEW state_hq_norm_gold AS
         SELECT
-            {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
-            nullif(upper(trim(CAST(ba_state AS VARCHAR))), '') AS issuer_hq_state,
-            {_duckdb_timestamp_expr("min_date")} AS min_date,
-            {_duckdb_timestamp_expr("max_date")} AS max_date
-        FROM state_hq_gold
-        WHERE nullif(upper(trim(CAST(ba_state AS VARCHAR))), '') IS NOT NULL
+            CAST(NULL AS VARCHAR) AS issuer_cik,
+            CAST(NULL AS VARCHAR) AS issuer_hq_state,
+            CAST(NULL AS TIMESTAMP) AS min_date,
+            CAST(NULL AS TIMESTAMP) AS max_date
+        WHERE FALSE
         """
     )
     return int(con.execute("SELECT count(*) FROM state_hq_norm_gold").fetchone()[0])
@@ -3871,25 +3846,6 @@ def _build_gold_panels_duckdb(
                 COALESCE(try_cast(item_metadata_missing AS INTEGER), 0)
                     AS item_metadata_missing
             FROM issuer_8k_item_event_gold
-            """
-        )
-        _duckdb_source_or_empty(
-            con=con,
-            view_name="aaer_event_gold",
-            path=silver_dir / "aaer_event.csv.gz",
-            empty_columns=(
-                ("issuer_cik", "VARCHAR"),
-                ("event_date", "TIMESTAMP"),
-                ("release_url", "VARCHAR"),
-            ),
-        )
-        con.execute(
-            f"""
-            CREATE OR REPLACE TEMP VIEW aaer_event_norm_gold AS
-            SELECT
-                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
-                {_duckdb_timestamp_expr("event_date")} AS event_date
-            FROM aaer_event_gold
             """
         )
         _duckdb_source_or_empty(
@@ -4368,19 +4324,9 @@ def _build_gold_panels_duckdb(
                     ) THEN 1
                     ELSE 0
                 END AS k402_item_metadata_unknown_365,
-                CASE WHEN EXISTS (
-                    SELECT 1
-                    FROM aaer_event_norm_gold event
-                    WHERE event.issuer_cik = filing_featured_gold.issuer_cik
-                      AND event.event_date > filing_featured_gold.origin_date
-                      AND event.event_date <= filing_featured_gold.origin_date + INTERVAL 730 DAY
-                ) THEN 1 ELSE 0 END AS label_aaer_proxy_730,
                 CASE
                     WHEN origin_date + INTERVAL 365 DAY > as_of_date THEN 1 ELSE 0
                 END AS censored_365,
-                CASE
-                    WHEN origin_date + INTERVAL 730 DAY > as_of_date THEN 1 ELSE 0
-                END AS censored_730
             FROM filing_featured_gold
             """
         )
@@ -4496,7 +4442,7 @@ def _build_gold_panels_duckdb(
                 "engine": "duckdb",
                 "duckdb_threads": int(duckdb_threads),
                 "xbrl_core_tag_scope": "controlled_core_tags",
-                "state_hq_source": "farr_state_hq" if state_hq_rows else None,
+                "state_hq_source": None,
                 "state_hq_rows": state_hq_rows,
                 "issuer_hq_state_rows": issuer_state_hq_rows,
                 "filing_rows": filing_rows,
@@ -4611,19 +4557,6 @@ def build_gold_panels(
             duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
         if _preferred_table_path(silver_dir, "form_ap_event").exists()
-        else pd.DataFrame()
-    )
-    aaer_event = (
-        _read_csv_with_engine(
-            silver_dir / "aaer_event.csv.gz",
-            date_cols=["event_date"],
-            engine=engine,
-            duckdb_threads=duckdb_threads,
-            duckdb_memory_limit=duckdb_memory_limit,
-            duckdb_temp_directory=duckdb_temp_directory,
-            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
-        )
-        if (silver_dir / "aaer_event.csv.gz").exists()
         else pd.DataFrame()
     )
     state_hq = _read_farr_state_hq(
@@ -4854,19 +4787,8 @@ def build_gold_panels(
     label_8k_402, k402_unknown = _k402_label_and_unknown(filing, issuer_8k_item_event)
     filing["label_8k_402_365"] = label_8k_402
     filing["k402_item_metadata_unknown_365"] = k402_unknown
-    filing["label_aaer_proxy_730"] = _event_within_horizon(
-        filing,
-        aaer_event.rename(columns={"event_date": "public_date", "issuer_cik": "issuer_cik"}),
-        date_col="public_date",
-        horizon_days=730,
-        event_type=None,
-        type_col="release_url",
-    )
     filing["censored_365"] = (
         filing["origin_date"] + pd.Timedelta(days=365) > filing["as_of_date"]
-    ).astype(int)
-    filing["censored_730"] = (
-        filing["origin_date"] + pd.Timedelta(days=730) > filing["as_of_date"]
     ).astype(int)
 
     issuer_panel = filing.loc[filing["form"].isin(ANNUAL_FORMS)].copy()
@@ -4925,7 +4847,7 @@ def build_gold_panels(
                 "engine": engine,
                 "duckdb_threads": int(duckdb_threads) if engine == "duckdb" else None,
                 "xbrl_core_tag_scope": "controlled_core_tags",
-                "state_hq_source": "farr_state_hq" if not state_hq.empty else None,
+                "state_hq_source": None,
                 "state_hq_rows": int(len(state_hq)),
                 "issuer_hq_state_rows": issuer_state_hq_rows,
                 "filing_rows": int(len(filing)),
@@ -5106,11 +5028,6 @@ def build_public_lake(
             ),
             "issuer_8k_item_event": issuer_8k_item_event,
             "amendment_annotation": amendment_annotation,
-            "aaer_event": normalize_aaer_events(
-                aaer_bronze_dir=bronze_dir / "aaer",
-                silver_dir=silver_dir,
-                issuer_dim_path=_preferred_table_path(silver_dir, "issuer_dim"),
-            ),
         }
         outputs.update(
             build_partner_risk_histories(

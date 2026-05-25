@@ -57,7 +57,7 @@ def _issuer_panel(tmp_path: Path, *, duplicate: bool = False) -> Path:
                     "label_comment_thread_365": int((issuer_id + year) % 3 == 0),
                     "label_amendment_365": int((issuer_id + year) % 4 == 0),
                     "label_8k_402_365": int((issuer_id + year) % 5 == 0),
-                    "label_aaer_proxy_730": int((issuer_id + year) % 11 == 0),
+                    "label_aaer_proxy_730": int(issuer_id == 1 and year >= 2021),
                     "censored_365": 0,
                     "censored_730": 0,
                     "k402_item_metadata_unknown_365": 0,
@@ -106,12 +106,9 @@ def test_public_peer_full_mode_writes_pr2_artifacts(tmp_path: Path) -> None:
 
     status = pd.read_csv(out_dir / "public_model_family_task_status.csv")
     assert list(status.columns) == PUBLIC_STATUS_COLUMNS
-    assert "severity_tail_sparse_not_headline" in set(status["reason_code"])
     fixed = status.loc[status["peer_model_id"].eq("dechow_fixed_fscore_model1")]
     assert not fixed.empty
-    assert fixed["reason_code"].isin(
-        ["missing_required_mapping", "severity_tail_sparse_not_headline"]
-    ).all()
+    assert fixed["reason_code"].eq("missing_required_mapping").all()
 
     mapping = pd.read_csv(out_dir / "public_model_family_mapping_attrition.csv")
     assert list(mapping.columns) == PUBLIC_MAPPING_COLUMNS
@@ -142,6 +139,7 @@ def test_public_peer_full_mode_writes_pr2_artifacts(tmp_path: Path) -> None:
         "feature_name",
         "importance_type",
     }.issubset(importance.columns)
+    assert not importance["feature_name"].astype(str).str.startswith(("label_", "censored_")).any()
 
 
 @pytest.mark.parametrize("mode", ["none", "light"])

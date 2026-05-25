@@ -153,7 +153,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-construct-overlap",
         action="store_true",
-        help="Do not run candidate bridge construct-overlap validation",
+        help="Do not run bridge construct-overlap validation",
     )
     parser.add_argument(
         "--parallel-jobs",
@@ -185,7 +185,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Peer suite target. Use public with --peer-comparison-mode full to refresh "
-            "public-label peer transfer without rerunning legacy peer outputs."
+            "public-label peer transfer without rerunning detected-misstatement peer outputs."
         ),
     )
     return parser.parse_args()

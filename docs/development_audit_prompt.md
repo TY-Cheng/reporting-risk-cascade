@@ -33,22 +33,25 @@ For any disagreement, label the stale side explicitly as stale_docs,
 stale_snapshot, stale_tests, or stale_code, and give the evidence chain.
 
 Data availability stance:
-This audit is public-data-first. Assume no WRDS, Audit Analytics, CRSP,
-Compustat, FactSet, Refinitiv, RavenPack, or similar institutional database
-access unless the user explicitly says otherwise. The core reproducible spine is
-public SEC/PCAOB/EDGAR data plus the local
-legacy gvkey x data_year benchmark layer when available.
+This audit is public-data-first for the public cascade. The current bridge uses
+a collaborator-provided WRDS SEC Analytics Suite CIK-GVKEY export, but the core
+modeling spine remains public SEC/PCAOB/EDGAR data plus the local
+detected-misstatement `gvkey x data_year` benchmark layer when available. Assume no Audit Analytics,
+FactSet, Refinitiv, RavenPack, or additional institutional database access
+unless the user explicitly says otherwise.
 
-Do not treat absence of WRDS or Audit Analytics as a code bug. A farr
-gvkey-CIK bridge can support candidate validation, but it is not WRDS-verified.
-Paid or professional data can be mentioned only as an optional validation or
-enrichment path after a concrete blocker is identified.
+Do not treat absence of Audit Analytics or other unprovided paid databases as a
+code bug. The default raw-only bridge should report `wrds_validated`; historical
+farr gvkey-CIK output can support manual comparison, but it should not override
+the WRDS bridge. Paid or professional data can be
+mentioned only as an optional validation or enrichment path after a concrete
+blocker is identified.
 
 Fallback hierarchy:
 1. First evaluate native public sources already in or near the repo: SEC bulk
    submissions, FSDS, Notes summaries, UPLOAD/CORRESP, NT 10-K/10-Q,
    10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, PCAOB
-   inspections, AAER pages, farr support exports, SEC ticker files, and any
+   inspections, SEC ticker files, and any
    public issuer metadata already wired into the public lake.
 2. Then evaluate affordable external APIs only when they solve a named blocker
    without replacing the local EDGAR/PCAOB lake as source of record.
@@ -114,8 +117,7 @@ Required first pass:
    name/CUSIP/PERMNO fields exist.
 7. If the public lake exists, report whether the gold issuer-year and
    filing-origin panels exist, their row counts, fiscal-year span, and whether
-   comment_thread, amendment, 8-K Item 4.02, and AAER proxy labels have nonzero
-   positives.
+   comment_thread, amendment, and 8-K Item 4.02 labels have nonzero positives.
 8. If artifacts exist, inspect the study manifest, component summaries, and
    selected artifact indexes. Say when a docs number is a static snapshot rather
    than a live result.
@@ -129,8 +131,9 @@ Audit dimensions:
 - Separate code bugs from data constraints.
 - Treat raw_identifier_blocker as a bridge/input condition, not as proof that
   the public lake design is wrong.
-- Treat farr gvkey-CIK output as candidate_farr validation, not as a
-  WRDS-quality reference bridge.
+- Treat the raw-only WRDS SEC Analytics Suite bridge as `wrds_validated`.
+- Treat farr gvkey-CIK output as historical/manual comparison, not as a
+  replacement for the WRDS bridge.
 
 1. Workflow and command contract
 - Discover the active command surface from justfile rather than assuming recipe
@@ -147,7 +150,7 @@ Audit dimensions:
 - Does the task dispatcher, if present, route prep, component analyses, study
   runs, and public-data fetch/build tasks consistently with README and justfile?
 - Does the study runner orchestrate benchmark, public cascade, bridge probe,
-  legacy peer comparison, public peer comparison, and construct overlap
+  detected-misstatement peer comparison, public peer comparison, and construct overlap
   consistently with config defaults and CLI overrides?
 - If skip flags or target flags exist, verify that they skip only their intended
   component and leave unrelated components unchanged.
@@ -170,8 +173,8 @@ Audit dimensions:
 - Are source_available_*, public_date_*, vintage_*, and as_of_date excluded from
   default public-cascade predictors?
 - Does the bridge path avoid silent many-to-many gvkey-CIK joins?
-- Do construct-overlap outputs carry validation_tier = candidate_farr until a
-  verified WRDS bridge is supplied?
+- Do construct-overlap outputs carry validation_tier = wrds_validated for the
+  raw-only WRDS bridge?
 
 3. Data and label integrity
 - Check whether each public label is observable only after the correct filing
@@ -201,12 +204,9 @@ Audit dimensions:
 - Check whether censoring is horizon-specific and task-specific.
 - Check whether comment letters are described as public comment-letter scrutiny,
   not full SEC review.
-- Check whether AAER is treated only as a high-severity enforcement proxy or external
-  validation anchor, not as a full enforcement universe or a stable headline
-  prediction target.
 - Check whether label_comment_thread_365, label_amendment_365,
-  label_8k_402_365, and label_aaer_proxy_730 remain separate rather than being
-  collapsed into a single fraud or restatement label.
+  and label_8k_402_365 remain separate rather than being collapsed into a single
+  fraud or restatement label.
 
 4. Benchmark layer
 - Does the benchmark run emit a complete, inspectable set of panel, timing,
@@ -244,10 +244,11 @@ Audit dimensions:
   label_amendment_365, and label_8k_402_365 as primary outcomes?
 - Are public-label DML results described as adjusted associations, not causal
   evidence of strategic silence?
-- Is AAER proxy status-only or robustness-only when positives are sparse?
+- Is AAER absent from the paper-facing labels, metrics, feature-family rankings,
+  and manuscript claims?
 
 6. Benchmark and public peer model-family transfer
-- Discover legacy-peer and public-peer artifacts from their component
+- Discover detected-misstatement peer and public-peer artifacts from their component
   directories, manifests, summaries, and schema tests. Do not treat this prompt
   as an exhaustive artifact list.
 - For each peer suite, check metrics, predictions, task status, mapping
@@ -273,19 +274,16 @@ Audit dimensions:
 - Check whether undersampling, class weights, calibration warnings, and Brier/ECE
   interpretation are documented under rare-event imbalance.
 - Check whether public peer transfer covers comment_thread, amendment, and
-  8k_402 while keeping aaer_proxy as high-severity status.
-- Check whether aaer_proxy is skipped or status-only with
-  severity_tail_sparse_not_headline, blocked_sparse, or an equally explicit
-  reason code.
+  8k_402 only.
 
 7. Bridge and construct-overlap validation
 - Discover bridge-probe and construct-overlap artifacts from manifests,
   summaries, blocker files, component directories, and docs artifact indexes.
 - Check bridge coverage, multiplicity, unmatched diagnostics, validation tier,
   overlap sample flow, overlap panel grain, bridge confidence tiers, aggregation
-  sensitivity, label contingency/lift, public-score-to-legacy ranking,
-  legacy-score-to-public ranking, top-decile lift, label co-occurrence,
-  event-time concentration, event-time coverage, AAER support, and res_an proxy
+  sensitivity, label contingency/lift, public-score-to-benchmark ranking,
+  benchmark-score-to-public ranking, top-decile lift, label co-occurrence,
+  event-time concentration, event-time coverage, and res_an proxy
   coverage when those outputs are implemented.
 - Check opacity-refresh outputs separately from construct-overlap outputs.
   Missing opacity artifacts should be reported as a refresh blocker rather than
@@ -296,15 +294,13 @@ Audit dimensions:
   aggregation grain. State whether the primary overlap result is annual-primary,
   origin-level, or max-score/max-label aggregated, and require an aggregation
   sensitivity output when multiple public-origin rows can map to one annual
-  legacy row.
+  benchmark row.
 - Check whether overlap claims are limited to related-but-non-identical
   constructs.
 - Check whether amendment and 8-K Item 4.02 evidence are separated from the
   broader comment-letter signal.
-- Check whether aaer_proxy_730 sparsity is interpreted correctly: lack of public
-  AAER proxy positives is not evidence that legacy positives have no AAER
-  relation; farr AAER support is a separate high-severity check.
-- Check whether candidate_farr is clearly labeled as not WRDS-verified.
+- Check whether stale AAER outputs are excluded from current results and
+  manuscript claims.
 
 8. Public Data Utilization Audit
 - Before recommending external data, check whether public SEC/PCAOB sources are
@@ -364,7 +360,7 @@ Audit dimensions:
 - Does README.md describe the current command surface without duplicating stale
   paper-plan text?
 - Does docs/paper_plan.md Design Overview match the implemented computation
-  flow, including legacy/public X/Y, time spans, out-of-time splits, peer
+  flow, including benchmark/public X/Y, time spans, out-of-time splits, peer
   suites, metrics, DML, and bridge validation?
 - Does docs/results_snapshot.md Evidence Map describe the current artifact state
   rather than only the intended design?
@@ -440,7 +436,7 @@ Then provide:
   empirical sufficiency, and paper-readiness; mark each as supported, partial,
   unsupported, or not_auditable_locally, and cite the exact artifact, test,
   config, or code path
-- one component status table covering benchmark, public cascade, legacy peer,
+- one component status table covering benchmark, public cascade, detected-misstatement peer,
   public peer, bridge probe, construct overlap, opacity refresh, docs, and tests
 - a short public-source utilization note, focused only on sources that affect the
   findings
@@ -452,12 +448,13 @@ Then provide:
 Constraints:
 - Do not edit files unless explicitly asked.
 - Do not invent data availability.
-- Do not treat absence of WRDS or Audit Analytics as a code bug.
+- Do not treat absence of Audit Analytics or other unprovided paid databases as
+  a code bug.
 - Do not recommend paid data as required for the current v1 paper.
 - Do not recommend LLM/GNN or multimodal extensions until the benchmark, public
   cascade, XBRL ratios, peer-transfer evidence, and bridge/construct-overlap
   gates are stable.
-- Do not present farr candidate validation as WRDS-quality validation.
+- Do not present historical farr bridge diagnostics as WRDS-quality validation.
 - Do not use vague phrases such as "robust evidence" unless you say which
   artifact supports it.
 - Keep the tone direct and technical. Avoid sales language and generic praise.

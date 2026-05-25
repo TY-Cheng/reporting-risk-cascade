@@ -1,6 +1,6 @@
 """Public-label peer-compatible model-family transfer.
 
-This module transfers the legacy peer model-family comparison language to
+This module transfers detected-misstatement peer benchmark language to
 filing-origin public review-and-correction labels.
 """
 
@@ -52,7 +52,7 @@ SCHEMA_VERSION = "public-peer-comparison-pr2-v1"
 SPEC_VERSION = "2026-04-26-pr2-public-label-peer-transfer"
 PUBLIC_FEATURE_SETS = ["metadata", "xbrl", "auditor", "oversight", "all"]
 HEADLINE_TASKS = ["comment_thread", "amendment", "8k_402"]
-SEVERITY_TAIL_TASKS = ["aaer_proxy"]
+SEVERITY_TAIL_TASKS: list[str] = []
 PUBLIC_INPUT_KIND = "public_issuer_origin"
 
 PUBLIC_MAPPING_COLUMNS = [
@@ -744,7 +744,7 @@ def _summary_markdown(
         "",
         "- Scope: public-label peer-compatible model-family transfer.",
         "- This is not same-estimand performance-ranking evidence against prior fraud papers.",
-        "- `aaer_proxy` is status-only high-severity enforcement support.",
+        "- AAER is excluded from the public-label peer suite.",
         f"- Mode: `{mode}`",
         "",
         "## Status Counts",

@@ -117,11 +117,11 @@ task name="study" dataset="raw" out_dir="" extra="": _check-data-env
         benchmark|cascade|bridge|study) \
             just _analysis "{{ name }}" "{{ dataset }}" "{{ out_dir }}" "$task_extra"; \
             ;; \
-        sec-bulk|submissions|companyfacts|fsds|notes|comment-letters|aaer|form-ap|pcaob-inspections|insider|13f|edgar-logs|market-structure|build-lake) \
+        sec-bulk|submissions|companyfacts|fsds|notes|comment-letters|form-ap|pcaob-inspections|insider|13f|edgar-logs|market-structure|build-lake) \
             just _fetch "{{ name }}" "$task_extra"; \
             ;; \
         *) \
-            echo "task must be one of: prep, benchmark, cascade, bridge, study, sec-bulk, submissions, companyfacts, fsds, notes, comment-letters, aaer, form-ap, pcaob-inspections, insider, 13f, edgar-logs, market-structure, build-lake"; \
+            echo "task must be one of: prep, benchmark, cascade, bridge, study, sec-bulk, submissions, companyfacts, fsds, notes, comment-letters, form-ap, pcaob-inspections, insider, 13f, edgar-logs, market-structure, build-lake"; \
             exit 1; \
             ;; \
     esac
@@ -371,7 +371,7 @@ full *args: _check-data-env
     uv run python scripts/convert_raw_dataset.py; \
     if [ "$dataset" = "raw" ] && [ ! -f "$raw_dataset_path" ]; then \
         echo "$raw_dataset_path is required for dataset=raw"; \
-        echo "Expected ${DATA_DIR}/raw_dataset_misstatement.csv, ${DATA_DIR}/raw_dataset_misstatement.zip, ${DATA_DIR}/raw/raw_dataset_misstatement.csv, ${DATA_DIR}/raw/raw_dataset_misstatement.zip, or ${DATA_DIR}/external/raw_dataset_misstatement.zip as a materialization source."; \
+        echo "Expected ${DATA_DIR}/raw_dataset_misstatement.csv, ${DATA_DIR}/raw_dataset_misstatement.zip, ${DATA_DIR}/raw/raw_dataset_misstatement.csv, or ${DATA_DIR}/raw/raw_dataset_misstatement.zip as a materialization source."; \
         exit 1; \
     fi; \
     if [ "$dataset" = "sample" ]; then \

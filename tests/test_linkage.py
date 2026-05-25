@@ -122,15 +122,13 @@ def test_raw_primary_external_supplement_uses_external_only_for_missing_gvkey_ye
     ]
 
 
-def test_build_raw_primary_linkage_writes_combined_and_public_overlap(tmp_path: Path) -> None:
+def test_build_raw_primary_linkage_writes_raw_only_and_public_overlap(tmp_path: Path) -> None:
     raw_link_path = tmp_path / "CIK-GVKEY Link Table.csv"
-    external_path = tmp_path / "gvkey_cik_year.csv"
     raw_data_path = tmp_path / "raw_dataset_misstatement.parquet"
     full_panel = tmp_path / "public_lake" / "gold" / "issuer_origin_panel.parquet"
     smoke_panel = tmp_path / "public_lake_smoke" / "gold" / "issuer_origin_panel.parquet"
 
     _raw_links().to_csv(raw_link_path, index=False)
-    _external_crosswalk().to_csv(external_path, index=False)
     write_table(_raw_data(), raw_data_path)
     write_table(
         pd.DataFrame(
@@ -148,25 +146,24 @@ def test_build_raw_primary_linkage_writes_combined_and_public_overlap(tmp_path: 
 
     result = build_raw_primary_linkage(
         raw_link_path=raw_link_path,
-        external_crosswalk_path=external_path,
         raw_data_path=raw_data_path,
-        out_dir=tmp_path / "linkage" / "raw_primary_external_supplement",
+        out_dir=tmp_path / "linkage" / "raw_only",
         public_lake_panel_path=full_panel,
         public_lake_smoke_panel_path=smoke_panel,
         extracted_at="2026-05-25T00:00:00Z",
     )
 
     combined = pd.read_csv(result.combined_path)
-    assert len(combined) == 3
-    assert result.summary["raw_benchmark_coverage"]["combined_covered_rows"] == 3
+    assert len(combined) == 2
+    assert result.summary["raw_benchmark_coverage"]["combined_covered_rows"] == 2
     assert result.summary["raw_benchmark_coverage"]["raw_primary_covered_rows"] == 2
-    assert result.summary["conflicts"]["raw_benchmark_conflict_rows"] == 1
-    assert result.summary["conflicts"]["raw_benchmark_positive_conflict_rows"] == 1
-    assert result.summary["public_lake"]["overlap_rows"] == 2
-    assert result.summary["public_lake"]["raw_benchmark_overlap_rows"] == 2
+    assert result.summary["conflicts"]["raw_benchmark_conflict_rows"] == 0
+    assert result.summary["conflicts"]["raw_benchmark_positive_conflict_rows"] == 0
+    assert result.summary["public_lake"]["overlap_rows"] == 1
+    assert result.summary["public_lake"]["raw_benchmark_overlap_rows"] == 1
     assert result.summary["public_lake"]["raw_benchmark_positive_overlap_rows"] == 1
-    assert result.summary["public_lake_smoke"]["overlap_rows"] == 1
-    assert result.summary["public_lake_smoke"]["raw_benchmark_overlap_rows"] == 1
+    assert result.summary["public_lake_smoke"]["overlap_rows"] == 0
+    assert result.summary["public_lake_smoke"]["raw_benchmark_overlap_rows"] == 0
     assert (result.out_dir / "public_lake" / "gvkey_cik_year_public_overlap.csv").exists()
     assert (result.out_dir / "public_lake_smoke" / "gvkey_cik_year_public_overlap.csv").exists()
 
