@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.construct_overlap import (
+    _bridge_evidence_from_crosswalk,
     _ranking_metrics,
     run_construct_overlap,
 )
@@ -387,6 +388,53 @@ def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance
     assert "WRDS-validated bridge sample" in summary
     study_manifest = json.loads((study / "study_run_manifest.json").read_text(encoding="utf-8"))
     assert study_manifest["components"]["construct_overlap"]["validation_tier"] == "wrds_validated"
+
+
+def test_raw_compustat_link_provenance_is_not_wrds_validated(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "raw_crosswalk.csv"
+    pd.DataFrame(
+        [
+            {
+                "gvkey": "1000",
+                "data_year": 2018,
+                "issuer_cik": "0000320000",
+                "source": "raw_cik_gvkey:compustat_company",
+                "match_method": "raw_cik_gvkey_intersection",
+            }
+        ]
+    ).to_csv(crosswalk, index=False)
+
+    evidence = _bridge_evidence_from_crosswalk(crosswalk)
+
+    assert evidence["bridge_source"] == "raw_primary_cik_gvkey_link"
+    assert evidence["validation_tier"] == "candidate_external"
+
+
+def test_raw_primary_farr_supplement_reports_candidate_mixed_source(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "mixed_crosswalk.csv"
+    pd.DataFrame(
+        [
+            {
+                "gvkey": "1000",
+                "data_year": 2018,
+                "issuer_cik": "0000320000",
+                "source": "raw_cik_gvkey:compustat_company",
+                "match_method": "raw_cik_gvkey_intersection",
+            },
+            {
+                "gvkey": "1001",
+                "data_year": 2018,
+                "issuer_cik": "0000320001",
+                "source": "farr_gvkey_ciks",
+                "match_method": "farr_gvkey_ciks_date_range",
+            },
+        ]
+    ).to_csv(crosswalk, index=False)
+
+    evidence = _bridge_evidence_from_crosswalk(crosswalk)
+
+    assert evidence["bridge_source"] == "raw_primary_farr_supplement"
+    assert evidence["validation_tier"] == "candidate_mixed"
 
 
 def test_construct_overlap_missing_opacity_writes_blocker_without_failing(tmp_path: Path) -> None:

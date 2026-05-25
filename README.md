@@ -26,6 +26,7 @@ AAER high-severity enforcement indicators.
 Documentation site: [Reporting Risk Cascade](https://ty-cheng.github.io/reporting-risk-cascade/).
 The detailed research design is in [Paper Plan](https://ty-cheng.github.io/reporting-risk-cascade/paper_plan/).
 The static run interpretation is in [Results Snapshot](https://ty-cheng.github.io/reporting-risk-cascade/results_snapshot/).
+The cross-audience design FAQ is in [FAQ](https://ty-cheng.github.io/reporting-risk-cascade/faq/).
 Deferred extensions are in [Future Work](https://ty-cheng.github.io/reporting-risk-cascade/future_work/).
 
 ## Public Review-and-Correction Labels
@@ -66,11 +67,12 @@ just setup
 just status
 ```
 
-This checkout should not contain a repo-local `data/` directory or symlink.
-Data engineering paths come from `.env`: `DATA_DIR` holds raw/public-lake data,
-and `ARTIFACTS_DIR` holds generated outputs, sample panels, logs, and run
-reports. `ARTIFACTS_DIR` can be repo-local `artifacts/` because it is small and
-gitignored; `DATA_DIR` should stay external.
+This checkout may contain a gitignored repo-local `data` symlink that points to
+the external data root for interactive browsing. Data engineering paths still
+come from `.env`: `DATA_DIR` holds raw/public-lake data, and `ARTIFACTS_DIR`
+holds generated outputs, sample panels, logs, and run reports. `ARTIFACTS_DIR`
+can be repo-local `artifacts/` because it is small and gitignored; `DATA_DIR`
+should stay external.
 For direct shell commands that use `$DATA_DIR` or `$ARTIFACTS_DIR`, source the
 local environment first with `set -a; source .env; set +a`.
 

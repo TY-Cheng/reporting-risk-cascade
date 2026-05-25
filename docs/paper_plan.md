@@ -3,18 +3,23 @@ hide:
   - navigation
 ---
 
-# Research Design
+# Manuscript Skeleton
 
 Working title:
 
 **From Restatements to Public Review and Correction: Label Observability and the Public Reporting-Risk Cascade**
 
+## Introduction
+
+### Overview and Why This Work
+
 - **Research setting.** Traditional misstatement and restatement benchmarks label firm-years after misconduct is detected, disclosed, or made publicly visible.
 - **Measurement problem.** These labels are useful, but they mix the underlying reporting problem with discovery probability, disclosure delay, and selective public observability.
 - **Empirical object.** The paper studies a filing-native public reporting-risk cascade built from SEC and PCAOB data.
 - **Primary target.** The cascade measures public review-and-correction outcomes from the filing origin, not unobserved fraud occurrence.
+- **Why this work.** Users of reporting-risk models need signals that are aligned with the public information set available when a filing is made. A filing-origin design is closer to the decision problem than an ex post detected-misstatement label alone.
 
-## Research Question and Contribution
+### Research Question and Contribution
 
 - **Core question.** Can reporting-risk prediction be reframed from ex post detected misconduct to filing-origin public review-and-correction risk?
 - **Timing contamination.** Static detected-misstatement labels mix occurrence, discovery, disclosure lag, and public visibility.
@@ -25,7 +30,54 @@ Working title:
 - **Model-family boundary.** The legacy benchmark suite and the public-label transfer suite use the same Dechow, Perols, Bao, and Bertomeu model-family vocabulary. Mapping quality determines whether Dechow/Bao adapters can use stronger names or must be reported as mapped or inspired variants. Public peer transfer runs only in `full` mode so the default workflow stays bounded.
 - **Evidence requirement.** Credible bridge-based overlap validation is required before any integrated old-benchmark/public-cascade claim.
 
-### Design Overview
+### Research Gap
+
+- **Gap 1: outcome observability.** Existing detected-misstatement and fraud-prediction studies typically evaluate labels observed after detection and disclosure. They do not isolate whether a filing-year model is predicting underlying misconduct, later discovery, public disclosure, or enforcement visibility.
+- **Gap 2: public review process.** SEC comment-letter and disclosure-review studies establish that public scrutiny is economically meaningful, but they usually do not build a multi-outcome, filing-origin prediction cascade from public SEC/PCAOB data.
+- **Gap 3: comparable but different targets.** Hidden-misconduct and partial-observability papers motivate separating occurrence and detection. They are construct anchors, not PR-AUC comparators for the public filing-origin target.
+- **Gap 4: reproducible bridge evidence.** The legacy benchmark uses `gvkey x data_year`; the public cascade uses `issuer_cik x fiscal_year x origin_date`. An integrated claim requires a documented gvkey-CIK-year bridge with coverage, multiplicity, conflict, and overlap diagnostics.
+
+### Sellable Thesis
+
+- **Sell.** The paper sells a measurement-and-ranking framework for public reporting-risk states. The contribution is a public, filing-origin outcome system and a transparent comparison to legacy detected-misstatement benchmarks.
+- **Not the sell.** The paper does not sell an unobserved-fraud detector, a causal enforcement model, or a same-estimand performance ranking against prior fraud-prediction papers.
+
+## Literature and Research Gap
+
+### Literature Streams and Existing Results
+
+- **Literature role.** Prior work supplies model families, performance metrics, and construct anchors.
+- **Estimand shift.** Prior fraud and restatement studies often predict detected ex post misconduct labels; this paper predicts subsequent public review-and-correction events from a filing-origin information set.
+- **Metric-compatible comparison.** Metric-compatible comparison is evidence about ranking behavior under a shared scoring language, not evidence that the tasks share the same estimand.
+
+| Stream | Canonical anchors | Typical models and metrics | Role in this paper |
+| --- | --- | --- | --- |
+| Detected misstatement and fraud prediction | [Dechow, Ge, Larson, and Sloan (2011)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=997483); [Perols (2011)](https://doi.org/10.2308/ajpt-50009); [Bao, Ke, Li, Yu, and Zhang (2020)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2670703); [Bertomeu, Cheynel, Floyd, and Pan (2021)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3496297), "Using Machine Learning to Detect Misstatements" | Logistic/F-score models, SVM, decision trees, bagging, stacking, neural nets, and tree ensembles; AUC, classification rates, lift, variable importance, and top-fraction ranking metrics | Supplies the benchmark peer suite: Dechow-style scores, a Perols-style legacy model zoo, Bao-style top-fraction balanced accuracy and NDCG, and Bertomeu-style XGBoost feature importance. |
+| Partial observability and hidden misconduct | [Barton, Burnett, Gunny, and Miller (2024)](https://pubsonline.informs.org/doi/10.1287/mnsc.2022.4627); [Dyck, Morse, and Zingales (2024)](https://link.springer.com/article/10.1007/s11142-022-09738-5) | Occurrence/detection separation, hidden misconduct estimation, likelihood and coefficient evidence | Motivates the estimand shift; these models are not PR-AUC comparators for the current design. |
+| SEC comment-letter and disclosure-review research | [Cassell, Cunningham, and Myers (2013)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1951445); [Bozanic, Dietrich, and Johnson (2018)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2989164); [Brown, Tian, and Tucker (2018)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2551451); the [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) | Regression-style evidence on comment receipt, remediation, and disclosure response | Establishes public comment-letter scrutiny as economically meaningful; this paper embeds it as one public-cascade outcome rather than the sole endpoint. This stream supplies regression-style evidence rather than direct ranking-score comparators. |
+| Public regulatory and structured-data sources | [SEC Item 4.02 guidance](https://www.sec.gov/about/divisions-offices/division-corporation-finance/financial-reporting-manual/frm-topic-4); [SEC AAER pages](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases); [PCAOB Form AP](https://pcaobus.org/oversight/standards/implementation-resources-PCAOB-standards-rules/form-ap-auditor-reporting-certain-audit-participants); [SEC Inline eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl) | Public filing events, audit-participant data, oversight data, and standardized financial facts | Supplies the filing-native public lake and reproducible feature construction. AAER is a rare high-severity enforcement indicator, not a complete enforcement universe. |
+
+### Positioning Against Existing Results
+
+- **Positioning.** The paper aligns the prediction target to the observable public process.
+- **Benchmark role.** The legacy benchmark remains a disciplined diagnostic for timing sensitivity, label observability, concept drift, and missingness.
+- **Overlap role.** The bridge tests where the public cascade agrees or disagrees with detected-misstatement labels.
+- **What prior results can support.** The prior literature supports the model-family vocabulary, the importance of hidden detection, the economic relevance of SEC review, and the use of ranking/calibration metrics.
+- **What prior results cannot support.** Prior results do not make public review-and-correction labels equivalent to fraud, and they do not make the public cascade a same-estimand benchmark against detected-misstatement classifiers.
+
+## Data and Sample Construction
+
+### Reproduction Inputs
+
+- **Operational inputs.** A reproducible run needs the legacy benchmark file, the public SEC/PCAOB lake configuration, and the optional bridge/support exports:
+    - `$DATA_DIR/raw/raw_dataset_misstatement.parquet` for the legacy `gvkey x data_year` benchmark.
+    - `config/public_data.yaml` and `config/study.yaml` for public-source and study defaults.
+    - `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv` for bridge validation, generated from raw CIK-GVKEY links first and supplemented by the external bridge.
+    - `$DATA_DIR/external/farr_aaer_firm_year.csv`, `$DATA_DIR/external/farr_aaer_dates.csv`, and `$DATA_DIR/external/farr_state_hq.csv` for AAER and headquarters-state support.
+- **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-04-23`.
+- **Peer and overlap run.** The peer-enabled study is a separate run so the default workflow stays bounded.
+
+### Data Engineering and Preprocessing Overview
 
 ```mermaid
 flowchart LR
@@ -66,100 +118,20 @@ flowchart LR
     end
 
     subgraph VALIDATION["Bridge and interpretation layer"]
-        V0["Bridge gate<br/>gvkey-CIK-year crosswalk<br/>farr candidate bridge now available<br/>WRDS-quality bridge preferred for final validation"]
-        V1["Construct-overlap checks<br/>matched 2011-2019 old/public sample<br/>legacy labels vs public labels<br/>public scores rank legacy positives<br/>legacy scores rank public labels<br/>event-time concentration and AAER high-severity support"]
-        V2["Final claim boundary<br/>public cascade is related to,<br/>but not identical with,<br/>legacy detected-misstatement labels<br/>candidate validation until WRDS-equivalent bridge"]
-        V3["If bridge validation is incomplete<br/>report public-cascade measurement result<br/>without unobserved-fraud or same-estimand performance claim"]
+        V0["Bridge gate<br/>raw-primary gvkey-CIK-year crosswalk<br/>raw CIK-GVKEY link table wins for covered years<br/>farr external bridge supplements missing years<br/>WRDS-quality bridge preferred for final validation"]
+        V1["Linkage QA<br/>coverage, multiplicity, unmatched rows,<br/>raw-external CIK conflicts,<br/>public_lake and public_lake_smoke overlap summaries<br/>before any construct-overlap claim"]
+        V2["Construct-overlap checks<br/>matched 2011-2019 old/public sample<br/>legacy labels vs public labels<br/>public scores rank legacy positives<br/>legacy scores rank public labels<br/>event-time concentration and AAER high-severity support"]
+        V3["Final claim boundary<br/>public cascade is related to,<br/>but not identical with,<br/>legacy detected-misstatement labels<br/>current tier: candidate_mixed<br/>until WRDS-equivalent bridge"]
+        V4["If bridge validation is incomplete<br/>report public-cascade measurement result<br/>without unobserved-fraud or same-estimand performance claim"]
         V0 --> V1
         V1 --> V2
-        V0 -.-> V3
+        V2 --> V3
+        V0 -.-> V4
     end
 
     L5 --> V0
     P7 --> V0
     P8 --> V0
-```
-
-## Prior Literature and Positioning
-
-- **Literature role.** Prior work supplies model families, performance metrics, and construct anchors.
-- **Estimand shift.** Prior fraud and restatement studies often predict detected ex post misconduct labels; this paper predicts subsequent public review-and-correction events from a filing-origin information set.
-- **Metric-compatible comparison.** Metric-compatible comparison is evidence about ranking behavior under a shared scoring language, not evidence that the tasks share the same estimand.
-
-| Stream | Canonical anchors | Typical models and metrics | Role in this paper |
-| --- | --- | --- | --- |
-| Detected misstatement and fraud prediction | [Dechow, Ge, Larson, and Sloan (2011)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=997483); [Perols (2011)](https://doi.org/10.2308/ajpt-50009); [Bao, Ke, Li, Yu, and Zhang (2020)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2670703); [Bertomeu, Cheynel, Floyd, and Pan (2021)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3496297), "Using Machine Learning to Detect Misstatements" | Logistic/F-score models, SVM, decision trees, bagging, stacking, neural nets, and tree ensembles; AUC, classification rates, lift, variable importance, and top-fraction ranking metrics | Supplies the benchmark peer suite: Dechow-style scores, a Perols-style legacy model zoo, Bao-style top-fraction balanced accuracy and NDCG, and Bertomeu-style XGBoost feature importance. |
-| Partial observability and hidden misconduct | [Barton, Burnett, Gunny, and Miller (2024)](https://pubsonline.informs.org/doi/10.1287/mnsc.2022.4627); [Dyck, Morse, and Zingales (2024)](https://link.springer.com/article/10.1007/s11142-022-09738-5) | Occurrence/detection separation, hidden misconduct estimation, likelihood and coefficient evidence | Motivates the estimand shift; these models are not PR-AUC comparators for the current design. |
-| SEC comment-letter and disclosure-review research | [Cassell, Cunningham, and Myers (2013)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1951445); [Bozanic, Dietrich, and Johnson (2018)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2989164); [Brown, Tian, and Tucker (2018)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2551451); the [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) | Regression-style evidence on comment receipt, remediation, and disclosure response | Establishes public comment-letter scrutiny as economically meaningful; this paper embeds it as one public-cascade outcome rather than the sole endpoint. This stream supplies regression-style evidence rather than direct ranking-score comparators. |
-| Public regulatory and structured-data sources | [SEC Item 4.02 guidance](https://www.sec.gov/about/divisions-offices/division-corporation-finance/financial-reporting-manual/frm-topic-4); [SEC AAER pages](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases); [PCAOB Form AP](https://pcaobus.org/oversight/standards/implementation-resources-PCAOB-standards-rules/form-ap-auditor-reporting-certain-audit-participants); [SEC Inline eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl) | Public filing events, audit-participant data, oversight data, and standardized financial facts | Supplies the filing-native public lake and reproducible feature construction. AAER is a rare high-severity enforcement indicator, not a complete enforcement universe. |
-
-- **Positioning.** The paper aligns the prediction target to the observable public process.
-- **Benchmark role.** The legacy benchmark remains a disciplined diagnostic for timing sensitivity, label observability, concept drift, and missingness.
-- **Overlap role.** The bridge tests where the public cascade agrees or disagrees with detected-misstatement labels.
-
-## Measurement Design
-
-### Legacy Benchmark Labels
-
-- **Unit.** The legacy benchmark panel uses `gvkey`, `data_year`, and `misstatement firm-year`.
-- **Purpose.** It tests whether traditional restatement prediction is sensitive to timing, drift, and missingness.
-- **Label modes.**
-  - `naive`: the observed `misstatement firm-year` label without detection-timing adjustment.
-  - `proxy_drop_observed`: a coverage stress test using sparse same-row `res_an*` timing proxies, excluding positives without usable timing evidence.
-  - `proxy_imputed_lag`: a timing-assumption grid assigning unknown positives one-, two-, three-, or five-year detection lags.
-  - `external_timing`: the paper-grade benchmark maturation target, available only if validated public restatement or detection dates are supplied.
-- **Leakage rule.** `res_an0`, `res_an1`, `res_an2`, and `res_an3` are timing proxies only and never enter predictors.
-- **Required reporting.** `timing_coverage.csv` must report same-row timing coverage, unknown positives, retained-positive share, and class-balance changes.
-
-### Public Review-and-Correction Labels
-
-- **Outcome design.** The public cascade is a multi-label outcome system, not a deterministic hierarchy.
-- **Public labels.**
-  - `label_comment_thread_365`: public comment-letter scrutiny, measured from the first public EDGAR date of the comment-thread sequence; source: [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) and public EDGAR correspondence.
-  - `label_amendment_365`: broad amendment/friction signal, including administrative amendments, filing friction, and potentially material corrections; source: [SEC EDGAR filing access](https://www.sec.gov/edgar/search-and-access) and amended filing form metadata.
-  - `label_8k_402_365`: Item 4.02 non-reliance and material-correction proxy; source: [SEC Form 8-K](https://www.sec.gov/files/form8-k.pdf), Item 4.02.
-  - `label_aaer_proxy_730`: rare high-severity AAER indicator, fit only as robustness when positives are sufficient; source: [SEC Accounting and Auditing Enforcement Releases](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) and `farr::aaer_*` support data.
-- **Co-occurrence rule.** A later-stage positive does not mechanically force an earlier-stage label.
-- **Construct meaning.** These labels are not alternative names for fraud. They are public observability states: regulatory scrutiny (`comment_thread`), filing correction or friction (`amendment`), material non-reliance (`8k_402`), and rare public enforcement-tail evidence (`aaer_proxy`).
-- **Target distinction.** The target is public review-and-correction risk rather than unobserved fraud occurrence.
-
-### Timing and Censoring Rules
-
-- **Origin date.** In the current v1 panel, `filing_origin_panel.origin_date = filing_date`, and `issuer_origin_panel.origin_date` is the selected annual filing date for the issuer-year.
-- **No post-origin leakage.** No event released after `origin_date` may enter predictors.
-- **Excluded coverage fields.** `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` document source availability and public vintages but are excluded from default predictors.
-- **Censoring.** 365-day outcomes use `censored_365`; AAER 730-day robustness uses `censored_730`.
-
-### Claim Boundaries
-
-> The public-cascade design supports evidence about a public reporting-risk state. It does not by itself identify unobserved fraud occurrence, causal effects, or a stable enforcement-prediction result.
-
-> Comment letters are public scrutiny signals, not the full SEC review universe. AAER is a rare high-severity enforcement indicator, not a complete enforcement universe.
-
-> Bridge validation is mandatory for an integrated claim that the public cascade and the legacy benchmark measure related but non-identical constructs. Without that validation, the public-cascade result remains a public-data measurement result rather than a validated fraud/restatement overlap paper.
-
-## Data and Feature Construction
-
-### Reproduction Inputs
-
-- **Operational inputs.** A reproducible run needs the legacy benchmark file, the public SEC/PCAOB lake configuration, and the optional bridge/support exports:
-  - `$DATA_DIR/raw/raw_dataset_misstatement.parquet` for the legacy `gvkey x data_year` benchmark.
-  - `config/public_data.yaml` and `config/study.yaml` for public-source and study defaults.
-  - `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv` for bridge validation, generated from raw CIK-GVKEY links first and supplemented by the external bridge.
-  - `$DATA_DIR/external/farr_aaer_firm_year.csv`, `$DATA_DIR/external/farr_aaer_dates.csv`, and `$DATA_DIR/external/farr_state_hq.csv` for AAER and headquarters-state support.
-- **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-04-23`. The stable full command is:
-
-```bash
-just full mode=full dataset=raw
-```
-
-- **Peer and overlap run.** The peer-enabled study is a separate run so the default workflow stays bounded:
-
-```bash
-just task study raw artifacts/full_with_peer \
-  extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
-just snapshot
-just manuscript
 ```
 
 ### Legacy Benchmark Panel
@@ -169,11 +141,6 @@ just manuscript
 - **Coverage.** 2001-2019.
 - **Required fields.** `gvkey`, `data_year`, `misstatement firm-year`, `res_an0` to `res_an3`, `missing_*` flags, and accounting/audit/governance/market/industry predictors.
 - **Predictor surface.** Legacy predictors are the engineered benchmark columns already present in the raw benchmark panel. `gvkey`, `data_year`, target columns, timing proxy columns, missingness labels, and post-outcome fields are not treated as ordinary predictors.
-- **Label construction.** The benchmark label modes are constructed from `misstatement firm-year` and timing proxy availability:
-  - `naive`: the final detected-misstatement indicator.
-  - `proxy_drop_observed`: positives without usable same-row `res_an*` timing evidence are excluded from proxy-visible positives.
-  - `proxy_imputed_lag`: unknown positive timing is shifted by a one-, two-, three-, or five-year assumed detection lag.
-  - `external_timing`: reserved for validated restatement or detection dates when supplied.
 - **Evaluation grain.** All benchmark prediction rows remain annual firm-year rows evaluated by out-of-time test year.
 - **Limitation.** No CIK, ticker, PERMNO, restatement filing date, detector identity, or complete public filing history.
 
@@ -188,26 +155,32 @@ just manuscript
 - **Required v1 sources.** SEC submissions, SEC Financial Statement Data Sets (FSDS), SEC `UPLOAD` and `CORRESP`, 10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, PCAOB inspection datasets, and SEC AAER pages.
 - **Main public sample.** Domestic U.S. GAAP issuer-years from 2011-2023, with `2026-04-23` as the current reproducibility as-of date.
 - **Source-to-table mapping.**
-  - SEC submissions and filing index data form `filing_dim.parquet`, `issuer_dim.parquet`, `filing_origin_panel.parquet`, and the annual `issuer_origin_panel.parquet`.
-  - FSDS/XBRL `sub` and `num` files form `filing_xbrl_dim.parquet`, `xbrl_fact_summary.parquet`, and `xbrl_core_fact/`.
-  - SEC Notes are normalized in summary mode into `notes_filing_dim.parquet` and `note_summary.parquet`; raw text blobs are not part of the default paper-facing run.
-  - SEC `UPLOAD` and `CORRESP` produce `comment_thread.csv.gz` with first public correspondence dates.
-  - 10-K/A and 10-Q/A filings, explanatory notes, and form-level filters produce `correction_event.csv.gz` and `amendment_annotation.csv.gz`.
-  - 8-K Item 4.02 parsing produces `issuer_8k_item_event.csv.gz`.
-  - PCAOB Form AP and inspection sources produce auditor and oversight features in the Silver/Gold panels.
-  - SEC AAER pages and farr AAER support produce high-severity event tables; these are support evidence, not a complete enforcement universe.
-- **Origin-date rule.** `filing_origin_panel.origin_date = filing_date`. `issuer_origin_panel.origin_date` is the selected annual filing date for the issuer-year. All public prediction features must be observed at or before this date.
+    - SEC submissions and filing index data form `filing_dim.parquet`, `issuer_dim.parquet`, `filing_origin_panel.parquet`, and the annual `issuer_origin_panel.parquet`.
+    - FSDS/XBRL `sub` and `num` files form `filing_xbrl_dim.parquet`, `xbrl_fact_summary.parquet`, and `xbrl_core_fact/`.
+    - SEC Notes are normalized in summary mode into `notes_filing_dim.parquet` and `note_summary.parquet`; raw text blobs are not part of the default paper-facing run.
+    - SEC `UPLOAD` and `CORRESP` produce `comment_thread.csv.gz` with first public correspondence dates.
+    - 10-K/A and 10-Q/A filings, explanatory notes, and form-level filters produce `correction_event.csv.gz` and `amendment_annotation.csv.gz`.
+    - 8-K Item 4.02 parsing produces `issuer_8k_item_event.csv.gz`.
+    - PCAOB Form AP and inspection sources produce auditor and oversight features in the Silver/Gold panels.
+    - SEC AAER pages and farr AAER support produce high-severity event tables; these are support evidence, not a complete enforcement universe.
 
-### Public Labels and Censoring
+### Public Review-and-Correction Labels
 
 - **Public-label grain.** Public labels are attached to the annual `issuer_cik x fiscal_year x origin_date` issuer-year row.
+- **Outcome design.** The public cascade is a multi-label outcome system, not a deterministic hierarchy.
+- **Public labels.**
+    - `label_comment_thread_365`: public comment-letter scrutiny, measured from the first public EDGAR date of the comment-thread sequence; source: [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) and public EDGAR correspondence.
+    - `label_amendment_365`: broad amendment/friction signal, including administrative amendments, filing friction, and potentially material corrections; source: [SEC EDGAR filing access](https://www.sec.gov/edgar/search-and-access) and amended filing form metadata.
+    - `label_8k_402_365`: Item 4.02 non-reliance and material-correction proxy; source: [SEC Form 8-K](https://www.sec.gov/files/form8-k.pdf), Item 4.02.
+    - `label_aaer_proxy_730`: rare high-severity AAER indicator, fit only as robustness when positives are sufficient; source: [SEC Accounting and Auditing Enforcement Releases](https://www.sec.gov/enforcement-litigation/accounting-auditing-enforcement-releases) and `farr::aaer_*` support data.
 - **Forward horizons.**
-  - `label_comment_thread_365 = 1` if a public SEC comment-letter thread is first observed after `origin_date` and within 365 days.
-  - `label_amendment_365 = 1` if a qualifying amended-filing or correction/friction event appears after `origin_date` and within 365 days.
-  - `label_8k_402_365 = 1` if an 8-K Item 4.02 non-reliance event appears after `origin_date` and within 365 days.
-  - `label_aaer_proxy_730 = 1` if an AAER support event matches the issuer after `origin_date` and within 730 days.
-- **Censoring.** Horizon-specific censoring flags remove issuer-years whose outcome window extends beyond the as-of date. A 365-day label uses 365-day censoring; `aaer_proxy` uses 730-day censoring.
-- **AAER status.** AAER is retained as a high-severity enforcement descriptor or robustness signal only when positives are sufficient; sparse AAER folds are reported as blockers rather than headline model failures.
+    - `label_comment_thread_365 = 1` if a public SEC comment-letter thread is first observed after `origin_date` and within 365 days.
+    - `label_amendment_365 = 1` if a qualifying amended-filing or correction/friction event appears after `origin_date` and within 365 days.
+    - `label_8k_402_365 = 1` if an 8-K Item 4.02 non-reliance event appears after `origin_date` and within 365 days.
+    - `label_aaer_proxy_730 = 1` if an AAER support event matches the issuer after `origin_date` and within 730 days.
+- **Co-occurrence rule.** A later-stage positive does not mechanically force an earlier-stage label.
+- **Construct meaning.** These labels are not alternative names for fraud. They are public observability states: regulatory scrutiny (`comment_thread`), filing correction or friction (`amendment`), material non-reliance (`8k_402`), and rare public enforcement-tail evidence (`aaer_proxy`).
+- **Target distinction.** The target is public review-and-correction risk rather than unobserved fraud occurrence.
 
 ### Bridge and External Validation Inputs
 
@@ -215,6 +188,14 @@ just manuscript
 - **Required fields.** `gvkey`, `issuer_cik`, a single year or start/end years, and provenance fields such as source, version, extraction date, match method, and match score.
 - **Bridge grain.** Bridge validation maps legacy `gvkey x data_year` rows to public `issuer_cik x fiscal_year` rows. It must report coverage, multiplicity, high-confidence and ambiguous matches, and unmatched diagnostics before overlap evidence is interpreted.
 - **Raw-primary rule.** `raw/CIK-GVKEY Link Table.csv` is treated as the primary bridge source. The existing external bridge supplies only gvkey-years that raw does not cover. Disjoint raw/external CIK sets for the same gvkey-year are written to `gvkey_cik_year_conflicts.csv`.
+- **Public candidate route while WRDS access is pending.**
+
+```bash
+bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
+bash scripts/prepare_farr_support_data.sh --install-missing
+uv run python scripts/build_linkage_bridge.py
+```
+
 - **WRDS-preferred route.**
 
 ```bash
@@ -228,21 +209,13 @@ just task bridge raw artifacts/full_with_peer/bridge_probe
 uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
 ```
 
-- **Public candidate route while WRDS access is pending.**
-
-```bash
-bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
-bash scripts/prepare_farr_support_data.sh --install-missing
-uv run python scripts/build_linkage_bridge.py
-```
-
 - **Current candidate bridge.** The raw-primary bridge is the working candidate bridge. It uses raw CIK-GVKEY links first and `farr::gvkey_ciks` as the current external supplement; it must be reported with coverage, multiplicity, conflict, and public-overlap tables and should not be described as WRDS-verified.
-- **Validation tier.** Construct-overlap outputs infer `validation_tier` from normalized crosswalk provenance: farr exports remain `candidate_farr`, WRDS/Compustat provenance is `wrds_validated`, and mixed-source bridges remain candidate evidence.
+- **Validation tier.** Construct-overlap outputs infer `validation_tier` from normalized crosswalk provenance: farr exports remain `candidate_farr`, explicit WRDS provenance is `wrds_validated`, and mixed-source bridges remain candidate evidence. Raw CIK-GVKEY sources that mention Compustat are not treated as WRDS-validated unless the normalized crosswalk carries explicit WRDS provenance.
 - **AAER support.** `farr::aaer_firm_year` and `farr::aaer_dates` are external AAER validation anchors.
 - **Metadata support.** `farr::state_hq` is a date-bounded headquarters-state metadata control.
 - **Missing bridge behavior.** If no usable external crosswalk exists, the bridge probe must report `raw_identifier_blocker` rather than infer links from benchmark identifiers alone.
 
-### Feature Families
+### Preprocessing and Feature Construction
 
 - **Common sample rule.** Feature families use the same filtered issuer-year sample for fair ablations.
 - **Missing-value rule.** Tree models with native missing-value handling retain numeric `np.nan`; non-tree adapters use fold-internal imputation only when required.
@@ -254,12 +227,60 @@ uv run python scripts/build_linkage_bridge.py
 - **Note opacity.** Note count, note character count, note-tag coverage, and tag entropy as a disclosure breadth measure.
 - **Leakage exclusions.** `source_available_*`, `public_date_*`, `vintage_*`, `as_of_date`, accession identifiers, CIK/GVKEY identifiers, labels, censoring flags, and direct event-date fields document provenance and timing but are not default predictors.
 - **Fold-local transformations.** Imputation, scaling, and any model-specific preprocessing are fit inside the training fold and then applied to the held-out fiscal year.
-- **Public peer mapping.** Public peer transfer reuses Dechow/Perols/Bao/Bertomeu model-family language. Dechow and Bao labels are reported as fixed, mapped, or inspired variants according to mapping quality; public Bao transfer uses `public_issuer_origin` input and is therefore `bao_inspired_tree_ensemble`, not a Bao raw-accounting-number replication.
 - **Deferred extensions.** Proxy-governance content, SEC insider-pressure features, macro-vintage controls, auditor-firm public-status fields, and broader security/attention layers are useful extensions, not required for the current v1 paper claim.
 
-## Empirical Design
+### Timing, Censoring, and Sample Rules
 
-### Evaluation Metrics
+- **Origin date.** In the current v1 panel, `filing_origin_panel.origin_date = filing_date`, and `issuer_origin_panel.origin_date` is the selected annual filing date for the issuer-year.
+- **No post-origin leakage.** No event released after `origin_date` may enter predictors.
+- **Excluded coverage fields.** `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` document source availability and public vintages but are excluded from default predictors.
+- **Censoring.** Horizon-specific censoring flags remove issuer-years whose outcome window extends beyond the as-of date. A 365-day label uses 365-day censoring; `aaer_proxy` uses 730-day censoring.
+- **Split design.** Prediction experiments use annual out-of-time evaluation, not random cross-validation.
+- **Training windows.** For a given test year, training uses earlier years only, with expanding or rolling 5-, 7-, and 10-year windows.
+
+## Methods and Models
+
+### Measurement Design
+
+- **Legacy Benchmark Labels.** The legacy benchmark panel uses `gvkey`, `data_year`, and `misstatement firm-year`. It tests whether traditional restatement prediction is sensitive to timing, drift, and missingness.
+- **Label modes.**
+    - `naive`: the observed `misstatement firm-year` label without detection-timing adjustment.
+    - `proxy_drop_observed`: a coverage stress test using sparse same-row `res_an*` timing proxies, excluding positives without usable timing evidence.
+    - `proxy_imputed_lag`: a timing-assumption grid assigning unknown positives one-, two-, three-, or five-year detection lags.
+    - `external_timing`: the paper-grade benchmark maturation target, available only if validated public restatement or detection dates are supplied.
+- **Leakage rule.** `res_an0`, `res_an1`, `res_an2`, and `res_an3` are timing proxies only and never enter predictors.
+- **Required reporting.** `timing_coverage.csv` must report same-row timing coverage, unknown positives, retained-positive share, and class-balance changes.
+
+### Model Families
+
+| Component | Models | Inputs | Role |
+| --- | --- | --- | --- |
+| Legacy benchmark core | XGBoost classifier over engineered benchmark predictors | `raw_dataset_misstatement.parquet`, excluding ids, labels, `res_an*`, missingness labels, and post-outcome fields | Timing, drift, and missingness diagnostics on the legacy detected-misstatement label. |
+| Legacy peer suite | Dechow fixed and variable logit, Perols logit/tree/bagging/SVM/stacking/MLP, Bao-style or Bao-inspired ensemble, Bertomeu-style XGBoost | Same benchmark folds and repo-native variable mappings | Model-family transfer and metric-language compatibility, not original-paper numeric replication. |
+| Public cascade core | XGBoost classifier over metadata, XBRL, text/notes, auditor, oversight, and all-feature sets | `issuer_origin_panel` rows with pre-origin public features | Main filing-origin public review-and-correction prediction task. |
+| Public-label peer suite | Dechow variable/fixed mapped variants and Bao-inspired tree ensemble when mapping gates permit | Public issuer-origin feature families | Checks whether familiar model-family vocabularies transfer to the public-label task. |
+| Public-label opacity DML | Double / Debiased Machine Learning (DML) partially linear regressions with cross-fitted nuisance models | `missingness_density_score` and pre-origin controls | Adjusted association between opacity/missingness and public labels, not a causal effect. |
+| Construct-overlap layer | Contingency, top-decile lift, reciprocal ranking, event-time concentration, and AAER high-severity support checks | Raw-primary gvkey-CIK-year bridge, legacy predictions, public predictions | Tests related but non-identical construct evidence. |
+
+### Model Selection and Skip Rules
+
+- **Primary public model.** The public cascade reports XGBoost by feature family and training window because tree models handle nonlinear interactions and native missingness while keeping feature-family ablations interpretable.
+- **Peer models.** Peer suites are included to place results in Dechow, Perols, Bao, and Bertomeu-style model-family language. They are not treated as exact replications unless the variable mapping and sample gates support that claim.
+- **Public peer mapping.** Public peer transfer reuses Dechow/Perols/Bao/Bertomeu model-family language. Dechow and Bao labels are reported as fixed, mapped, or inspired variants according to mapping quality; public Bao transfer uses `public_issuer_origin` input and is therefore `bao_inspired_tree_ensemble`, not a Bao raw-accounting-number replication.
+- **Skip rule.** Skip task/family/window fits with one-class train or test labels.
+- **AAER rule.** AAER is retained as a high-severity enforcement descriptor or robustness signal only when positives are sufficient; sparse AAER folds are reported as blockers rather than headline model failures.
+
+## Evaluation Metrics
+
+### Metric Selection Criteria
+
+- **Primary criterion.** PR-AUC relative to prevalence is the first-read metric because the labels are rare and ranking useful public review-and-correction cases is the main empirical task.
+- **Discrimination criterion.** ROC-AUC is reported for compatibility with prior fraud-prediction studies, but it is not sufficient on its own in rare-event settings.
+- **Calibration criterion.** Brier score, Brier Skill Score, and expected calibration error are reported because risk scores should be interpretable as probabilities, not only rankings.
+- **Operational ranking criterion.** Top-50/100/200 precision and top-decile lift describe what a reviewer sees when inspecting the highest-risk issuer-years.
+- **Literature-comparability criterion.** Bao-style top-fraction precision, sensitivity, specificity, balanced accuracy, and binary-relevance NDCG@k are retained for model-family comparability.
+
+### Metric Definitions and Interpretation
 
 - **Predictive metrics.** PR-AUC, ROC-AUC, Brier score, Brier Skill Score, expected calibration error, top-50/100/200 precision, and Bao-style top-fraction metrics.
 - **Bao-style metrics.** Top-fraction precision, sensitivity, specificity, balanced accuracy, and binary-relevance NDCG@k.
@@ -267,9 +288,10 @@ uv run python scripts/build_linkage_bridge.py
 - **Prevalence.** `Prevalence` is the positive-class rate in the evaluated sample and the natural random-ranking baseline for PR-AUC.
 - **PR-AUC interpretation.** When positives are rare, a numerically small PR-AUC can still represent meaningful lift over the base rate.
 - **ROC-AUC contrast.** ROC-AUC has a fixed random baseline near 0.5 and can look much larger than PR-AUC in rare-event settings.
-- **Split design.** Prediction experiments use annual out-of-time evaluation, not random cross-validation.
-- **Training windows.** For a given test year, training uses earlier years only, with expanding or rolling 5-, 7-, and 10-year windows.
 - **DML separation.** Cross-fitting appears separately in Double / Debiased Machine Learning (DML) opacity diagnostics; it is not the train/test split used for headline prediction tables.
+- **No absolute sufficiency threshold.** Prediction metrics are read relative to each task's prevalence; there is no absolute PR-AUC sufficiency threshold.
+
+## Experiments
 
 ### Experiment 1: Label Observability and Detection Timing
 
@@ -314,11 +336,50 @@ uv run python scripts/build_linkage_bridge.py
 
 - **Purpose.** Test whether legacy detected-misstatement labels and public review-and-correction labels measure related but non-identical constructs.
 - **Design.** Run the bridge probe, report coverage and multiplicity, then test event-time concentration and reciprocal risk-score alignment in the mapped sample.
-- **Current bridge.** The current implementation uses farr `gvkey_ciks` as a high-coverage candidate bridge; WRDS remains the preferred final validation source.
+- **Current bridge.** The current implementation uses the raw-primary bridge at `$DATA_DIR/linkage/raw_primary_external_supplement/gvkey_cik_year.csv`: raw `CIK-GVKEY Link Table.csv` links win for covered `gvkey x data_year` rows, and farr `gvkey_ciks` supplies only uncovered years. WRDS remains the preferred final validation source.
 - **Outputs.** `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, `unmatched_raw_characteristics.csv`, `construct_overlap/label_contingency_lift.csv`, `construct_overlap/public_score_legacy_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, `construct_overlap/event_time_concentration.csv`, and AAER high-severity support tables.
-- **Interpretation.** This is the integrated-paper gate; the farr bridge supports candidate overlap validation, and WRDS remains preferred before final manuscript claims.
+- **Interpretation.** This is the integrated-paper gate; the raw-primary plus farr-supplement bridge supports candidate mixed-source overlap validation, and WRDS remains preferred before final manuscript claims.
 
-## Evidence Gates
+## Expected and Current Results
+
+### Expected Evidence Pattern
+
+- **Benchmark expectation.** Legacy detected-misstatement performance should be sensitive to timing assumptions, label observability, class balance, and retraining window.
+- **Public-cascade expectation.** Public features should predict later public review-and-correction outcomes above each task's prevalence baseline, especially for comment-thread and amendment/friction labels.
+- **Feature-family expectation.** Metadata is a readiness baseline; XBRL, auditor, oversight, note-opacity, and all-feature models test whether non-metadata public information adds empirical value.
+- **Overlap expectation.** Legacy labels and public labels should show enrichment and reciprocal ranking alignment, but not one-to-one equivalence.
+- **AAER expectation.** AAER should behave as sparse high-severity support evidence, not a headline predictive target unless positives are sufficient.
+
+### Current Result Snapshot
+
+- **Public cascade.** Current full-run state is `xbrl_ratio_baseline`; the best public-cascade specification in the current snapshot is `all + rolling_7y` with reported mean PR-AUC `0.2430`.
+- **Public sample.** The public cascade covers fiscal years 2011-2023 in the full panel, with nonzero positives for comment-thread, amendment, and 8-K Item 4.02 tasks.
+- **Legacy benchmark.** Benchmark outputs include non-empty rolling metrics, timing coverage, and missingness diagnostics.
+- **Bridge overlap.** Raw-primary candidate/mixed-source overlap is implemented. Construct-overlap outputs carry `validation_tier = candidate_mixed` for the current raw-primary plus farr-supplement bridge, `validation_tier = candidate_farr` under farr-only provenance, and should flip to `wrds_validated` only after a provenance-tagged WRDS or equivalent bridge is supplied.
+- **Current blocker.** Sparse AAER ranking positives remain a blocker for AAER as a headline ranking target.
+
+### Artifact Map
+
+| Evidence | Primary artifacts |
+| --- | --- |
+| Benchmark timing and drift | `artifacts/full_with_peer/benchmark/rolling_metrics.csv`, `timing_coverage.csv`, `timing_summary.json` |
+| Public cascade prediction | `artifacts/full_with_peer/public_cascade/public_cascade_metrics.csv`, `public_cascade_predictions.parquet`, `public_cascade_task_status.csv` |
+| Public opacity DML | `artifacts/full_with_peer/public_cascade/public_opacity_dml.csv`, `public_opacity_dml_meta.json` |
+| Bridge probe | `artifacts/full_with_peer/bridge_probe/bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv` |
+| Construct overlap | `artifacts/full_with_peer/construct_overlap/public_score_legacy_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, `event_time_concentration.csv` |
+| Paper-facing summary | `docs/results_snapshot.md`, `artifacts/manuscript_package` |
+
+## Claim Boundaries
+
+### Claim Boundaries
+
+> The public-cascade design supports evidence about a public reporting-risk state. It does not by itself identify unobserved fraud occurrence, causal effects, or a stable enforcement-prediction result.
+
+> Comment letters are public scrutiny signals, not the full SEC review universe. AAER is a rare high-severity enforcement indicator, not a complete enforcement universe.
+
+> Bridge validation is mandatory for an integrated claim that the public cascade and the legacy benchmark measure related but non-identical constructs. Without that validation, the public-cascade result remains a public-data measurement result rather than a validated fraud/restatement overlap paper.
+
+### Evidence Gates
 
 | Component | Current status | Gate before paper claim |
 | --- | --- | --- |
@@ -330,28 +391,29 @@ uv run python scripts/build_linkage_bridge.py
 | Bridge overlap | raw-primary candidate/mixed-source overlap implemented | coverage, multiplicity, conflict reporting, reciprocal alignment, no silent many-to-many joins, and WRDS-preferred validation before final integrated claims |
 
 - **Data integrity gates.**
-  - No post-`origin_date` event enters predictors.
-  - No `res_an*` column enters benchmark predictors.
-  - `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` stay outside default predictors.
-  - Censoring masks are horizon-specific.
-  - Crosswalk coverage and multiplicity are reported before overlap validation.
-  - Construct-overlap outputs carry `validation_tier = candidate_mixed` for the current raw-primary plus farr-supplement bridge, `validation_tier = candidate_farr` under farr-only provenance, and should flip to `wrds_validated` only after a provenance-tagged WRDS or equivalent bridge is supplied.
+    - No post-`origin_date` event enters predictors.
+    - No `res_an*` column enters benchmark predictors.
+    - `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` stay outside default predictors.
+    - Censoring masks are horizon-specific.
+    - Crosswalk coverage and multiplicity are reported before overlap validation.
 - **Empirical sufficiency gates.**
-  - Benchmark outputs non-empty rolling metrics, timing coverage, and missingness diagnostics.
-  - Public cascade covers fiscal years 2011-2023 in the full panel.
-  - Comment-thread, amendment, and 8-K Item 4.02 tasks have nonzero positives.
-  - `xbrl_ratio_*` and `xbrl_coverage_*` features are present for non-metadata public-cascade evidence.
-  - Prediction metrics are read relative to each task's prevalence; there is no absolute PR-AUC sufficiency threshold.
-  - Overlap evidence reports top-decile lift, reciprocal alignment, bridge tiers, and bridge coverage before integrated claims are made.
-  - Zero-positive or sparse AAER robustness tasks are skipped and reported as high-severity blockers.
+    - Benchmark outputs non-empty rolling metrics, timing coverage, and missingness diagnostics.
+    - Public cascade covers fiscal years 2011-2023 in the full panel.
+    - Comment-thread, amendment, and 8-K Item 4.02 tasks have nonzero positives.
+    - `xbrl_ratio_*` and `xbrl_coverage_*` features are present for non-metadata public-cascade evidence.
+    - Prediction metrics are read relative to each task's prevalence; there is no absolute PR-AUC sufficiency threshold.
+    - Overlap evidence reports top-decile lift, reciprocal alignment, bridge tiers, and bridge coverage before integrated claims are made.
+    - Zero-positive or sparse AAER robustness tasks are skipped and reported as high-severity blockers.
 - **Paper-readiness gates.**
-  - Claims remain measurement and decision-useful prediction claims, not causal proof of fraud occurrence.
-  - AAER is described as a rare high-severity descriptive proxy.
-  - Comment letters are described as public scrutiny, not complete SEC review.
-  - Bridge validation is mandatory for the integrated old-benchmark/public-cascade paper claim.
-  - Candidate farr overlap can support a related-but-non-identical construct argument, but not final WRDS-quality validation.
+    - Claims remain measurement and decision-useful prediction claims, not causal proof of fraud occurrence.
+    - AAER is described as a rare high-severity descriptive proxy.
+    - Comment letters are described as public scrutiny, not complete SEC review.
+    - Bridge validation is mandatory for the integrated old-benchmark/public-cascade paper claim.
+    - Candidate raw-primary plus farr-supplement overlap can support a related-but-non-identical construct argument, but not final WRDS-quality validation.
 
-## Execution Contract
+## Reproducibility and Execution Contract
+
+### Core Commands
 
 - **Operational reference.** The operational command surface lives in the repository home page and README so there is a single maintained entrypoint for users and coauthors.
 - **Quality gate.**
@@ -374,6 +436,8 @@ just task study raw artifacts/full_with_peer \
 just snapshot
 just manuscript
 ```
+
+### Command Boundary
 
 - **Command boundary.** `just check` is the local quality gate; `just full mode=full dataset=raw` is the paper-facing core run for data engineering and core experiments; `full_with_peer` adds the legacy and public-label peer model-family transfer suites; `just snapshot` refreshes the results snapshot from `artifacts/full_with_peer` and then runs `just check`; `just manuscript` builds paper-facing tables, figures, and result prose in `artifacts/manuscript_package`. Use `--peer-target public` when only the public-label peer transfer needs to be refreshed.
 - **Detailed operations.** Component-level reruns and public-lake operational details are documented in [the repository home page](index.md), which includes the root `README.md`.

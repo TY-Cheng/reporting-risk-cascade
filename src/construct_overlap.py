@@ -162,15 +162,22 @@ def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
         else []
     )
     evidence_text = frame.apply(lambda row: " ".join(str(value) for value in row), axis=1).str.lower()
-    has_wrds = evidence_text.str.contains("wrds|compustat", regex=True).any()
+    has_wrds = evidence_text.str.contains(r"\bwrds\b|wrds_", regex=True).any()
+    has_raw = evidence_text.str.contains(r"raw_cik_gvkey|raw_primary", regex=True).any()
     has_farr = evidence_text.str.contains("farr|gvkey_ciks", regex=True).any()
 
-    if has_wrds and not has_farr:
+    if has_wrds and not has_farr and not has_raw:
         bridge_source = source_values[0] if len(source_values) == 1 else "wrds_compustat_crosswalk"
         validation_tier = "wrds_validated"
-    elif has_wrds and has_farr:
+    elif has_wrds and (has_farr or has_raw):
         bridge_source = "mixed_wrds_farr_crosswalk"
         validation_tier = "candidate_mixed"
+    elif has_raw and has_farr:
+        bridge_source = "raw_primary_farr_supplement"
+        validation_tier = "candidate_mixed"
+    elif has_raw:
+        bridge_source = "raw_primary_cik_gvkey_link"
+        validation_tier = "candidate_external"
     elif has_farr:
         bridge_source = "farr_candidate"
         validation_tier = "candidate_farr"

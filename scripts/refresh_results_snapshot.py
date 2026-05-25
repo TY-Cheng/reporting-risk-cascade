@@ -23,11 +23,17 @@ FULL_REQUIRED_ARTIFACTS = [
     "study_run_manifest.json",
     "benchmark/benchmark_summary.md",
     "benchmark/rolling_metrics.csv",
+    "benchmark/window_summary.csv",
+    "benchmark/structural_breaks.csv",
+    "benchmark/feature_family_importance.csv",
+    "benchmark/timing_coverage.csv",
     "public_cascade/public_cascade_summary.json",
     "public_cascade/public_cascade_metrics.csv",
     "public_cascade/public_cascade_task_status.csv",
+    "public_cascade/public_opacity_dml.csv",
     "bridge_probe/bridge_probe_summary.json",
     "bridge_probe/coverage_report.csv",
+    "bridge_probe/multiplicity_report.csv",
     "peer_comparison/peer_comparison_summary.md",
     "peer_comparison/legacy_model_family_metrics.csv",
     "peer_comparison/peer_task_status.csv",
@@ -39,6 +45,10 @@ FULL_REQUIRED_ARTIFACTS = [
     "construct_overlap/overlap_sample_flow.csv",
     "construct_overlap/public_score_legacy_ranking.csv",
     "construct_overlap/reciprocal_alignment.csv",
+    "construct_overlap/label_contingency_lift.csv",
+    "construct_overlap/event_time_concentration.csv",
+    "construct_overlap/legacy_positive_public_label_cooccurrence.csv",
+    "construct_overlap/aggregation_sensitivity.csv",
 ]
 
 
@@ -383,6 +393,250 @@ def _public_peer_task_rows(path: Path) -> list[list[str]]:
     return rows
 
 
+def _status_count_rows(path: Path) -> list[list[str]]:
+    frame = _read_csv(path)
+    if frame.empty or "status" not in frame.columns:
+        return []
+    group_cols = ["status"]
+    if "reason_code" in frame.columns:
+        group_cols.append("reason_code")
+    grouped = frame.groupby(group_cols, dropna=False).size().reset_index(name="rows")
+    rows = []
+    for _, row in grouped.sort_values("rows", ascending=False).iterrows():
+        reason = row.get("reason_code", "")
+        rows.append([_code(row["status"]), _code(reason), _fmt(row["rows"], digits=0)])
+    return rows
+
+
+def _benchmark_window_rows(study_dir: Path) -> list[list[str]]:
+    frame = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
+    required = {
+        "label_mode",
+        "window",
+        "pr_auc",
+        "roc_auc",
+        "brier_skill_score",
+        "ece",
+        "top_100_precision",
+        "top_decile_precision",
+    }
+    if frame.empty or not required.issubset(frame.columns):
+        return []
+    grouped = (
+        frame.groupby(["label_mode", "window"], dropna=False)
+        .agg(
+            pr_auc=("pr_auc", "mean"),
+            roc_auc=("roc_auc", "mean"),
+            brier_skill_score=("brier_skill_score", "mean"),
+            ece=("ece", "mean"),
+            top_100_precision=("top_100_precision", "mean"),
+            top_decile_precision=("top_decile_precision", "mean"),
+        )
+        .reset_index()
+    )
+    rows = []
+    for _, row in grouped.sort_values(["label_mode", "pr_auc"], ascending=[True, False]).iterrows():
+        rows.append(
+            [
+                _code(row["label_mode"]),
+                _code(row["window"]),
+                _fmt(row["pr_auc"]),
+                _fmt(row["roc_auc"]),
+                _fmt(row["brier_skill_score"]),
+                _fmt(row["ece"]),
+                _fmt(row["top_100_precision"]),
+                _fmt(row["top_decile_precision"]),
+            ]
+        )
+    return rows
+
+
+def _structural_break_rows(study_dir: Path, *, max_rows: int = 12) -> list[list[str]]:
+    frame = _read_csv(study_dir / "benchmark" / "structural_breaks.csv")
+    if frame.empty or not {"window", "label_mode", "family", "break_year", "f_stat", "p_value"}.issubset(frame.columns):
+        return []
+    frame = frame.copy()
+    frame["p_value_num"] = pd.to_numeric(frame["p_value"], errors="coerce")
+    rows = []
+    for _, row in frame.sort_values("p_value_num").head(max_rows).iterrows():
+        rows.append(
+            [
+                _code(row["window"]),
+                _code(row["label_mode"]),
+                _code(row["family"]),
+                _fmt(row["break_year"]),
+                _fmt(row["f_stat"]),
+                _fmt(row["p_value"]),
+            ]
+        )
+    return rows
+
+
+def _feature_importance_rows(study_dir: Path, *, max_rows: int = 12) -> list[list[str]]:
+    frame = _read_csv(study_dir / "benchmark" / "feature_family_importance.csv")
+    if frame.empty or not {"label_mode", "family", "importance_share"}.issubset(frame.columns):
+        return []
+    grouped = (
+        frame.groupby(["label_mode", "family"], dropna=False)["importance_share"]
+        .mean()
+        .reset_index()
+        .sort_values("importance_share", ascending=False)
+    )
+    rows = []
+    for _, row in grouped.head(max_rows).iterrows():
+        rows.append([_code(row["label_mode"]), _code(row["family"]), _fmt(row["importance_share"])])
+    return rows
+
+
+def _opacity_rows(study_dir: Path) -> list[list[str]]:
+    path = study_dir / "opacity_validation_refresh" / "opacity_diagnostics_summary.csv"
+    if not path.exists():
+        path = study_dir / "public_cascade" / "public_opacity_dml.csv"
+    frame = _read_csv(path)
+    if frame.empty:
+        return []
+    rows = []
+    for _, row in frame.iterrows():
+        rows.append(
+            [
+                _code(row.get("outcome")),
+                _fmt(row.get("n_obs")),
+                _fmt(row.get("prevalence")),
+                _fmt(row.get("mean_treatment")),
+                _fmt(row.get("coef")),
+                _fmt(row.get("std_err")),
+                _fmt(row.get("p_value")),
+                _code(row.get("status")),
+            ]
+        )
+    return rows
+
+
+def _simple_csv_rows(path: Path, columns: list[str], *, max_rows: int | None = None) -> list[list[str]]:
+    frame = _read_csv(path)
+    if frame.empty or not set(columns).issubset(frame.columns):
+        return []
+    if max_rows is not None:
+        frame = frame.head(max_rows)
+    rows = []
+    for _, row in frame.iterrows():
+        rows.append([_fmt(row.get(col)) if col not in {"public_label", "bridge_tier", "label_pattern", "metric_status"} else _code(row.get(col)) for col in columns])
+    return rows
+
+
+def _overlap_sample_flow_rows(study_dir: Path) -> list[list[str]]:
+    return _simple_csv_rows(
+        study_dir / "construct_overlap" / "overlap_sample_flow.csv",
+        ["bridge_tier", "rows", "legacy_positives"],
+    )
+
+
+def _label_contingency_rows(study_dir: Path) -> list[list[str]]:
+    frame = _read_csv(study_dir / "construct_overlap" / "label_contingency_lift.csv")
+    if frame.empty:
+        return []
+    columns = [
+        "public_label",
+        "bridge_tier",
+        "n",
+        "legacy_positive_rows",
+        "public_positive_rows",
+        "both_positive_rows",
+        "lift_public_given_legacy",
+        "lift_legacy_given_public",
+    ]
+    if not set(columns).issubset(frame.columns):
+        return []
+    rows = []
+    for _, row in frame.iterrows():
+        rows.append(
+            [
+                _code(row["public_label"]),
+                _code(row["bridge_tier"]),
+                _fmt(row["n"]),
+                _fmt(row["legacy_positive_rows"]),
+                _fmt(row["public_positive_rows"]),
+                _fmt(row["both_positive_rows"]),
+                _fmt(row["lift_public_given_legacy"]),
+                _fmt(row["lift_legacy_given_public"]),
+            ]
+        )
+    return rows
+
+
+def _event_time_rows(study_dir: Path) -> list[list[str]]:
+    frame = _read_csv(study_dir / "construct_overlap" / "event_time_concentration.csv")
+    if frame.empty:
+        return []
+    columns = [
+        "relative_year",
+        "public_label",
+        "n_legacy_positive",
+        "n_legacy_negative",
+        "public_label_rate_legacy_positive",
+        "public_label_rate_legacy_negative",
+        "raw_difference",
+        "balanced_window",
+    ]
+    if not set(columns).issubset(frame.columns):
+        return []
+    rows = []
+    for _, row in frame.iterrows():
+        rows.append(
+            [
+                _fmt(row["relative_year"]),
+                _code(row["public_label"]),
+                _fmt(row["n_legacy_positive"]),
+                _fmt(row["n_legacy_negative"]),
+                _fmt(row["public_label_rate_legacy_positive"]),
+                _fmt(row["public_label_rate_legacy_negative"]),
+                _fmt(row["raw_difference"]),
+                _fmt(bool(row["balanced_window"])),
+            ]
+        )
+    return rows
+
+
+def _aaer_support_rows(study_dir: Path) -> list[list[str]]:
+    frame = _read_csv(study_dir / "construct_overlap" / "farr_aaer_ranking_lift.csv")
+    if frame.empty:
+        return []
+    grouped = (
+        frame.groupby("metric_status", dropna=False)
+        .agg(rows=("metric_status", "size"), aaer_pos=("n_farr_aaer_positives_in_overlap", "max"))
+        .reset_index()
+        .sort_values("rows", ascending=False)
+    )
+    rows = []
+    for _, row in grouped.iterrows():
+        rows.append([_code(row["metric_status"]), _fmt(row["rows"]), _fmt(row["aaer_pos"])])
+    return rows
+
+
+def _manifest_inventory(root: Path) -> list[str]:
+    if not root.exists():
+        return [f"- `{_rel(root)}` (missing)"]
+    files = [
+        path
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.name != ".DS_Store" and "__pycache__" not in path.parts
+    ]
+    return [f"- `{_rel(path)}`" for path in files]
+
+
+def _table_figure_rows(package_dir: Path) -> list[list[str]]:
+    rows = []
+    for kind, subdir in [("Table", "tables"), ("Figure", "figures")]:
+        root = package_dir / subdir
+        if not root.exists():
+            rows.append([kind, _code(subdir), "missing"])
+            continue
+        files = sorted(path for path in root.iterdir() if path.is_file() and path.name != ".DS_Store")
+        for path in files:
+            rows.append([kind, _code(path.name), _rel(path)])
+    return rows
+
+
 def _bridge_coverage_rows(path: Path) -> list[list[str]]:
     coverage = _read_csv(path)
     if coverage.empty or not {"metric", "value"}.issubset(coverage.columns):
@@ -488,17 +742,19 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
     bridge_status = bridge_summary.get("status") or manifest.get("bridge", {}).get("status") or ""
     peer_status = manifest.get("runtime", {}).get("peer_comparison_mode") or ""
 
+    manuscript_package = ARTIFACTS_DIR / "manuscript_package"
+
     lines = [
         "---",
         "hide:",
         "  - navigation",
         "---",
         "",
-        "# Results Snapshot",
+        "# Results and Discussion",
         "",
         f"_Generated by `just snapshot` from `{study_rel}` at `{generated_at}`._",
         "",
-        "## Discussion",
+        "## Results Overview",
         "",
         "- **Research question.** Can filing-origin public SEC/PCAOB information predict "
         "whether an issuer later enters observable public review-and-correction channels, "
@@ -519,18 +775,18 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "ROC-AUC, Brier, Brier Skill Score, ECE, top-k precision, top-decile lift, "
         "and Bao-style top-fraction precision, sensitivity, specificity, BAC, and NDCG.",
         "",
-        "- **Sellable claim.** The strongest current framing is a measurement-and-ranking "
-        "paper on filing-origin public reporting-risk states. It does not support causal "
-        "claims, unobserved true-fraud occurrence claims, or same-estimand performance "
-        "rankings over prior fraud-prediction papers.",
-        "",
-        f"- **Current best public-cascade specification.** {best_public_text}.",
+        "- **Current best public-cascade specification.** " + best_public_text + ".",
         "",
         f"- **Bridge boundary.** Construct overlap is `{validation_tier}`; WRDS or "
         "equivalent institutional bridge evidence remains preferred for final "
         "manuscript-grade integrated claims.",
         "",
-        "## Run Metadata",
+        "- **Sellable claim.** The strongest current framing is a measurement-and-ranking "
+        "paper on filing-origin public reporting-risk states. It does not support causal "
+        "claims, unobserved true-fraud occurrence claims, or same-estimand performance "
+        "rankings over prior fraud-prediction papers.",
+        "",
+        "## Reproducibility Metadata",
         "",
         _table(
             ["Field", "Value"],
@@ -548,30 +804,112 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             ],
         ),
         "",
-        "## Component Status",
+        "### Component Status",
         "",
         _table(["Component", "Status", "Tier", "Output"], _component_rows(manifest)),
         "",
-        "## Evidence Map",
+        "### Evidence Map",
         "",
         "```mermaid",
         "flowchart LR",
-        '    L["Legacy benchmark<br/>timing, drift, missingness,<br/>peer-compatible metrics"]',
-        '    P["Public filing-origin cascade<br/>comment threads, amendments,<br/>8-K Item 4.02, AAER support"]',
-        '    B["Bridge gate<br/>raw-primary gvkey-CIK-year coverage<br/>candidate evidence unless WRDS supplied"]',
-        '    V["Construct-overlap checks<br/>co-occurrence, lift,<br/>reciprocal ranking, event time"]',
-        '    S["Snapshot docs<br/>generated from artifacts<br/>checked by just snapshot"]',
-        "    L --> B",
-        "    P --> B",
-        "    B --> V",
-        "    V --> S",
+        '    L["Experiment 1-2<br/>legacy timing and drift"]',
+        '    O["Experiment 3<br/>opacity and public labels"]',
+        '    P["Experiment 4-5<br/>public cascade construction and prediction"]',
+        '    B["Experiment 6<br/>raw-primary bridge and construct overlap"]',
+        '    D["Discussion<br/>claim boundary and manuscript tables/figures"]',
+        "    L --> D",
+        "    O --> D",
+        "    P --> D",
+        "    B --> D",
         "```",
         "",
-        "## Public Lake and Gold Panel Scale",
+        "## Experiment 1: Label Observability and Detection Timing",
+        "",
+        "This experiment reads legacy detected-misstatement performance as an "
+        "observability diagnostic rather than a true-fraud detection result.",
+        "",
+        "### Legacy Benchmark Panel",
+        "",
+        _table(["Field", "Value"], _benchmark_panel_rows(study_dir)),
+        "",
+        "### Best Timing-Sensitivity Rows by Label Mode",
+        "",
+        _table(
+            [
+                "Label mode",
+                "Best window",
+                "Mean PR-AUC",
+                "Mean ROC-AUC",
+                "Top-100 precision",
+                "Retained positive share",
+            ],
+            _benchmark_timing_rows(benchmark_metrics),
+        ),
+        "",
+        "### Full Window Summary",
+        "",
+        _table(
+            [
+                "Label mode",
+                "Window",
+                "PR-AUC",
+                "ROC-AUC",
+                "Brier Skill Score",
+                "ECE",
+                "Top-100 precision",
+                "Top-decile precision",
+            ],
+            _benchmark_window_rows(study_dir),
+        ),
+        "",
+        "## Experiment 2: Concept Drift and Model Shelf-Life",
+        "",
+        "This experiment compares rolling and expanding windows and checks whether "
+        "feature-family importance shifts around candidate regime breaks.",
+        "",
+        "### Strongest Structural-Break Diagnostics",
+        "",
+        _table(
+            ["Window", "Label mode", "Feature family", "Break year", "F-stat", "p-value"],
+            _structural_break_rows(study_dir),
+        ),
+        "",
+        "### Mean Feature-Family Importance",
+        "",
+        _table(
+            ["Label mode", "Feature family", "Mean importance share"],
+            _feature_importance_rows(study_dir),
+        ),
+        "",
+        "## Experiment 3: Opacity and Public Review/Correction Risk",
+        "",
+        "The opacity analysis reports adjusted associations from DML partially linear "
+        "regressions. These estimates are not causal effects.",
+        "",
+        _table(
+            [
+                "Outcome",
+                "Rows",
+                "Prevalence",
+                "Mean treatment",
+                "Coef",
+                "Std err",
+                "p-value",
+                "Status",
+            ],
+            _opacity_rows(study_dir),
+        ),
+        "",
+        "## Experiment 4: Public Cascade Construction",
+        "",
+        "This experiment validates whether public SEC/PCAOB data can support the "
+        "filing-origin review-and-correction measurement surface.",
+        "",
+        "### Public Lake and Gold Panel Scale",
         "",
         _table(["Layer", "Artifact", "Rows", "Notes"], _public_lake_rows(public_lake_report)),
         "",
-        "## Public Cascade Readiness",
+        "### Public Cascade Readiness",
         "",
         _table(
             ["Field", "Value"],
@@ -580,14 +918,24 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                 ["Fiscal-year span", "-".join(map(str, public_summary.get("sample_years", [])))],
                 ["Domestic US GAAP only", _fmt(public_summary.get("domestic_only"))],
                 ["Task positive counts", _code(public_summary.get("task_positive_counts"))],
+                ["Task exclusion counts", _code(public_summary.get("task_exclusion_counts"))],
                 ["Zero-positive tasks", _code(public_summary.get("zero_positive_tasks"))],
                 ["Task status counts", _code(public_summary.get("task_status_counts"))],
                 ["Readiness level", _code(public_summary.get("cascade_readiness_level"))],
-                ["Best reported feature set", _code(public_summary.get("best_feature_set"))],
-                ["Best reported train window", _code(public_summary.get("best_train_window"))],
-                ["Best reported mean PR-AUC", _fmt(public_summary.get("best_mean_pr_auc"))],
             ],
         ),
+        "",
+        "### Public Cascade Fit and Skip Status",
+        "",
+        _table(
+            ["Status", "Reason", "Rows"],
+            _status_count_rows(study_dir / "public_cascade" / "public_cascade_task_status.csv"),
+        ),
+        "",
+        "## Experiment 5: Public Cascade Prediction",
+        "",
+        "This experiment estimates the pre-disclosure public reporting-risk state and "
+        "compares feature families and peer-compatible model families.",
         "",
         "### Public Task Metrics",
         "",
@@ -611,23 +959,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             _public_feature_rows(public_metrics, public_summary),
         ),
         "",
-        "## Legacy Benchmark Timing Diagnostics",
-        "",
-        _table(["Field", "Value"], _benchmark_panel_rows(study_dir)),
-        "",
-        _table(
-            [
-                "Label mode",
-                "Best window",
-                "Mean PR-AUC",
-                "Mean ROC-AUC",
-                "Top-100 precision",
-                "Retained positive share",
-            ],
-            _benchmark_timing_rows(benchmark_metrics),
-        ),
-        "",
-        "## Peer-Compatible Literature Benchmarks",
+        "### Legacy Peer-Compatible Literature Benchmarks",
         "",
         "These rows are present only when the peer-enabled study has run. They are "
         "model-family transfer and metric-language alignment, not exact replications "
@@ -638,7 +970,14 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             _peer_model_rows(study_dir / "peer_comparison" / "legacy_model_family_metrics.csv"),
         ),
         "",
-        "## Public-Label Peer Transfer",
+        "### Legacy Peer Fit and Skip Status",
+        "",
+        _table(
+            ["Status", "Reason", "Rows"],
+            _status_count_rows(study_dir / "peer_comparison" / "peer_task_status.csv"),
+        ),
+        "",
+        "### Public-Label Peer Transfer",
         "",
         _table(
             ["Model", "Rows", "Mean PR-AUC", "Mean ROC-AUC", "Max PR-AUC", "Mean Brier"],
@@ -656,16 +995,134 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
             ),
         ),
         "",
-        "## Bridge and Construct-Overlap Validation",
+        "### Public Peer Fit and Skip Status",
         "",
-        _table(["Metric", "Value"], _bridge_coverage_rows(study_dir / "bridge_probe" / "coverage_report.csv")),
+        _table(
+            ["Status", "Reason", "Rows"],
+            _status_count_rows(
+                study_dir / "public_peer_comparison" / "public_model_family_task_status.csv"
+            ),
+        ),
+        "",
+        "## Experiment 6: Old Benchmark and Public Cascade Overlap",
+        "",
+        "This experiment is the integrated-paper gate. The current bridge is "
+        "raw-primary plus farr-supplement and remains `candidate_mixed` until "
+        "WRDS-equivalent evidence is supplied.",
+        "",
+        "### Bridge Coverage",
+        "",
+        _table(
+            ["Metric", "Value"],
+            _bridge_coverage_rows(study_dir / "bridge_probe" / "coverage_report.csv"),
+        ),
+        "",
+        "### Overlap Sample Flow",
+        "",
+        _table(["Bridge tier", "Rows", "Legacy positives"], _overlap_sample_flow_rows(study_dir)),
+        "",
+        "### Construct-Overlap Ranking Alignment",
         "",
         _table(
             ["Direction", "Model", "Target", "PR-AUC", "ROC-AUC", "Top-decile lift"],
             _construct_alignment_rows(study_dir),
         ),
         "",
-        "Key readings:",
+        "### Label Contingency and Lift",
+        "",
+        _table(
+            [
+                "Public label",
+                "Bridge tier",
+                "Rows",
+                "Legacy positives",
+                "Public positives",
+                "Both positive",
+                "Lift public given legacy",
+                "Lift legacy given public",
+            ],
+            _label_contingency_rows(study_dir),
+        ),
+        "",
+        "### Aggregation Sensitivity",
+        "",
+        _table(
+            [
+                "Public label",
+                "Bridge tier",
+                "Aggregation rule",
+                "Rows",
+                "Pre-agg rate",
+                "Post-agg rate",
+                "Rate delta",
+                "Sensitive",
+            ],
+            _simple_csv_rows(
+                study_dir / "construct_overlap" / "aggregation_sensitivity.csv",
+                [
+                    "public_label",
+                    "bridge_tier",
+                    "aggregation_rule",
+                    "rows",
+                    "pre_agg_pos_rate",
+                    "post_agg_pos_rate",
+                    "pos_rate_delta",
+                    "aggregation_sensitive",
+                ],
+            ),
+        ),
+        "",
+        "### Legacy-Positive Public-Label Co-occurrence",
+        "",
+        _table(
+            [
+                "Pattern",
+                "Comment",
+                "Amendment",
+                "8-K 4.02",
+                "AAER",
+                "Legacy positives",
+                "Share",
+                "Display count",
+            ],
+            _simple_csv_rows(
+                study_dir / "construct_overlap" / "legacy_positive_public_label_cooccurrence.csv",
+                [
+                    "label_pattern",
+                    "label_comment_thread_365",
+                    "label_amendment_365",
+                    "label_8k_402_365",
+                    "label_aaer_proxy_730",
+                    "n_legacy_positives",
+                    "pct_of_legacy_positives",
+                    "display_count",
+                ],
+            ),
+        ),
+        "",
+        "### Event-Time Concentration",
+        "",
+        _table(
+            [
+                "Relative year",
+                "Public label",
+                "Legacy pos rows",
+                "Legacy neg rows",
+                "Rate if legacy pos",
+                "Rate if legacy neg",
+                "Difference",
+                "Balanced window",
+            ],
+            _event_time_rows(study_dir),
+        ),
+        "",
+        "### AAER High-Severity Support Status",
+        "",
+        _table(["Metric status", "Rows", "AAER positives in overlap"], _aaer_support_rows(study_dir)),
+        "",
+        "## Discussion",
+        "",
+        "### Key Readings",
         "",
         "- Public labels and legacy detected-misstatement labels are related but "
         "non-identical constructs.",
@@ -673,12 +1130,36 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "legacy/peer scores can also rank severe public correction labels.",
         f"- `{validation_tier}` bridge evidence is useful for internal validation, but "
         "should be labeled clearly until a WRDS-grade bridge is available.",
+        "- Sparse AAER ranking positives remain a blocker for using AAER as a headline "
+        "ranking target.",
         "",
-        "## Selected Artifact Index",
+        "### Claim Boundaries",
+        "",
+        "- The evidence supports measurement and decision-useful prediction claims, not "
+        "causal proof of fraud occurrence.",
+        "- Comment letters are public scrutiny signals, not the complete SEC review "
+        "universe.",
+        "- AAER is a rare high-severity enforcement indicator, not a complete enforcement "
+        "universe.",
+        "- Candidate raw-primary plus farr-supplement overlap can support a "
+        "related-but-non-identical construct argument, but not final WRDS-quality "
+        "validation.",
+        "",
+        "## Tables, Figures, and Artifact Index",
+        "",
+        "### Manuscript Package Tables and Figures",
+        "",
+        _table(["Kind", "File", "Path"], _table_figure_rows(manuscript_package)),
+        "",
+        "### Selected Artifact Index",
         "",
         "This index lists high-signal artifacts referenced by this generated snapshot.",
         "",
         *_artifact_index(study_dir),
+        "",
+        "### Full Study Artifact Inventory",
+        "",
+        *_manifest_inventory(study_dir),
         "",
     ]
     return "\n".join(lines)
