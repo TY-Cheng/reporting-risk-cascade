@@ -8,42 +8,56 @@ default:
     @just --list
 
 _check-env:
-    @repo_root="{{ repo_root }}"; \
-    test -n "${UV_PROJECT_ENVIRONMENT:-}" || { echo "UV_PROJECT_ENVIRONMENT is missing in .env"; exit 1; }; \
-    case "${UV_PROJECT_ENVIRONMENT}" in \
-        /*) ;; \
-        *) \
-            echo "UV_PROJECT_ENVIRONMENT must be an absolute path, got: ${UV_PROJECT_ENVIRONMENT}"; \
-            exit 1; \
-            ;; \
-    esac; \
-    case "${UV_PROJECT_ENVIRONMENT%/}" in \
-        "$repo_root"|"$repo_root"/*) \
-            echo "UV_PROJECT_ENVIRONMENT must point outside this repo, got: ${UV_PROJECT_ENVIRONMENT}"; \
-            exit 1; \
-            ;; \
-    esac
-    @mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"
+	@repo_root="{{ repo_root }}"; \
+	test -n "${UV_PROJECT_ENVIRONMENT:-}" || { echo "UV_PROJECT_ENVIRONMENT is missing in .env"; exit 1; }; \
+	case "${UV_PROJECT_ENVIRONMENT}" in \
+		/*) ;; \
+		*) \
+			echo "UV_PROJECT_ENVIRONMENT must be an absolute path, got: ${UV_PROJECT_ENVIRONMENT}"; \
+			exit 1; \
+			;; \
+	esac; \
+	repo_root_real="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$repo_root")"; \
+	uv_env_real="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$UV_PROJECT_ENVIRONMENT")"; \
+	case "$uv_env_real" in \
+		"$repo_root_real"|"$repo_root_real"/*) \
+			echo "UV_PROJECT_ENVIRONMENT must point outside this repo, got: ${UV_PROJECT_ENVIRONMENT}"; \
+			exit 1; \
+			;; \
+	esac
+	@mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"
 
 _check-data-env: _check-env
-    @repo_root="{{ repo_root }}"; \
-    test -n "${DATA_DIR:-}" || { echo "DATA_DIR is missing in .env"; exit 1; }; \
-    test -n "${ARTIFACTS_DIR:-}" || { echo "ARTIFACTS_DIR is missing in .env"; exit 1; }; \
-    case "${DATA_DIR}" in \
-        /*) ;; \
-        *) echo "DATA_DIR must be an absolute path, got: ${DATA_DIR}"; exit 1 ;; \
-    esac; \
-    case "${DATA_DIR%/}" in \
-        "$repo_root"|"$repo_root"/*) \
-            echo "DATA_DIR must point outside this repo, got: ${DATA_DIR}"; \
-            exit 1; \
-            ;; \
-    esac
-    @repo_root="{{ repo_root }}"; \
-    case "${ARTIFACTS_DIR}" in \
-        /*) ;; \
-        *) echo "ARTIFACTS_DIR must be an absolute path, got: ${ARTIFACTS_DIR}"; exit 1 ;; \
-    esac
+	@repo_root="{{ repo_root }}"; \
+	test -n "${DATA_DIR:-}" || { echo "DATA_DIR is missing in .env"; exit 1; }; \
+	test -n "${ARTIFACTS_DIR:-}" || { echo "ARTIFACTS_DIR is missing in .env"; exit 1; }; \
+	repo_root_real="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$repo_root")"; \
+	public_lake_dir="${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"; \
+	public_lake_smoke_dir="${PUBLIC_LAKE_SMOKE_DIR:-${DATA_DIR}/public_lake_smoke}"; \
+	for data_path in \
+		"$DATA_DIR" \
+		"$public_lake_dir" \
+		"$public_lake_smoke_dir" \
+		"${LAKE_BRONZE_DIR:-${public_lake_dir}/bronze}" \
+		"${LAKE_SILVER_DIR:-${public_lake_dir}/silver}" \
+		"${LAKE_GOLD_DIR:-${public_lake_dir}/gold}"; do \
+		case "$data_path" in \
+			/*) ;; \
+			*) echo "data paths must be absolute, got: $data_path"; exit 1 ;; \
+		esac; \
+		data_path_real="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$data_path")"; \
+		case "$data_path_real" in \
+			"$repo_root_real"|"$repo_root_real"/*) \
+				echo "data paths must point outside this repo, got: $data_path"; \
+				exit 1; \
+				;; \
+		esac; \
+	done
+	@repo_root="{{ repo_root }}"; \
+	case "${ARTIFACTS_DIR}" in \
+		/*) ;; \
+		*) echo "ARTIFACTS_DIR must be an absolute path, got: ${ARTIFACTS_DIR}"; exit 1 ;; \
+	esac
 
 _ruff:
     uv run ruff check src scripts tests
@@ -96,13 +110,14 @@ status: _check-data-env
     @echo "PAPER_DIR=${PAPER_DIR}"
     @echo "ARTIFACTS_DIR=${ARTIFACTS_DIR}"
     @echo "PUBLIC_LAKE_DIR=${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"
-    @echo "LAKE_BRONZE_DIR=${LAKE_BRONZE_DIR:-${DATA_DIR}/public_lake/bronze}"
-    @echo "LAKE_SILVER_DIR=${LAKE_SILVER_DIR:-${DATA_DIR}/public_lake/silver}"
-    @echo "LAKE_GOLD_DIR=${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"
+    @echo "PUBLIC_LAKE_SMOKE_DIR=${PUBLIC_LAKE_SMOKE_DIR:-${DATA_DIR}/public_lake_smoke}"
+    @echo "LAKE_BRONZE_DIR=${LAKE_BRONZE_DIR:-${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}/bronze}"
+    @echo "LAKE_SILVER_DIR=${LAKE_SILVER_DIR:-${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}/silver}"
+    @echo "LAKE_GOLD_DIR=${LAKE_GOLD_DIR:-${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}/gold}"
     @echo "RAW_DATASET_PATH=${RAW_DATASET_PATH:-${DATA_DIR}/raw/raw_dataset_misstatement.parquet}"
     @echo "MANUSCRIPT_DIR=${MANUSCRIPT_DIR:-${DIR_MANUSCRIPT:-}}"
     @if [ -x "${UV_PROJECT_ENVIRONMENT}/bin/python" ]; then \
-        "${UV_PROJECT_ENVIRONMENT}/bin/python" -c "import sys; from src import PROJECT_ROOT, WORK_DIR, DATA_DIR, DOCS_DIR, PAPER_DIR, MANUSCRIPT_DIR, ARTIFACTS_DIR, PUBLIC_LAKE_DIR, LAKE_BRONZE_DIR, LAKE_SILVER_DIR, LAKE_GOLD_DIR, RAW_DATASET_PATH, SAMPLE_DATASET_PATH; print('python_prefix', sys.prefix); print('python_project_root', PROJECT_ROOT); print('python_work_dir', WORK_DIR); print('python_data_dir', DATA_DIR); print('python_docs_dir', DOCS_DIR); print('python_paper_dir', PAPER_DIR); print('python_manuscript_dir', MANUSCRIPT_DIR); print('python_artifacts_dir', ARTIFACTS_DIR); print('python_public_lake_dir', PUBLIC_LAKE_DIR); print('python_lake_bronze_dir', LAKE_BRONZE_DIR); print('python_lake_silver_dir', LAKE_SILVER_DIR); print('python_lake_gold_dir', LAKE_GOLD_DIR); print('python_raw_dataset_path', RAW_DATASET_PATH); print('python_sample_dataset_path', SAMPLE_DATASET_PATH)"; \
+        "${UV_PROJECT_ENVIRONMENT}/bin/python" -c "import sys; from src import PROJECT_ROOT, WORK_DIR, DATA_DIR, DOCS_DIR, PAPER_DIR, MANUSCRIPT_DIR, ARTIFACTS_DIR, PUBLIC_LAKE_DIR, PUBLIC_LAKE_SMOKE_DIR, LAKE_BRONZE_DIR, LAKE_SILVER_DIR, LAKE_GOLD_DIR, RAW_DATASET_PATH, SAMPLE_DATASET_PATH; print('python_prefix', sys.prefix); print('python_project_root', PROJECT_ROOT); print('python_work_dir', WORK_DIR); print('python_data_dir', DATA_DIR); print('python_docs_dir', DOCS_DIR); print('python_paper_dir', PAPER_DIR); print('python_manuscript_dir', MANUSCRIPT_DIR); print('python_artifacts_dir', ARTIFACTS_DIR); print('python_public_lake_dir', PUBLIC_LAKE_DIR); print('python_public_lake_smoke_dir', PUBLIC_LAKE_SMOKE_DIR); print('python_lake_bronze_dir', LAKE_BRONZE_DIR); print('python_lake_silver_dir', LAKE_SILVER_DIR); print('python_lake_gold_dir', LAKE_GOLD_DIR); print('python_raw_dataset_path', RAW_DATASET_PATH); print('python_sample_dataset_path', SAMPLE_DATASET_PATH)"; \
     else \
         echo "python_prefix missing; run 'just setup'"; \
     fi
@@ -117,11 +132,11 @@ task name="study" dataset="raw" out_dir="" extra="": _check-data-env
         benchmark|cascade|bridge|study) \
             just _analysis "{{ name }}" "{{ dataset }}" "{{ out_dir }}" "$task_extra"; \
             ;; \
-        sec-bulk|submissions|companyfacts|fsds|notes|comment-letters|form-ap|pcaob-inspections|insider|13f|edgar-logs|market-structure|build-lake) \
+        sec-bulk|fsds|notes|comment-letters|form-ap|pcaob-inspections|insider|13f|edgar-logs|market-structure|build-lake) \
             just _fetch "{{ name }}" "$task_extra"; \
             ;; \
         *) \
-            echo "task must be one of: prep, benchmark, cascade, bridge, study, sec-bulk, submissions, companyfacts, fsds, notes, comment-letters, form-ap, pcaob-inspections, insider, 13f, edgar-logs, market-structure, build-lake"; \
+            echo "task must be one of: prep, benchmark, cascade, bridge, study, sec-bulk, fsds, notes, comment-letters, form-ap, pcaob-inspections, insider, 13f, edgar-logs, market-structure, build-lake"; \
             exit 1; \
             ;; \
     esac
@@ -269,17 +284,20 @@ data mode="full" strategy="fresh": _check-data-env
     echo "Data engineering complete: raw dataset parquet plus public lake {{ mode }}."
 
 full *args: _check-data-env
-    @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-04-23"; fetch_workers="2"; model_jobs="4"; model_threads="2"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="400GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
+    @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-05-26"; source_end_year=""; fetch_workers="2"; model_jobs="4"; model_threads="2"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="400GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
     raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw/raw_dataset_misstatement.parquet}"; \
     sample_dataset_path="${SAMPLE_DATASET_PATH:-${ARTIFACTS_DIR}/sample_dataset_misstatement.parquet}"; \
-    lake_silver_dir="${LAKE_SILVER_DIR:-${DATA_DIR}/public_lake/silver}"; \
-    lake_gold_dir="${LAKE_GOLD_DIR:-${DATA_DIR}/public_lake/gold}"; \
+    public_lake_dir="${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"; \
+    public_lake_smoke_dir="${PUBLIC_LAKE_SMOKE_DIR:-${DATA_DIR}/public_lake_smoke}"; \
+    lake_silver_dir="${LAKE_SILVER_DIR:-${public_lake_dir}/silver}"; \
+    lake_gold_dir="${LAKE_GOLD_DIR:-${public_lake_dir}/gold}"; \
     for arg in {{ args }}; do \
         case "$arg" in \
             mode=*) mode="${arg#mode=}" ;; \
             dataset=*) dataset="${arg#dataset=}" ;; \
             out_dir=*) out_dir="${arg#out_dir=}" ;; \
             as_of_date=*) as_of_date="${arg#as_of_date=}" ;; \
+            source_end_year=*) source_end_year="${arg#source_end_year=}" ;; \
             fetch_workers=*) fetch_workers="${arg#fetch_workers=}" ;; \
             model_jobs=*) model_jobs="${arg#model_jobs=}" ;; \
             model_threads=*) model_threads="${arg#model_threads=}" ;; \
@@ -301,19 +319,20 @@ full *args: _check-data-env
                     2) dataset="$arg" ;; \
                     3) out_dir="$arg" ;; \
                     4) as_of_date="$arg" ;; \
-                    5) fetch_workers="$arg" ;; \
-                    6) model_jobs="$arg" ;; \
-                    7) model_threads="$arg" ;; \
-                    8) engine="$arg" ;; \
-                    9) storage_format="$arg" ;; \
-                    10) notes_mode="$arg" ;; \
-                    11) fresh_build="$arg" ;; \
-                    12) force_fetch="$arg" ;; \
-                    13) duckdb_memory_limit="$arg" ;; \
-                    14) duckdb_temp_directory="$arg" ;; \
-                    15) duckdb_max_temp_size="$arg" ;; \
-                    16) fsds_batch_size="$arg" ;; \
-                    17) notes_batch_size="$arg" ;; \
+                    5) source_end_year="$arg" ;; \
+                    6) fetch_workers="$arg" ;; \
+                    7) model_jobs="$arg" ;; \
+                    8) model_threads="$arg" ;; \
+                    9) engine="$arg" ;; \
+                    10) storage_format="$arg" ;; \
+                    11) notes_mode="$arg" ;; \
+                    12) fresh_build="$arg" ;; \
+                    13) force_fetch="$arg" ;; \
+                    14) duckdb_memory_limit="$arg" ;; \
+                    15) duckdb_temp_directory="$arg" ;; \
+                    16) duckdb_max_temp_size="$arg" ;; \
+                    17) fsds_batch_size="$arg" ;; \
+                    18) notes_batch_size="$arg" ;; \
                     *) echo "Too many full positional arguments: $arg"; exit 2 ;; \
                 esac; \
                 pos=$((pos + 1)); \
@@ -348,6 +367,10 @@ full *args: _check-data-env
         case "$numeric_arg" in ''|*[!0-9]*) echo "fetch_workers, model_jobs, model_threads, fsds_batch_size, and notes_batch_size must be positive integers"; exit 1 ;; esac; \
         if [ "$numeric_arg" -lt 1 ]; then echo "fetch_workers, model_jobs, model_threads, fsds_batch_size, and notes_batch_size must be positive integers"; exit 1; fi; \
     done; \
+    if [ -n "$source_end_year" ]; then \
+        case "$source_end_year" in *[!0-9]*|"") echo "source_end_year must be a four-digit year"; exit 1 ;; esac; \
+        if [ "${#source_end_year}" -ne 4 ]; then echo "source_end_year must be a four-digit year"; exit 1; fi; \
+    fi; \
     run_out="$out_dir"; \
     if [ -z "$run_out" ]; then \
         run_out="${ARTIFACTS_DIR}/full_${mode}_${dataset}"; \
@@ -381,8 +404,8 @@ full *args: _check-data-env
         raw_data="$raw_dataset_path"; \
     fi; \
     if [ "$mode" = "smoke" ]; then \
-        silver_dir="${DATA_DIR}/public_lake_smoke/silver"; \
-        gold_dir="${DATA_DIR}/public_lake_smoke/gold"; \
+        silver_dir="${public_lake_smoke_dir}/silver"; \
+        gold_dir="${public_lake_smoke_dir}/gold"; \
     else \
         silver_dir="$lake_silver_dir"; \
         gold_dir="$lake_gold_dir"; \
@@ -407,7 +430,7 @@ full *args: _check-data-env
         --fsds-batch-size "$fsds_batch_size" \
         --notes-batch-size "$notes_batch_size" \
         --skip-setup \
-        --skip-public-cascade ${duckdb_temp_directory:+--duckdb-temp-directory "$duckdb_temp_directory"} $lake_args; \
+        --skip-public-cascade ${source_end_year:+--source-end-year "$source_end_year"} ${duckdb_temp_directory:+--duckdb-temp-directory "$duckdb_temp_directory"} $lake_args; \
     uv run python scripts/build_linkage_bridge.py; \
     uv run python scripts/run_study.py \
         --raw-data "$raw_data" \

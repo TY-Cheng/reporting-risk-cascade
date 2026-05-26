@@ -1,7 +1,7 @@
 lake:
-  as_of_date: "2026-04-23"
+  as_of_date: "2026-05-26"
   sample_start_year: 2011
-  sample_end_year: 2023
+  sample_end_year: 2024
   domestic_only: true
   engine: "duckdb"
   fetch_workers: 2

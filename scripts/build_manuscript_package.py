@@ -24,12 +24,12 @@ REQUIRED_ARTIFACTS = [
     "benchmark/benchmark_summary.md",
     "public_cascade/public_cascade_summary.json",
     "public_cascade/public_cascade_metrics.csv",
-    "peer_comparison/legacy_model_family_metrics.csv",
+    "peer_comparison/detected_misstatement_model_family_metrics.csv",
     "peer_comparison/peer_task_status.csv",
     "public_peer_comparison/public_model_family_metrics.csv",
     "public_peer_comparison/public_model_family_task_status.csv",
     "construct_overlap/construct_overlap_manifest.json",
-    "construct_overlap/public_score_legacy_ranking.csv",
+    "construct_overlap/public_score_benchmark_ranking.csv",
     "construct_overlap/reciprocal_alignment.csv",
     "bridge_probe/coverage_report.csv",
 ]
@@ -277,7 +277,7 @@ def _feature_family_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> p
     ]
 
 
-def _legacy_timing_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
+def _benchmark_timing_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
     grouped = (
         metrics.groupby(["label_mode", "window"], dropna=False)
         .agg(
@@ -332,11 +332,11 @@ def _bridge_coverage(path: Path) -> pd.DataFrame:
 
 
 def _construct_alignment(study_dir: Path) -> pd.DataFrame:
-    public_to_legacy = _read_csv(study_dir / "construct_overlap" / "public_score_legacy_ranking.csv")
-    legacy_to_public = _read_csv(study_dir / "construct_overlap" / "reciprocal_alignment.csv")
+    public_to_benchmark = _read_csv(study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv")
+    benchmark_to_public = _read_csv(study_dir / "construct_overlap" / "reciprocal_alignment.csv")
     rows: list[dict[str, Any]] = []
-    if not public_to_legacy.empty:
-        best = public_to_legacy.sort_values("top_decile_lift", ascending=False).iloc[0]
+    if not public_to_benchmark.empty:
+        best = public_to_benchmark.sort_values("top_decile_lift", ascending=False).iloc[0]
         rows.append(
             {
                 "Direction": "Public score to benchmark positives",
@@ -349,8 +349,8 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
                 "Top_Decile_Lift": _fmt(best["top_decile_lift"]),
             }
         )
-    if not legacy_to_public.empty:
-        best = legacy_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
+    if not benchmark_to_public.empty:
+        best = benchmark_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
         rows.append(
             {
                 "Direction": "Detected-misstatement score to public labels",
@@ -450,7 +450,7 @@ def _result_narrative(
     manifest: dict[str, Any],
     public_summary: dict[str, Any],
     public_task: pd.DataFrame,
-    legacy_peer: pd.DataFrame,
+    benchmark_peer: pd.DataFrame,
     public_peer: pd.DataFrame,
     construct_alignment: pd.DataFrame,
     construct_manifest: dict[str, Any],
@@ -462,7 +462,7 @@ def _result_narrative(
     comment_row = public_task[public_task["Task"].eq("comment_thread")].head(1)
     amendment_row = public_task[public_task["Task"].eq("amendment")].head(1)
     severe_row = public_task[public_task["Task"].eq("8k_402")].head(1)
-    legacy_leader = legacy_peer.iloc[0] if not legacy_peer.empty else None
+    benchmark_leader = benchmark_peer.iloc[0] if not benchmark_peer.empty else None
     public_peer_leader = public_peer.iloc[0] if not public_peer.empty else None
     validation_tier = construct_manifest.get("validation_tier", "")
     generated = manifest.get("generated_at_utc", "")
@@ -500,8 +500,8 @@ def _result_narrative(
         "The peer suites are model-family transfer exercises. They align the public "
         "reporting-risk task with familiar Dechow, Perols, Bao, and Bertomeu-style "
         "vocabularies without claiming original-paper numeric replication. In the "
-        f"detected-misstatement peer benchmark, `{legacy_leader['Model'] if legacy_leader is not None else 'n/a'}` "
-        f"has the highest mean PR-AUC (`{legacy_leader['Mean_PR_AUC'] if legacy_leader is not None else 'n/a'}`). "
+        f"detected-misstatement peer benchmark, `{benchmark_leader['Model'] if benchmark_leader is not None else 'n/a'}` "
+        f"has the highest mean PR-AUC (`{benchmark_leader['Mean_PR_AUC'] if benchmark_leader is not None else 'n/a'}`). "
         f"In the public-label peer suite, `{public_peer_leader['Model'] if public_peer_leader is not None else 'n/a'}` "
         f"leads on mean PR-AUC (`{public_peer_leader['Mean_PR_AUC'] if public_peer_leader is not None else 'n/a'}`). "
         "These comparisons should be read within task and estimand, not as cross-"
@@ -568,7 +568,7 @@ def main() -> None:
     construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
     public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
     benchmark_metrics = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
-    legacy_peer_metrics = _read_csv(study_dir / "peer_comparison" / "legacy_model_family_metrics.csv")
+    benchmark_peer_metrics = _read_csv(study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv")
     public_peer_metrics = _read_csv(
         study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
     )
@@ -576,8 +576,8 @@ def main() -> None:
     public_lake = _public_lake_scale(_latest_public_lake_report())
     public_task = _public_task_metrics(public_metrics, public_summary)
     feature_family = _feature_family_metrics(public_metrics, public_summary)
-    legacy_timing = _legacy_timing_metrics(benchmark_metrics)
-    legacy_peer = _model_family_metrics(legacy_peer_metrics)
+    benchmark_timing = _benchmark_timing_metrics(benchmark_metrics)
+    benchmark_peer = _model_family_metrics(benchmark_peer_metrics)
     public_peer = _model_family_metrics(public_peer_metrics)
     bridge_coverage = _bridge_coverage(study_dir / "bridge_probe" / "coverage_report.csv")
     construct_alignment = _construct_alignment(study_dir)
@@ -613,14 +613,14 @@ def main() -> None:
             label="tab:feature-family-metrics",
         ),
         "table_05_benchmark_timing_metrics": _write_table_bundle(
-            legacy_timing,
+            benchmark_timing,
             out_dir=tables_dir,
             stem="table_05_benchmark_timing_metrics",
             caption="Detected-misstatement benchmark timing diagnostics",
             label="tab:benchmark-timing",
         ),
         "table_06_detected_misstatement_peer_metrics": _write_table_bundle(
-            legacy_peer,
+            benchmark_peer,
             out_dir=tables_dir,
             stem="table_06_detected_misstatement_peer_metrics",
             caption="Detected-misstatement peer-compatible model-family metrics",
@@ -669,7 +669,7 @@ def main() -> None:
             color="#6a994e",
         ),
         "figure_03_detected_misstatement_peer_pr_auc": _plot_bar(
-            legacy_peer,
+            benchmark_peer,
             x="Model",
             y="Mean_PR_AUC",
             title="Detected-misstatement peer-compatible model families",
@@ -698,7 +698,7 @@ def main() -> None:
             manifest=manifest,
             public_summary=public_summary,
             public_task=public_task,
-            legacy_peer=legacy_peer,
+            benchmark_peer=benchmark_peer,
             public_peer=public_peer,
             construct_alignment=construct_alignment,
             construct_manifest=construct_manifest,

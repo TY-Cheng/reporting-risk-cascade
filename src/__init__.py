@@ -39,6 +39,11 @@ ARTIFACTS_DIR = (
 PUBLIC_LAKE_DIR = (
     Path(os.getenv("PUBLIC_LAKE_DIR") or DATA_DIR / "public_lake").expanduser().resolve()
 )
+PUBLIC_LAKE_SMOKE_DIR = (
+    Path(os.getenv("PUBLIC_LAKE_SMOKE_DIR") or DATA_DIR / "public_lake_smoke")
+    .expanduser()
+    .resolve()
+)
 LAKE_BRONZE_DIR = (
     Path(os.getenv("LAKE_BRONZE_DIR") or PUBLIC_LAKE_DIR / "bronze").expanduser().resolve()
 )
@@ -72,6 +77,7 @@ if __name__ == "__main__":
     print("MANUSCRIPT_DIR:", MANUSCRIPT_DIR)
     print("ARTIFACTS_DIR:", ARTIFACTS_DIR)
     print("PUBLIC_LAKE_DIR:", PUBLIC_LAKE_DIR)
+    print("PUBLIC_LAKE_SMOKE_DIR:", PUBLIC_LAKE_SMOKE_DIR)
     print("LAKE_BRONZE_DIR:", LAKE_BRONZE_DIR)
     print("LAKE_SILVER_DIR:", LAKE_SILVER_DIR)
     print("LAKE_GOLD_DIR:", LAKE_GOLD_DIR)

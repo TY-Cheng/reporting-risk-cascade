@@ -73,7 +73,7 @@ Working title:
     - `$DATA_DIR/raw/raw_dataset_misstatement.parquet` for the `gvkey x data_year` detected-misstatement benchmark.
     - `config/public_data.yaml` and `config/study.yaml` for public-source and study defaults.
     - `$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv` for bridge validation, generated only from the raw CIK-GVKEY link table.
-- **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-04-23`.
+- **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-05-26`. The public modeling sample now runs through fiscal year 2024, while SEC FSDS and Notes source archives are fetched through the as-of year 2026 so fiscal-year 2024 annual filings are covered.
 - **Peer and overlap run.** The peer-enabled study is a separate run so the default workflow stays bounded.
 
 ### Data Engineering and Preprocessing Overview
@@ -96,7 +96,7 @@ flowchart LR
     end
 
     subgraph PUBLIC["Public filing-origin cascade: SEC/PCAOB public information set"]
-        P0["Public inputs<br/>EDGAR filings, FSDS/XBRL, Notes summaries,<br/>comment letters, amendments, 8-K Item 4.02,<br/>PCAOB Form AP, PCAOB inspections<br/>public sample 2011-2023, as-of 2026-04-23"]
+        P0["Public inputs<br/>EDGAR filings, FSDS/XBRL, Notes summaries,<br/>comment letters, amendments, 8-K Item 4.02,<br/>PCAOB Form AP, PCAOB inspections<br/>public sample 2011-2024, as-of 2026-05-26"]
         P1["Parquet public lake<br/>Bronze source cache<br/>Silver normalized event and fact tables<br/>Gold filing_origin_panel and issuer_origin_panel"]
         P2["Public modeling grain<br/>issuer_cik x fiscal_year<br/>origin_date is selected annual filing date<br/>features visible at or before origin_date"]
         P3["Public X<br/>metadata, XBRL ratios, auditor, oversight, all<br/>rolling public history requires event_date < origin_date<br/>exclude source_available_*, public_date_*, vintage_* fields"]
@@ -152,7 +152,7 @@ flowchart LR
 - **DuckDB path.** The default DuckDB path uses SQL for XBRL core-tag pivoting, label-horizon joins, and Parquet output on the annual issuer-year modeling panel.
 - **Filing-origin provenance.** The full filing-origin panel is retained as a lightweight, year-sharded provenance panel rather than a fully labeled 20M-row modeling table.
 - **Required v1 sources.** SEC submissions, SEC Financial Statement Data Sets (FSDS), SEC `UPLOAD` and `CORRESP`, 10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, and PCAOB inspection datasets.
-- **Main public sample.** Domestic U.S. GAAP issuer-years from 2011-2023, with `2026-04-23` as the current reproducibility as-of date.
+- **Main public sample.** Domestic U.S. GAAP issuer-years from 2011-2024, with `2026-05-26` as the current reproducibility as-of date.
 - **Source-to-table mapping.**
     - SEC submissions and filing index data form `filing_dim.parquet`, `issuer_dim.parquet`, `filing_origin_panel.parquet`, and the annual `issuer_origin_panel.parquet`.
     - FSDS/XBRL `sub` and `num` files form `filing_xbrl_dim.parquet`, `xbrl_fact_summary.parquet`, and `xbrl_core_fact/`.
@@ -333,7 +333,7 @@ uv run python scripts/run_construct_overlap.py \
 - **Purpose.** Test whether detected-misstatement benchmark labels and public review-and-correction labels measure related but non-identical constructs.
 - **Design.** Run the bridge probe, report coverage and multiplicity, then test event-time concentration and reciprocal risk-score alignment in the mapped sample.
 - **Current bridge.** The current implementation uses the raw-only bridge at `$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv`: raw `CIK-GVKEY Link Table.csv` links define the mapped `gvkey x data_year` rows. Farr `gvkey_ciks` no longer supplements missing raw years in the default workflow.
-- **Outputs.** `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, `unmatched_raw_characteristics.csv`, `construct_overlap/label_contingency_lift.csv`, `construct_overlap/public_score_legacy_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, and `construct_overlap/event_time_concentration.csv`.
+- **Outputs.** `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, `unmatched_raw_characteristics.csv`, `construct_overlap/label_contingency_lift.csv`, `construct_overlap/public_score_benchmark_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, and `construct_overlap/event_time_concentration.csv`.
 - **Interpretation.** This is the integrated-paper gate; the raw-only bridge now supports WRDS-validated overlap evidence while preserving the related-but-non-identical construct boundary.
 
 ## Expected and Current Results
@@ -348,7 +348,7 @@ uv run python scripts/run_construct_overlap.py \
 ### Current Result Snapshot
 
 - **Public cascade.** Current full-run public-cascade state is complete; the best specification in the current snapshot is `all + expanding` with reported mean PR-AUC `0.2887`. The all-feature family is also the strongest feature-family summary, with mean PR-AUC `0.2875`.
-- **Public sample.** The public cascade covers fiscal years 2011-2023 in the full panel, with nonzero positives for comment-thread, amendment, and 8-K Item 4.02 tasks.
+- **Public sample.** The refreshed public-lake panel covers fiscal years 2011-2024, with nonzero positives for comment-thread, amendment, and 8-K Item 4.02 tasks. Rerun the public-cascade study outputs before treating FY2024 as part of the result snapshot.
 - **Detected-misstatement benchmark.** Benchmark outputs include non-empty rolling metrics, timing coverage, and missingness diagnostics.
 - **Bridge overlap.** Raw-only WRDS overlap is implemented. Construct-overlap outputs carry `validation_tier = wrds_validated` for the current raw-only bridge.
 
@@ -360,7 +360,7 @@ uv run python scripts/run_construct_overlap.py \
 | Public cascade prediction | `artifacts/full_with_peer/public_cascade/public_cascade_metrics.csv`, `public_cascade_predictions.parquet`, `public_cascade_task_status.csv` |
 | Public opacity DML | `artifacts/full_with_peer/public_cascade/public_opacity_dml.csv`, `public_opacity_dml_meta.json` |
 | Bridge probe | `artifacts/full_with_peer/bridge_probe/bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv` |
-| Construct overlap | `artifacts/full_with_peer/construct_overlap/public_score_legacy_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, `event_time_concentration.csv` |
+| Construct overlap | `artifacts/full_with_peer/construct_overlap/public_score_benchmark_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, `event_time_concentration.csv` |
 | Paper-facing summary | `docs/results_snapshot.md`, `artifacts/manuscript_package` |
 
 ## Claim Boundaries
@@ -392,7 +392,7 @@ uv run python scripts/run_construct_overlap.py \
     - Crosswalk coverage and multiplicity are reported before overlap validation.
 - **Empirical sufficiency gates.**
     - Benchmark outputs non-empty rolling metrics, timing coverage, and missingness diagnostics.
-    - Public cascade covers fiscal years 2011-2023 in the full panel.
+    - Public cascade covers fiscal years 2011-2024 in the full panel.
     - Comment-thread, amendment, and 8-K Item 4.02 tasks have nonzero positives.
     - `xbrl_ratio_*` and `xbrl_coverage_*` features are present for non-metadata public-cascade evidence.
     - Prediction metrics are read relative to each task's prevalence; there is no absolute PR-AUC sufficiency threshold.

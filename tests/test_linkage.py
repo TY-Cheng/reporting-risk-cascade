@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import src.linkage as linkage
 from src.linkage import (
     LINKAGE_OUTPUT_COLUMNS,
     _aggregate_normalized,
@@ -168,11 +169,44 @@ def test_build_raw_primary_linkage_writes_raw_only_and_public_overlap(tmp_path: 
     assert (result.out_dir / "public_lake_smoke" / "gvkey_cik_year_public_overlap.csv").exists()
 
 
+def test_build_raw_primary_linkage_defaults_follow_public_lake_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_link_path = tmp_path / "CIK-GVKEY Link Table.csv"
+    raw_data_path = tmp_path / "raw_dataset_misstatement.parquet"
+    full_panel = tmp_path / "custom_public_lake" / "gold" / "issuer_origin_panel.parquet"
+    smoke_panel = tmp_path / "custom_public_lake_smoke" / "gold" / "issuer_origin_panel.parquet"
+
+    _raw_links().to_csv(raw_link_path, index=False)
+    write_table(_raw_data(), raw_data_path)
+    write_table(
+        pd.DataFrame({"issuer_cik": ["0000001111"], "fiscal_year": [2011]}),
+        full_panel,
+    )
+    write_table(
+        pd.DataFrame({"issuer_cik": ["0000001111"], "fiscal_year": [2012]}),
+        smoke_panel,
+    )
+    monkeypatch.setattr(linkage, "LAKE_GOLD_DIR", full_panel.parent)
+    monkeypatch.setattr(linkage, "PUBLIC_LAKE_SMOKE_DIR", smoke_panel.parent.parent)
+
+    result = linkage.build_raw_primary_linkage(
+        raw_link_path=raw_link_path,
+        raw_data_path=raw_data_path,
+        out_dir=tmp_path / "linkage_defaults" / "raw_only",
+        extracted_at="2026-05-25T00:00:00Z",
+    )
+
+    assert result.summary["public_lake"]["overlap_rows"] == 1
+    assert result.summary["public_lake_smoke"]["overlap_rows"] == 1
+
+
 def test_linkage_normalizers_cover_invalid_inputs_and_empty_frames(tmp_path: Path) -> None:
     assert _normalize_cik(None) is None
     assert _normalize_cik("nan") is None
     assert _normalize_cik("abc") is None
     assert _normalize_cik("0") is None
+    assert _normalize_cik("0000001234.0") == "0000001234"
     assert _normalize_cik("CIK 42") == "0000000042"
     assert _normalize_gvkey(None) is None
     assert _normalize_gvkey("none") is None
@@ -199,7 +233,7 @@ def test_linkage_normalizers_cover_invalid_inputs_and_empty_frames(tmp_path: Pat
     assert _raw_key_frame(None).empty
     assert _raw_key_frame(pd.DataFrame({"gvkey": [1]})).empty
     assert _raw_key_frame(pd.DataFrame({"gvkey": [1], "data_year": [2020]}))[
-        "legacy_label"
+        "benchmark_label"
     ].tolist() == [0]
     assert _linkage_stats(pd.DataFrame()).get("rows") == 0
     assert _aggregate_normalized(pd.DataFrame()).columns.tolist() == list(LINKAGE_OUTPUT_COLUMNS)

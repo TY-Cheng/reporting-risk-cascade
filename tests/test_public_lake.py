@@ -782,7 +782,7 @@ def test_fsds_parquet_batch_resume_skips_completed_batches(
     assert int(xbrl_summary["xbrl_fact_count"].sum()) == 2
 
 
-def test_legacy_manifest_archives_and_batch_helpers_cover_resume_guards(
+def test_csv_gz_manifest_archives_and_batch_helpers_cover_resume_guards(
     tmp_path: Path,
 ) -> None:
     bronze = tmp_path / "bronze"
@@ -906,7 +906,7 @@ def test_notes_raw_mode_writes_note_text_parquet_dataset(tmp_path: Path) -> None
     assert all("source_year=" not in str(path) for path in (silver / "note_text").rglob("*"))
 
 
-def test_legacy_archive_normalizers_parse_decimal_suffix_dates(tmp_path: Path) -> None:
+def test_archive_normalizers_parse_decimal_suffix_dates(tmp_path: Path) -> None:
     fsds_zip = tmp_path / "fsds.zip"
     notes_zip = tmp_path / "notes.zip"
     _write_fsds_zip(fsds_zip, "0000000001-22-000001", "Assets", ddate="20111231.0")
@@ -1164,6 +1164,47 @@ def test_xbrl_and_event_helpers_cover_empty_and_filter_branches(tmp_path: Path) 
     ).tolist() == [0]
 
 
+def test_xbrl_yoy_uses_prior_fiscal_year_not_same_year_amendment() -> None:
+    filing = pd.DataFrame(
+        [
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2020,
+                "origin_date": "2021-02-15",
+                "accession": "a-2020",
+                "form": "10-K",
+                "xbrl_value_assets": 100.0,
+                "xbrl_value_revenues": 50.0,
+            },
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2021,
+                "origin_date": "2022-02-15",
+                "accession": "a-2021",
+                "form": "10-K",
+                "xbrl_value_assets": 120.0,
+                "xbrl_value_revenues": 70.0,
+            },
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2021,
+                "origin_date": "2022-03-15",
+                "accession": "a-2021-amend",
+                "form": "10-K/A",
+                "xbrl_value_assets": 121.0,
+                "xbrl_value_revenues": 71.0,
+            },
+        ]
+    )
+
+    featured = public_lake.add_xbrl_yoy_ratio_features(filing).set_index("accession")
+
+    assert featured.loc["a-2021", "xbrl_ratio_assets_yoy_change"] == pytest.approx(0.20)
+    assert featured.loc["a-2021-amend", "xbrl_ratio_assets_yoy_change"] == pytest.approx(0.21)
+    assert featured.loc["a-2021-amend", "xbrl_ratio_revenue_yoy_change"] == pytest.approx(0.42)
+    assert featured.loc["a-2021-amend", "xbrl_coverage_assets_yoy"] == 1
+
+
 def test_8k_item_parser_uses_items_metadata_only(tmp_path: Path) -> None:
     assert public_lake.parse_8k_item_codes("3.01, 4.01, Item 4.02") == (
         "3.01",
@@ -1398,6 +1439,17 @@ def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path
                     "engagement_partner_name": "Partner One",
                     "number_of_participants": 1,
                 },
+                {
+                    "issuer_cik": "0000000003",
+                    "fiscal_period_end": "2020-12-31",
+                    "report_date": "2021-07-01",
+                    "filing_date": "2021-07-01",
+                    "form_filing_id": "ap-3",
+                    "pcaob_firm_id": "firm",
+                    "engagement_partner_id": "P2",
+                    "engagement_partner_name": "Partner Two",
+                    "number_of_participants": 1,
+                },
             ]
         ),
         silver / "form_ap_event.parquet",
@@ -1438,6 +1490,17 @@ def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path
                 "item_metadata_missing": 0,
                 "identified_from": "items_metadata",
             },
+            {
+                "issuer_cik": "0000000003",
+                "accession": "same-day-form-ap",
+                "accession_nodash": "samedayformap",
+                "public_date": "2021-07-01",
+                "report_date": "2021-07-01",
+                "item_code": "4.02",
+                "event_type": "8k_item_4_02",
+                "item_metadata_missing": 0,
+                "identified_from": "items_metadata",
+            },
         ],
     )
     pd.DataFrame(
@@ -1455,6 +1518,8 @@ def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path
         "partner_risk_history",
         "partner_issuer_risk_history",
     }
+    partner_history = pd.read_csv(outputs["partner_risk_history"])
+    assert "P2" not in set(partner_history["engagement_partner_id"].astype(str))
     filing = pd.DataFrame(
         [
             {
@@ -2074,12 +2139,12 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
     assert panel.loc[1, "form_ap_filing_count"] == 1
 
 
-def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
-    legacy = tmp_path / "legacy"
+def test_parquet_gold_build_matches_csv_gz_gold_build(tmp_path: Path) -> None:
+    csv_gz = tmp_path / "csv_gz"
     parquet = tmp_path / "parquet"
-    gold_legacy = tmp_path / "gold_legacy"
+    gold_csv_gz = tmp_path / "gold_csv_gz"
     gold_parquet = tmp_path / "gold_parquet"
-    for silver in [legacy, parquet]:
+    for silver in [csv_gz, parquet]:
         write_table(
             pd.DataFrame(
                 [
@@ -2145,7 +2210,7 @@ def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
             ]
         ).to_csv(silver / "aaer_event.csv.gz", index=False, compression="gzip")
     _write_csv_gz(
-        legacy / "xbrl_fact.csv.gz",
+        csv_gz / "xbrl_fact.csv.gz",
         [
             {
                 "adsh": "a-annual",
@@ -2166,7 +2231,7 @@ def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
         ],
     )
     _write_csv_gz(
-        legacy / "note_text.csv.gz",
+        csv_gz / "note_text.csv.gz",
         [{"adsh": "a-annual", "tag": "DebtTextBlock", "note_text": "short note"}],
     )
     write_table(
@@ -2221,8 +2286,8 @@ def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
     )
 
     build_gold_panels(
-        silver_dir=legacy,
-        gold_dir=gold_legacy,
+        silver_dir=csv_gz,
+        gold_dir=gold_csv_gz,
         as_of_date="2026-04-23",
         engine="duckdb",
     )
@@ -2233,7 +2298,7 @@ def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
         engine="duckdb",
     )
 
-    legacy_panel = _sort_gold_for_compare(read_table(gold_legacy / "issuer_origin_panel.parquet"))
+    csv_gz_panel = _sort_gold_for_compare(read_table(gold_csv_gz / "issuer_origin_panel.parquet"))
     parquet_panel = _sort_gold_for_compare(read_table(gold_parquet / "issuer_origin_panel.parquet"))
     compare_cols = [
         "xbrl_fact_count",
@@ -2246,7 +2311,7 @@ def test_parquet_gold_build_matches_legacy_gold_build(tmp_path: Path) -> None:
         "note_text_char_count",
     ]
     pd.testing.assert_frame_equal(
-        legacy_panel[compare_cols].reset_index(drop=True),
+        csv_gz_panel[compare_cols].reset_index(drop=True),
         parquet_panel[compare_cols].reset_index(drop=True),
         check_dtype=False,
     )

@@ -842,10 +842,10 @@ def _duckdb_table_source(path: Path) -> str:
 
 def _preferred_table_path(directory: Path, stem: str) -> Path:
     parquet_path = directory / f"{stem}.parquet"
-    legacy_csv_gz_path = directory / f"{stem}.csv.gz"
-    if parquet_path.exists() or not legacy_csv_gz_path.exists():
+    fallback_csv_gz_path = directory / f"{stem}.csv.gz"
+    if parquet_path.exists() or not fallback_csv_gz_path.exists():
         return parquet_path
-    return legacy_csv_gz_path
+    return fallback_csv_gz_path
 
 
 def _duckdb_copy_query_to_parquet(
@@ -2635,7 +2635,7 @@ def build_partner_risk_histories(
         right_on="form_ap_public_date",
         by="issuer_cik",
         direction="backward",
-        allow_exact_matches=True,
+        allow_exact_matches=False,
     )
     matched = matched.loc[matched["engagement_partner_id"].notna()].copy()
     matched["engagement_partner_id"] = matched["engagement_partner_id"].astype(str)
@@ -2908,7 +2908,35 @@ def build_xbrl_core_features(xbrl_fact: pd.DataFrame) -> pd.DataFrame:
 def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
     if "issuer_cik" not in filing.columns or "fiscal_year" not in filing.columns:
         return filing
-    work = filing.sort_values(["issuer_cik", "fiscal_year", "origin_date", "accession"]).copy()
+    sort_cols = [
+        col for col in ["issuer_cik", "fiscal_year", "origin_date", "accession"] if col in filing.columns
+    ]
+    work = filing.sort_values(sort_cols, kind="mergesort").copy()
+    form = work["form"].astype(str).str.upper() if "form" in work.columns else pd.Series("", index=work.index)
+    work["_annual_form_priority"] = np.select(
+        [form.eq("10-K"), form.eq("10-K/A")],
+        [0, 1],
+        default=99,
+    )
+    annual_sort_cols = [
+        col
+        for col in [
+            "issuer_cik",
+            "fiscal_year",
+            "_annual_form_priority",
+            "origin_date",
+            "form",
+            "accession",
+        ]
+        if col in work.columns
+    ]
+    annual_reference = (
+        work.loc[work["fiscal_year"].notna()]
+        .sort_values(annual_sort_cols, kind="mergesort")
+        .drop_duplicates(["issuer_cik", "fiscal_year"], keep="first")
+        .copy()
+    )
+    previous_cols: List[str] = []
     for concept, out_col in [
         ("revenues", "xbrl_ratio_revenue_yoy_change"),
         ("assets", "xbrl_ratio_assets_yoy_change"),
@@ -2916,11 +2944,32 @@ def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
         value_col = f"xbrl_value_{concept}"
         if value_col not in work.columns:
             continue
-        previous = work.groupby("issuer_cik")[value_col].shift(1)
+        previous_col = f"prev_{value_col}"
+        annual_reference[previous_col] = annual_reference.groupby("issuer_cik", sort=False)[
+            value_col
+        ].shift(1)
+        previous_cols.append(previous_col)
+    if previous_cols:
+        work = work.merge(
+            annual_reference[["issuer_cik", "fiscal_year", *previous_cols]],
+            on=["issuer_cik", "fiscal_year"],
+            how="left",
+            validate="many_to_one",
+        )
+    for concept, out_col in [
+        ("revenues", "xbrl_ratio_revenue_yoy_change"),
+        ("assets", "xbrl_ratio_assets_yoy_change"),
+    ]:
+        value_col = f"xbrl_value_{concept}"
+        previous_col = f"prev_{value_col}"
+        if value_col not in work.columns or previous_col not in work.columns:
+            continue
+        previous = work[previous_col]
         work[out_col] = _ratio(work[value_col] - previous, previous.abs())
         work[f"xbrl_coverage_{concept}_yoy"] = (
             work[value_col].notna() & previous.notna() & previous.ne(0)
         ).astype(int)
+    work = work.drop(columns=["_annual_form_priority", *previous_cols], errors="ignore")
     return work
 
 
@@ -3545,7 +3594,7 @@ def _duckdb_xbrl_core_features_query(path: Path) -> str:
 
 def _create_duckdb_xbrl_summary_view(con: Any, *, silver_dir: Path) -> bool:
     summary_path = silver_dir / "xbrl_fact_summary.parquet"
-    legacy_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
+    fallback_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
     if summary_path.exists():
         source = parquet_scan_sql(summary_path)
         cols = set(_duckdb_columns(con, source))
@@ -3562,7 +3611,7 @@ def _create_duckdb_xbrl_summary_view(con: Any, *, silver_dir: Path) -> bool:
             """
         )
         return True
-    if legacy_xbrl_path.exists():
+    if fallback_xbrl_path.exists():
         con.execute(
             f"""
             CREATE OR REPLACE TEMP VIEW xbrl_summary_gold AS
@@ -3571,7 +3620,7 @@ def _create_duckdb_xbrl_summary_view(con: Any, *, silver_dir: Path) -> bool:
                 count(tag)::BIGINT AS xbrl_fact_count,
                 count(DISTINCT tag)::BIGINT AS xbrl_unique_tags,
                 count(DISTINCT unit)::BIGINT AS xbrl_unique_units
-            FROM {_duckdb_table_source(legacy_xbrl_path)}
+            FROM {_duckdb_table_source(fallback_xbrl_path)}
             GROUP BY adsh
             """
         )
@@ -3582,13 +3631,13 @@ def _create_duckdb_xbrl_summary_view(con: Any, *, silver_dir: Path) -> bool:
 def _create_duckdb_xbrl_core_features_view(con: Any, *, silver_dir: Path) -> bool:
     xbrl_core_path = silver_dir / "xbrl_core_fact"
     xbrl_core_file_path = silver_dir / "xbrl_core_fact.parquet"
-    legacy_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
+    fallback_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
     if xbrl_core_path.exists():
         source_path = xbrl_core_path
     elif xbrl_core_file_path.exists():
         source_path = xbrl_core_file_path
-    elif legacy_xbrl_path.exists():
-        source_path = legacy_xbrl_path
+    elif fallback_xbrl_path.exists():
+        source_path = fallback_xbrl_path
     else:
         return False
     con.execute(
@@ -3602,7 +3651,7 @@ def _create_duckdb_xbrl_core_features_view(con: Any, *, silver_dir: Path) -> boo
 
 def _create_duckdb_note_summary_view(con: Any, *, silver_dir: Path) -> bool:
     note_summary_path = silver_dir / "note_summary.parquet"
-    legacy_note_path = _preferred_table_path(silver_dir, "note_text")
+    fallback_note_path = _preferred_table_path(silver_dir, "note_text")
     note_text_dir = silver_dir / "note_text"
     if note_summary_path.exists():
         source = parquet_scan_sql(note_summary_path)
@@ -3619,8 +3668,8 @@ def _create_duckdb_note_summary_view(con: Any, *, silver_dir: Path) -> bool:
             """
         )
         return True
-    if legacy_note_path.exists() or note_text_dir.exists():
-        source_path = note_text_dir if note_text_dir.exists() else legacy_note_path
+    if fallback_note_path.exists() or note_text_dir.exists():
+        source_path = note_text_dir if note_text_dir.exists() else fallback_note_path
         con.execute(
             f"""
             CREATE OR REPLACE TEMP VIEW note_summary_gold AS
@@ -4213,6 +4262,56 @@ def _build_gold_panels_duckdb(
             con.execute(
                 """
                 CREATE OR REPLACE TEMP VIEW filing_featured_gold AS
+                WITH annual_reference AS (
+                    SELECT
+                        issuer_cik,
+                        fiscal_year,
+                        xbrl_value_revenues AS annual_xbrl_value_revenues,
+                        xbrl_value_assets AS annual_xbrl_value_assets
+                    FROM (
+                        SELECT
+                            *,
+                            row_number() OVER (
+                                PARTITION BY issuer_cik, fiscal_year
+                                ORDER BY
+                                    CASE
+                                        WHEN upper(COALESCE(form, '')) = '10-K' THEN 0
+                                        WHEN upper(COALESCE(form, '')) = '10-K/A' THEN 1
+                                        ELSE 99
+                                    END,
+                                    origin_date,
+                                    form,
+                                    accession
+                            ) AS annual_row_number
+                        FROM filing_joined_gold
+                        WHERE fiscal_year IS NOT NULL
+                    )
+                    WHERE annual_row_number = 1
+                ),
+                annual_lag AS (
+                    SELECT
+                        issuer_cik,
+                        fiscal_year,
+                        lag(annual_xbrl_value_revenues) OVER (
+                            PARTITION BY issuer_cik
+                            ORDER BY fiscal_year
+                        ) AS prev_xbrl_value_revenues,
+                        lag(annual_xbrl_value_assets) OVER (
+                            PARTITION BY issuer_cik
+                            ORDER BY fiscal_year
+                        ) AS prev_xbrl_value_assets
+                    FROM annual_reference
+                ),
+                filing_with_lag AS (
+                    SELECT
+                        f.*,
+                        annual_lag.prev_xbrl_value_revenues,
+                        annual_lag.prev_xbrl_value_assets
+                    FROM filing_joined_gold f
+                    LEFT JOIN annual_lag
+                      ON annual_lag.issuer_cik = f.issuer_cik
+                     AND annual_lag.fiscal_year = f.fiscal_year
+                )
                 SELECT
                     * EXCLUDE (prev_xbrl_value_revenues, prev_xbrl_value_assets),
                     CASE
@@ -4239,19 +4338,7 @@ def _build_gold_panels_duckdb(
                          AND prev_xbrl_value_assets <> 0
                         THEN 1 ELSE 0
                     END AS xbrl_coverage_assets_yoy
-                FROM (
-                    SELECT
-                        *,
-                        lag(xbrl_value_revenues) OVER (
-                            PARTITION BY issuer_cik
-                            ORDER BY fiscal_year, origin_date, accession
-                        ) AS prev_xbrl_value_revenues,
-                        lag(xbrl_value_assets) OVER (
-                            PARTITION BY issuer_cik
-                            ORDER BY fiscal_year, origin_date, accession
-                        ) AS prev_xbrl_value_assets
-                    FROM filing_joined_gold
-                )
+                FROM filing_with_lag
                 """
             )
         else:
@@ -4572,7 +4659,7 @@ def build_gold_panels(
     xbrl_summary_path = silver_dir / "xbrl_fact_summary.parquet"
     xbrl_core_path = silver_dir / "xbrl_core_fact"
     xbrl_core_file_path = silver_dir / "xbrl_core_fact.parquet"
-    legacy_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
+    fallback_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
     if xbrl_summary_path.exists():
         xbrl_summary = read_table(
             xbrl_summary_path,
@@ -4597,21 +4684,21 @@ def build_gold_panels(
                 temp_directory=duckdb_temp_directory,
                 max_temp_directory_size=duckdb_max_temp_directory_size,
             )
-    elif legacy_xbrl_path.exists():
+    elif fallback_xbrl_path.exists():
         if (
             engine == "duckdb"
-            or legacy_xbrl_path.suffix.lower() == ".parquet"
-            or legacy_xbrl_path.is_dir()
+            or fallback_xbrl_path.suffix.lower() == ".parquet"
+            or fallback_xbrl_path.is_dir()
         ):
             xbrl_summary = _duckdb_xbrl_summary(
-                legacy_xbrl_path,
+                fallback_xbrl_path,
                 threads=duckdb_threads,
                 memory_limit=duckdb_memory_limit,
                 temp_directory=duckdb_temp_directory,
                 max_temp_directory_size=duckdb_max_temp_directory_size,
             )
             xbrl_core_fact = _duckdb_xbrl_core_facts(
-                legacy_xbrl_path,
+                fallback_xbrl_path,
                 threads=duckdb_threads,
                 memory_limit=duckdb_memory_limit,
                 temp_directory=duckdb_temp_directory,
@@ -4619,7 +4706,7 @@ def build_gold_panels(
             )
         else:
             xbrl_fact = pd.read_csv(
-                legacy_xbrl_path,
+                fallback_xbrl_path,
                 usecols=lambda c: c in {"adsh", "tag", "unit", "value", "quarters", "fact_date"},
                 low_memory=False,
             )
@@ -4637,7 +4724,7 @@ def build_gold_panels(
         xbrl_summary = xbrl_summary.rename(columns={"adsh": "accession"})
     note_summary = pd.DataFrame()
     note_summary_path = silver_dir / "note_summary.parquet"
-    legacy_note_path = _preferred_table_path(silver_dir, "note_text")
+    fallback_note_path = _preferred_table_path(silver_dir, "note_text")
     if note_summary_path.exists():
         note_summary = read_table(
             note_summary_path,
@@ -4646,14 +4733,14 @@ def build_gold_panels(
             duckdb_temp_directory=duckdb_temp_directory,
             duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
         )
-    elif legacy_note_path.exists():
+    elif fallback_note_path.exists():
         if (
             engine == "duckdb"
-            or legacy_note_path.suffix.lower() == ".parquet"
-            or legacy_note_path.is_dir()
+            or fallback_note_path.suffix.lower() == ".parquet"
+            or fallback_note_path.is_dir()
         ):
             note_summary = _duckdb_note_summary(
-                legacy_note_path,
+                fallback_note_path,
                 threads=duckdb_threads,
                 memory_limit=duckdb_memory_limit,
                 temp_directory=duckdb_temp_directory,
@@ -4661,7 +4748,7 @@ def build_gold_panels(
             )
         else:
             note_text = pd.read_csv(
-                legacy_note_path, usecols=lambda c: c in {"adsh", "note_text", "tag"}
+                fallback_note_path, usecols=lambda c: c in {"adsh", "note_text", "tag"}
             )
             note_summary = (
                 note_text.groupby("adsh", as_index=False)

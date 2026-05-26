@@ -154,6 +154,10 @@ def test_mapping_quality_enum_and_budget_guard(monkeypatch: pytest.MonkeyPatch) 
         )
     with pytest.raises(ValueError, match="parallel budget exceeds available cores"):
         validate_parallel_budget(parallel_jobs=10_000, model_threads=10_000)
+    with pytest.raises(ValueError, match="positive integers"):
+        validate_parallel_budget(parallel_jobs=0, model_threads=1)
+    with pytest.raises(ValueError, match="positive integers"):
+        validate_parallel_budget(parallel_jobs=1, model_threads=0)
     monkeypatch.setenv("PEER_MAX_WORKERS", "1")
     validate_parallel_budget(parallel_jobs=1, model_threads=1)
     with pytest.raises(ValueError, match="parallel budget exceeds available cores"):
@@ -204,7 +208,7 @@ def test_peer_comparison_light_mode_writes_pr1_artifacts(tmp_path: Path) -> None
         mapping.columns
     )
 
-    metrics = pd.read_csv(out_dir / "legacy_model_family_metrics.csv")
+    metrics = pd.read_csv(out_dir / "detected_misstatement_model_family_metrics.csv")
     required_metric_cols = {
         "peer_model_id",
         "ece",
@@ -218,13 +222,13 @@ def test_peer_comparison_light_mode_writes_pr1_artifacts(tmp_path: Path) -> None
     assert "bao_inspired_tree_ensemble" in set(metrics["peer_model_id"])
     assert "bao_style_ensemble" not in set(metrics["peer_model_id"])
 
-    predictions = read_table(out_dir / "legacy_model_family_predictions.parquet")
+    predictions = read_table(out_dir / "detected_misstatement_model_family_predictions.parquet")
     assert list(predictions.columns) == PREDICTION_COLUMNS
     assert not predictions.duplicated(
         subset=["gvkey", "data_year", "label_mode", "test_year", "train_window", "peer_model_id"]
     ).any()
 
-    importance = pd.read_csv(out_dir / "legacy_feature_importance.csv")
+    importance = pd.read_csv(out_dir / "detected_misstatement_feature_importance.csv")
     assert list(importance.columns) == IMPORTANCE_COLUMNS
 
     summary = (out_dir / "peer_comparison_summary.md").read_text(encoding="utf-8")
@@ -245,7 +249,7 @@ def test_peer_comparison_full_mapping_enables_fixed_dechow_and_bao_style(
     )
 
     status = pd.read_csv(out_dir / "peer_task_status.csv")
-    metrics = pd.read_csv(out_dir / "legacy_model_family_metrics.csv")
+    metrics = pd.read_csv(out_dir / "detected_misstatement_model_family_metrics.csv")
     assert status.loc[
         status["peer_model_id"].eq("dechow_fixed_fscore_model1"), "status"
     ].eq("fit").any()
@@ -267,7 +271,7 @@ def test_peer_comparison_none_mode_and_invalid_mode_write_contract(
     )
     assert result["manifest_json"].exists()
     assert pd.read_csv(out_dir / "peer_task_status.csv").empty
-    assert read_table(out_dir / "legacy_model_family_predictions.parquet").empty
+    assert read_table(out_dir / "detected_misstatement_model_family_predictions.parquet").empty
     assert "peer_comparison_mode_none" in (out_dir / "peer_comparison_summary.md").read_text(
         encoding="utf-8"
     )

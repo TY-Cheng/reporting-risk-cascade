@@ -141,7 +141,7 @@ def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
             train_years=[2020],
             seed=1,
             model_cfg={"xgb": {"n_estimators": 1, "n_jobs": 1}},
-            seed_policy="legacy",
+            seed_policy="shared",
         )
         is None
     )
@@ -157,13 +157,13 @@ def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
             train_years=[2020],
             seed=1,
             model_cfg={"xgb": {"n_estimators": 1, "n_jobs": 1}},
-            seed_policy="legacy",
+            seed_policy="shared",
         )
         is None
     )
 
 
-def test_public_opacity_dml_uses_public_labels_not_legacy_misstatement() -> None:
+def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> None:
     rows = []
     for year in range(2011, 2017):
         for issuer_id in range(12):
@@ -534,6 +534,9 @@ model:
     assert "bao_top_1pct_ndcg" in metrics.columns
     assert "bao_top_5pct_precision" in metrics.columns
     assert not predictions.empty
+    assert "accession" in predictions.columns
+    assert "origin_date" in predictions.columns
+    assert predictions["accession"].notna().all()
     assert "fit" in set(status["status"])
     assert "outcome" in opacity_dml.columns
 

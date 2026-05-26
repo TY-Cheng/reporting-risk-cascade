@@ -159,7 +159,7 @@ def test_ci_workflow_is_clean_checkout_safe() -> None:
     assert "run: just _ruff" not in ci
     assert "scripts/run_study.py" in ci
     assert "--peer-comparison-mode light" in ci
-    assert "--peer-target legacy" in ci
+    assert "--peer-target benchmark" in ci
     assert "--parallel-jobs 1" in ci
     assert "--model-threads 1" in ci
     assert "--skip-benchmark" in ci
@@ -184,6 +184,71 @@ def test_just_check_is_the_single_data_free_quality_gate() -> None:
     docs_recipe = justfile.split("\n_docs-build: _check-env\n", maxsplit=1)[1]
     assert "mkdocs build --strict --clean" in docs_recipe
     assert "just _ruff" not in docs_recipe
+
+
+def test_public_lake_defaults_follow_public_lake_dir_contract() -> None:
+    justfile = _read("justfile")
+    build_linkage = _read("scripts/build_linkage_bridge.py")
+    linkage = _read("src/linkage.py")
+
+    assert 'public_lake_dir="${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"' in justfile
+    assert 'lake_silver_dir="${LAKE_SILVER_DIR:-${public_lake_dir}/silver}"' in justfile
+    assert 'lake_gold_dir="${LAKE_GOLD_DIR:-${public_lake_dir}/gold}"' in justfile
+    assert (
+        'public_lake_smoke_dir="${PUBLIC_LAKE_SMOKE_DIR:-${DATA_DIR}/public_lake_smoke}"'
+        in justfile
+    )
+    assert 'silver_dir="${public_lake_smoke_dir}/silver"' in justfile
+    assert "LAKE_GOLD_DIR / \"issuer_origin_panel.parquet\"" in build_linkage
+    assert "PUBLIC_LAKE_SMOKE_DIR / \"gold\" / \"issuer_origin_panel.parquet\"" in build_linkage
+    assert "LAKE_GOLD_DIR / \"issuer_origin_panel.parquet\"" in linkage
+    assert "PUBLIC_LAKE_SMOKE_DIR / \"gold\" / \"issuer_origin_panel.parquet\"" in linkage
+
+
+def test_public_lake_full_sources_env_before_cli_parse() -> None:
+    script = _read("scripts/run_public_lake_full.sh")
+
+    source_idx = script.index('source ".env"')
+    default_idx = script.index('MODE="${MODE:-full}"')
+    parse_idx = script.index("while [[ $# -gt 0 ]]; do")
+    fetch_default_idx = script.index('FETCH_WORKERS="${FETCH_WORKERS:-2}"')
+    fetch_cli_idx = script.index('FETCH_WORKERS="$2"', parse_idx)
+    engine_default_idx = script.index('ENGINE="${ENGINE:-duckdb}"')
+    engine_cli_idx = script.index('ENGINE="$2"', parse_idx)
+
+    assert source_idx < default_idx < parse_idx
+    assert source_idx < fetch_default_idx < parse_idx < fetch_cli_idx
+    assert source_idx < engine_default_idx < parse_idx < engine_cli_idx
+    assert script.count('source ".env"') == 1
+    assert "physical_path()" in script
+    assert 'REPO_REAL="$(physical_path "$REPO_ROOT")"' in script
+    for guarded_name in [
+        "DATA_DIR",
+        "PUBLIC_LAKE_DIR",
+        "PUBLIC_LAKE_SMOKE_DIR",
+        "LAKE_BRONZE_DIR",
+        "LAKE_SILVER_DIR",
+        "LAKE_GOLD_DIR",
+        "UV_PROJECT_ENVIRONMENT",
+    ]:
+        assert f'require_outside_repo "{guarded_name}"' in script
+
+
+def test_just_env_guards_use_physical_paths_for_external_data() -> None:
+    justfile = _read("justfile")
+
+    assert "repo_root_real=" in justfile
+    assert "uv_env_real=" in justfile
+    assert "data_path_real=" in justfile
+    assert 'public_lake_dir="${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"' in justfile
+    assert (
+        'public_lake_smoke_dir="${PUBLIC_LAKE_SMOKE_DIR:-${DATA_DIR}/public_lake_smoke}"'
+        in justfile
+    )
+    assert "${LAKE_BRONZE_DIR:-${public_lake_dir}/bronze}" in justfile
+    assert "${LAKE_SILVER_DIR:-${public_lake_dir}/silver}" in justfile
+    assert "${LAKE_GOLD_DIR:-${public_lake_dir}/gold}" in justfile
+    assert "data paths must point outside this repo" in justfile
 
 
 def test_just_snapshot_refreshes_results_snapshot_then_checks() -> None:
@@ -253,6 +318,13 @@ def test_historical_farr_bridge_script_is_documented_as_non_default() -> None:
     assert "scripts/export_farr_gvkey_ciks.R" in shell_script
     assert "scripts/prepare_gvkey_cik_crosswalk.py" in shell_script
     assert "--skip-bridge-probe" in shell_script
+    assert "UV_PROJECT_ENVIRONMENT is missing in .env" in shell_script
+    assert "must be an absolute path" in shell_script
+    assert "must point outside this repo" in shell_script
+    assert "physical_path()" in shell_script
+    assert 'repo_root_real="$(physical_path "${repo_root}")"' in shell_script
+    assert 'require_outside_repo "DATA_DIR" "${DATA_DIR}"' in shell_script
+    assert 'mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"' in shell_script
 
 
 def test_docs_home_is_the_readme_snippet_only() -> None:
@@ -471,7 +543,7 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
         "Bridge Validation Inputs",
         "bridge_probe_summary.json",
         "coverage_report.csv",
-        "construct_overlap/public_score_legacy_ranking.csv",
+        "construct_overlap/public_score_benchmark_ranking.csv",
         "construct_overlap/reciprocal_alignment.csv",
         "validation_tier = wrds_validated",
         "validation_tier = wrds_validated",

@@ -235,7 +235,7 @@ Bridge and construct overlap:
 - `artifacts/full_with_peer/bridge_probe/coverage_report.csv`
 - `artifacts/full_with_peer/bridge_probe/multiplicity_report.csv`
 - `artifacts/full_with_peer/construct_overlap/construct_overlap_summary.md`
-- `artifacts/full_with_peer/construct_overlap/public_score_legacy_ranking.csv`
+- `artifacts/full_with_peer/construct_overlap/public_score_benchmark_ranking.csv`
 - `artifacts/full_with_peer/construct_overlap/reciprocal_alignment.csv`
 
 Peer-compatible model-family suites:

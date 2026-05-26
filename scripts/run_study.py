@@ -169,7 +169,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--seed-policy",
-        choices=["task-isolated", "legacy"],
+        choices=["task-isolated", "shared"],
         default=None,
         help="Random seed policy for model tasks",
     )
@@ -181,7 +181,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--peer-target",
-        choices=["legacy", "public", "both"],
+        choices=["benchmark", "public", "both"],
         default=None,
         help=(
             "Peer suite target. Use public with --peer-comparison-mode full to refresh "
@@ -279,9 +279,9 @@ def main() -> None:
         peer_cfg["model_threads"] = args.model_threads
     peer_mode = args.peer_comparison_mode or str(peer_cfg.get("mode", "none"))
     peer_target = args.peer_target or str(peer_cfg.get("target", "both"))
-    if peer_target not in {"legacy", "public", "both"}:
-        raise ValueError("peer target must be one of: legacy, public, both")
-    run_legacy_peer = peer_mode != "none" and peer_target in {"legacy", "both"}
+    if peer_target not in {"benchmark", "public", "both"}:
+        raise ValueError("peer target must be one of: benchmark, public, both")
+    run_benchmark_peer = peer_mode != "none" and peer_target in {"benchmark", "both"}
     run_public_peer = peer_mode == "full" and peer_target in {"public", "both"}
 
     raw_data_arg = args.raw_data or args.raw_csv
@@ -334,7 +334,7 @@ def main() -> None:
             "public_cascade": {"status": "skipped" if args.skip_public_cascade else "pending"},
             "bridge_probe": {"status": "skipped" if args.skip_bridge_probe else "pending"},
             "peer_comparison": _existing_or_skipped_component(
-                should_run=run_legacy_peer,
+                should_run=run_benchmark_peer,
                 out_dir=peer_comparison_out,
                 summary_name="peer_comparison_summary.md",
                 manifest_name="peer_comparison_manifest.json",
@@ -384,7 +384,7 @@ def main() -> None:
             "out_dir": str(benchmark_out),
         }
 
-    if run_legacy_peer:
+    if run_benchmark_peer:
         if not raw_csv.exists():
             raise FileNotFoundError(f"peer comparison raw table not found: {raw_csv}")
         peer_summary = run_peer_comparison(

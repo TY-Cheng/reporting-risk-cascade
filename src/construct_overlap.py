@@ -344,7 +344,7 @@ def _setup_base_tables(
           row_number() OVER () - 1 AS raw_row_id,
           {_norm_gvkey_expr('"gvkey"')} AS gvkey,
           TRY_CAST("data_year" AS INTEGER) AS data_year,
-          COALESCE(TRY_CAST("{target_col}" AS INTEGER), 0) AS legacy_label,
+          COALESCE(TRY_CAST("{target_col}" AS INTEGER), 0) AS benchmark_label,
           {_col_or_null(raw_cols, "detection_year_proxy", "INTEGER")}
           {raw_select_extra}
         FROM {_scan_sql(master_panel_path)}
@@ -450,7 +450,7 @@ def _setup_base_tables(
           j.raw_row_id,
           ANY_VALUE(j.gvkey) AS gvkey,
           ANY_VALUE(j.data_year) AS data_year,
-          ANY_VALUE(j.legacy_label) AS legacy_label,
+          ANY_VALUE(j.benchmark_label) AS benchmark_label,
           t.bridge_tier,
           t.issuer_cik_count,
           t.public_row_count,
@@ -483,12 +483,12 @@ def _write_overlap_core(con: Any, out_dir: Path) -> pd.DataFrame:
 
     flow = (
         panel.groupby("bridge_tier", dropna=False)
-        .agg(rows=("raw_row_id", "nunique"), legacy_positives=("legacy_label", "sum"))
+        .agg(rows=("raw_row_id", "nunique"), benchmark_positives=("benchmark_label", "sum"))
         .reset_index()
     )
     extra = pd.DataFrame(
         [
-            {"bridge_tier": "full_raw", "rows": len(panel), "legacy_positives": panel["legacy_label"].sum()},
+            {"bridge_tier": "full_raw", "rows": len(panel), "benchmark_positives": panel["benchmark_label"].sum()},
         ]
     )
     _write_csv(pd.concat([extra, flow], ignore_index=True), out_dir / "overlap_sample_flow.csv")
@@ -541,35 +541,35 @@ def _label_contingency(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
         sample = panel if bridge_tier == "all_matched" else panel.loc[panel["bridge_tier"].eq(bridge_tier)]
         sample = sample.loc[sample["bridge_tier"].ne("dropped")]
         for label in PUBLIC_LABELS:
-            legacy = sample["legacy_label"].eq(1)
+            benchmark = sample["benchmark_label"].eq(1)
             public = sample[label].eq(1)
             n = len(sample)
-            public_rate_legacy_pos = float(public[legacy].mean()) if legacy.any() else np.nan
-            public_rate_legacy_neg = float(public[~legacy].mean()) if (~legacy).any() else np.nan
-            legacy_rate_public_pos = float(legacy[public].mean()) if public.any() else np.nan
-            legacy_rate_public_neg = float(legacy[~public].mean()) if (~public).any() else np.nan
+            public_rate_benchmark_pos = float(public[benchmark].mean()) if benchmark.any() else np.nan
+            public_rate_benchmark_neg = float(public[~benchmark].mean()) if (~benchmark).any() else np.nan
+            benchmark_rate_public_pos = float(benchmark[public].mean()) if public.any() else np.nan
+            benchmark_rate_public_neg = float(benchmark[~public].mean()) if (~public).any() else np.nan
             rows.append(
                 {
                     "public_label": label,
                     "bridge_tier": bridge_tier,
                     "n": int(n),
-                    "legacy_positive_rows": int(legacy.sum()),
+                    "benchmark_positive_rows": int(benchmark.sum()),
                     "public_positive_rows": int(public.sum()),
-                    "both_positive_rows": int((legacy & public).sum()),
-                    "legacy_prevalence": float(legacy.mean()) if n else np.nan,
+                    "both_positive_rows": int((benchmark & public).sum()),
+                    "benchmark_prevalence": float(benchmark.mean()) if n else np.nan,
                     "public_prevalence": float(public.mean()) if n else np.nan,
-                    "public_rate_given_legacy_pos": public_rate_legacy_pos,
-                    "public_rate_given_legacy_neg": public_rate_legacy_neg,
-                    "lift_public_given_legacy": (
-                        public_rate_legacy_pos / float(public.mean())
+                    "public_rate_given_benchmark_pos": public_rate_benchmark_pos,
+                    "public_rate_given_benchmark_neg": public_rate_benchmark_neg,
+                    "lift_public_given_benchmark": (
+                        public_rate_benchmark_pos / float(public.mean())
                         if n and float(public.mean()) > 0
                         else np.nan
                     ),
-                    "legacy_rate_given_public_pos": legacy_rate_public_pos,
-                    "legacy_rate_given_public_neg": legacy_rate_public_neg,
-                    "lift_legacy_given_public": (
-                        legacy_rate_public_pos / float(legacy.mean())
-                        if n and float(legacy.mean()) > 0
+                    "benchmark_rate_given_public_pos": benchmark_rate_public_pos,
+                    "benchmark_rate_given_public_neg": benchmark_rate_public_neg,
+                    "lift_benchmark_given_public": (
+                        benchmark_rate_public_pos / float(benchmark.mean())
+                        if n and float(benchmark.mean()) > 0
                         else np.nan
                     ),
                 }
@@ -580,32 +580,32 @@ def _label_contingency(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
 
 
 def _cooccurrence(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
-    sample = panel.loc[panel["bridge_tier"].eq("high_confidence") & panel["legacy_label"].eq(1)].copy()
+    sample = panel.loc[panel["bridge_tier"].eq("high_confidence") & panel["benchmark_label"].eq(1)].copy()
     if sample.empty:
         out = pd.DataFrame(
             columns=[
                 "label_pattern",
                 *PUBLIC_LABELS,
-                "n_legacy_positives",
-                "pct_of_legacy_positives",
+                "n_benchmark_positives",
+                "pct_of_benchmark_positives",
                 "display_count",
             ]
         )
-        _write_csv(out, out_dir / "legacy_positive_public_label_cooccurrence.csv")
+        _write_csv(out, out_dir / "benchmark_positive_public_label_cooccurrence.csv")
         return out
     for label in PUBLIC_LABELS:
         sample[label] = sample[label].fillna(0).astype(int)
-    grouped = sample.groupby(PUBLIC_LABELS, as_index=False).size().rename(columns={"size": "n_legacy_positives"})
+    grouped = sample.groupby(PUBLIC_LABELS, as_index=False).size().rename(columns={"size": "n_benchmark_positives"})
     total = int(len(sample))
-    grouped["pct_of_legacy_positives"] = grouped["n_legacy_positives"] / total
-    grouped["display_count"] = grouped["n_legacy_positives"].map(lambda value: "<5" if int(value) < 5 else str(int(value)))
+    grouped["pct_of_benchmark_positives"] = grouped["n_benchmark_positives"] / total
+    grouped["display_count"] = grouped["n_benchmark_positives"].map(lambda value: "<5" if int(value) < 5 else str(int(value)))
 
     def _pattern(row: pd.Series) -> str:
         active = [label.replace("label_", "") for label in PUBLIC_LABELS if int(row[label]) == 1]
         return "+".join(active) if active else "none"
 
     grouped.insert(0, "label_pattern", grouped.apply(_pattern, axis=1))
-    _write_csv(grouped, out_dir / "legacy_positive_public_label_cooccurrence.csv")
+    _write_csv(grouped, out_dir / "benchmark_positive_public_label_cooccurrence.csv")
     return grouped
 
 
@@ -665,7 +665,7 @@ def _public_score_frames(con: Any, public_predictions_path: Path) -> dict[str, p
     base_sql = """
         SELECT
           r.raw_row_id,
-          r.legacy_label,
+          r.benchmark_label,
           t.bridge_tier,
           p.feature_set,
           p.train_window,
@@ -688,14 +688,14 @@ def _public_score_frames(con: Any, public_predictions_path: Path) -> dict[str, p
             f"""
             SELECT
               raw_row_id,
-              legacy_label,
+              benchmark_label,
               bridge_tier,
               feature_set,
               train_window,
               task,
               {sql_agg} AS score
             FROM public_score_long
-            GROUP BY raw_row_id, legacy_label, bridge_tier, feature_set, train_window, task
+            GROUP BY raw_row_id, benchmark_label, bridge_tier, feature_set, train_window, task
             """
         ).fetchdf()
         outputs[aggregation]["score_aggregation"] = aggregation
@@ -714,7 +714,7 @@ def _public_ranking(
     frames = _public_score_frames(con, public_predictions_path)
     main = frames["mean"].loc[frames["mean"]["bridge_tier"].eq("high_confidence")].copy()
     main["model_id"] = "public_cascade"
-    main["label_mode"] = "legacy_naive"
+    main["label_mode"] = "benchmark_naive"
     main_rows = _score_metric_rows(
         main,
         group_cols=[
@@ -726,17 +726,17 @@ def _public_ranking(
             "score_aggregation",
             "bridge_tier",
         ],
-        target_col="legacy_label",
+        target_col="benchmark_label",
         score_col="score",
-        count_prefix="legacy",
+        count_prefix="benchmark",
         bridge_source=bridge_source,
     )
     main_out = pd.DataFrame(main_rows)
-    _write_csv(main_out, out_dir / "public_score_legacy_ranking.csv")
+    _write_csv(main_out, out_dir / "public_score_benchmark_ranking.csv")
 
     sens = pd.concat(frames.values(), ignore_index=True)
     sens["model_id"] = "public_cascade"
-    sens["label_mode"] = "legacy_naive"
+    sens["label_mode"] = "benchmark_naive"
     sens_rows = _score_metric_rows(
         sens,
         group_cols=[
@@ -748,13 +748,13 @@ def _public_ranking(
             "score_aggregation",
             "bridge_tier",
         ],
-        target_col="legacy_label",
+        target_col="benchmark_label",
         score_col="score",
-        count_prefix="legacy",
+        count_prefix="benchmark",
         bridge_source=bridge_source,
     )
     sens_out = pd.DataFrame(sens_rows)
-    _write_csv(sens_out, out_dir / "public_score_legacy_ranking_sensitivity.csv")
+    _write_csv(sens_out, out_dir / "public_score_benchmark_ranking_sensitivity.csv")
     top = main_out[
         [
             "model_id",
@@ -789,7 +789,7 @@ def _reciprocal_alignment(
           {_norm_gvkey_expr('"gvkey"')} AS gvkey,
           TRY_CAST("data_year" AS INTEGER) AS data_year,
           'benchmark_xgb' AS model_id,
-          'legacy_all' AS feature_set,
+          'benchmark_all' AS feature_set,
           "window" AS train_window,
           label_mode,
           TRY_CAST(pred_prob AS DOUBLE) AS score
@@ -829,7 +829,7 @@ def _reciprocal_alignment(
           s.feature_set,
           s.train_window,
           s.label_mode,
-          'legacy_score' AS score_aggregation,
+          'benchmark_score' AS score_aggregation,
           p.bridge_tier,
           s.score,
           {label_select}
@@ -890,7 +890,7 @@ def _event_time(con: Any, out_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
               p.raw_row_id,
               p.gvkey,
               p.data_year,
-              p.legacy_label,
+              p.benchmark_label,
               p.bridge_tier,
               p.issuer_ciks,
               p.data_year + {rel} AS public_year,
@@ -929,24 +929,24 @@ def _event_time(con: Any, out_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         balanced_mask = rel_df["raw_row_id"].astype(int).isin(balanced_ids)
         balanced = rel_df.loc[balanced_mask].copy()
         for label in PUBLIC_LABELS:
-            legacy_pos = balanced["legacy_label"].eq(1)
+            benchmark_pos = balanced["benchmark_label"].eq(1)
             rows.append(
                 {
                     "relative_year": rel,
                     "public_label": label,
-                    "n_legacy_positive": int(legacy_pos.sum()),
-                    "n_legacy_negative": int((~legacy_pos).sum()),
+                    "n_benchmark_positive": int(benchmark_pos.sum()),
+                    "n_benchmark_negative": int((~benchmark_pos).sum()),
                     "covered_rows": int(len(balanced)),
-                    "public_label_rate_legacy_positive": (
-                        float(balanced.loc[legacy_pos, label].mean()) if legacy_pos.any() else np.nan
+                    "public_label_rate_benchmark_positive": (
+                        float(balanced.loc[benchmark_pos, label].mean()) if benchmark_pos.any() else np.nan
                     ),
-                    "public_label_rate_legacy_negative": (
-                        float(balanced.loc[~legacy_pos, label].mean()) if (~legacy_pos).any() else np.nan
+                    "public_label_rate_benchmark_negative": (
+                        float(balanced.loc[~benchmark_pos, label].mean()) if (~benchmark_pos).any() else np.nan
                     ),
                     "raw_difference": (
-                        float(balanced.loc[legacy_pos, label].mean())
-                        - float(balanced.loc[~legacy_pos, label].mean())
-                        if legacy_pos.any() and (~legacy_pos).any()
+                        float(balanced.loc[benchmark_pos, label].mean())
+                        - float(balanced.loc[~benchmark_pos, label].mean())
+                        if benchmark_pos.any() and (~benchmark_pos).any()
                         else np.nan
                     ),
                     "balanced_window": True,
@@ -964,7 +964,7 @@ def _res_an_proxy_coverage(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
     any_res = panel[RES_AN_COLS].fillna(0).astype(int).sum(axis=1).gt(0)
     for scope, mask in {
         "all_rows": pd.Series(True, index=panel.index),
-        "legacy_positive_rows": panel["legacy_label"].eq(1),
+        "benchmark_positive_rows": panel["benchmark_label"].eq(1),
     }.items():
         sample = panel.loc[mask]
         sample_any = any_res.loc[mask]
@@ -1063,10 +1063,10 @@ def _write_summary(
         "| Does bridge aggregation affect public-label rates? | `aggregation_sensitivity.csv` |",
         "| Do public labels overlap detected-misstatement benchmark labels? | "
         "`label_contingency_lift.csv` |",
-        "| Do public scores rank benchmark positives? | `public_score_legacy_ranking.csv` |",
+        "| Do public scores rank benchmark positives? | `public_score_benchmark_ranking.csv` |",
         "| Do benchmark scores rank public labels? | `reciprocal_alignment.csv` |",
         "| Which public labels co-occur among benchmark positives? | "
-        "`legacy_positive_public_label_cooccurrence.csv` |",
+        "`benchmark_positive_public_label_cooccurrence.csv` |",
         "| When do public labels concentrate around benchmark years? | `event_time_concentration.csv` |",
         "",
         "## Evidence Tier",
@@ -1201,7 +1201,7 @@ def run_construct_overlap(
         reciprocal = _reciprocal_alignment(
             con,
             benchmark_predictions_path=required["benchmark_predictions"],
-            peer_predictions_path=study_dir / "peer_comparison" / "legacy_model_family_predictions.parquet",
+            peer_predictions_path=study_dir / "peer_comparison" / "detected_misstatement_model_family_predictions.parquet",
             out_dir=out_dir,
             bridge_source=bridge_source,
         )

@@ -74,7 +74,12 @@ def parse_args() -> argparse.Namespace:
         help="Gold-layer directory for the filing-native public lake",
     )
     parser.add_argument("--start-year", type=int, default=2011)
-    parser.add_argument("--end-year", type=int, default=2023)
+    parser.add_argument(
+        "--end-year",
+        type=int,
+        default=None,
+        help="Source archive end year; defaults to the configured as-of year.",
+    )
     parser.add_argument(
         "--start-date",
         type=str,
@@ -157,7 +162,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Heavy-table storage format; parquet is the production default. "
-            "csv-gz is a legacy fallback for small oracle tests."
+            "csv-gz is a compatibility fallback for small oracle tests."
         ),
     )
     parser.add_argument(
@@ -205,6 +210,16 @@ def _resolve_as_of_date(config_path: Path, explicit: str | None) -> str:
     if lake_cfg.get("as_of_date"):
         return str(lake_cfg["as_of_date"])
     return date.today().isoformat()
+
+
+def _resolve_source_end_year(config_path: Path, explicit: int | None) -> int:
+    if explicit is not None:
+        return int(explicit)
+    as_of_date = _resolve_as_of_date(config_path, None)
+    try:
+        return int(str(as_of_date).split("-", maxsplit=1)[0])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"cannot infer source end year from as-of date: {as_of_date}") from exc
 
 
 def _resolve_engine(config_path: Path, explicit: str | None) -> str:
@@ -280,11 +295,12 @@ def main() -> None:
         "form-ap",
         "pcaob-inspections",
     }:
+        end_year = _resolve_source_end_year(args.config, args.end_year)
         manifest = fetch_source_assets(
             mode=args.mode,
             bronze_dir=args.bronze_dir,
             start_year=args.start_year,
-            end_year=args.end_year,
+            end_year=end_year,
             start_date=args.start_date,
             end_date=args.end_date,
             match=args.match,

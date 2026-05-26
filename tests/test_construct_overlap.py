@@ -43,15 +43,15 @@ def _write_toy_study(
     for idx in range(40):
         gvkey = str(1000 + idx)
         cik = str(320000 + idx).zfill(10)
-        legacy = int(idx < 16)
+        benchmark_label_value = int(idx < 16)
         public_label = int(idx < 20)
         raw_rows.append(
             {
                 "gvkey": gvkey,
                 "data_year": 2018,
-                "misstatement firm-year": legacy,
-                "detection_year_proxy": 2020 if legacy and idx < 4 else pd.NA,
-                "res_an0": int(legacy and idx % 4 == 0),
+                "misstatement firm-year": benchmark_label_value,
+                "detection_year_proxy": 2020 if benchmark_label_value and idx < 4 else pd.NA,
+                "res_an0": int(benchmark_label_value and idx % 4 == 0),
                 "res_an1": 0,
                 "res_an2": 0,
                 "res_an3": 0,
@@ -91,8 +91,8 @@ def _write_toy_study(
             {
                 "gvkey": gvkey,
                 "data_year": 2018,
-                "misstatement firm-year": legacy,
-                "detection_year_proxy": 2020 if legacy else pd.NA,
+                "misstatement firm-year": benchmark_label_value,
+                "detection_year_proxy": 2020 if benchmark_label_value else pd.NA,
                 "window": "rolling_5y",
                 "label_mode": "naive",
                 "pred_prob": 0.85 - idx * 0.01,
@@ -107,7 +107,7 @@ def _write_toy_study(
                 "train_window": "rolling_5y",
                 "peer_model_id": "bertomeu_style_xgb",
                 "predicted_prob": 0.8 - idx * 0.01,
-                "observed_label": legacy,
+                "observed_label": benchmark_label_value,
             }
         )
     # One ambiguous row: two CIKs in the same gvkey-year, one public label.
@@ -183,7 +183,7 @@ def _write_toy_study(
     write_table(pd.DataFrame(benchmark_predictions), benchmark / "rolling_predictions.parquet")
     write_table(pd.DataFrame(public_rows), public_panel)
     write_table(pd.DataFrame(public_predictions), cascade / "public_cascade_predictions.parquet")
-    write_table(pd.DataFrame(peer_predictions), peer / "legacy_model_family_predictions.parquet")
+    write_table(pd.DataFrame(peer_predictions), peer / "detected_misstatement_model_family_predictions.parquet")
     pd.DataFrame(crosswalk_rows).to_csv(crosswalk, index=False)
     if with_opacity:
         pd.DataFrame(
@@ -247,10 +247,10 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
         "overlap_panel.parquet",
         "bridge_confidence_tiers.csv",
         "aggregation_sensitivity.csv",
-        "public_score_legacy_ranking.csv",
-        "public_score_legacy_ranking_sensitivity.csv",
+        "public_score_benchmark_ranking.csv",
+        "public_score_benchmark_ranking_sensitivity.csv",
         "reciprocal_alignment.csv",
-        "legacy_positive_public_label_cooccurrence.csv",
+        "benchmark_positive_public_label_cooccurrence.csv",
         "event_time_concentration.csv",
         "event_time_coverage.csv",
         "res_an_proxy_coverage.csv",
@@ -282,7 +282,7 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
     assert ambiguous_comment["pos_rate_delta"] > 0
     assert bool(ambiguous_comment["aggregation_sensitive"])
 
-    ranking = pd.read_csv(out / "public_score_legacy_ranking.csv")
+    ranking = pd.read_csv(out / "public_score_benchmark_ranking.csv")
     assert {
         "model_id",
         "task",
@@ -291,8 +291,8 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
         "label_mode",
         "score_aggregation",
         "bridge_tier",
-        "n_legacy_positives_in_overlap",
-        "n_legacy_negatives_in_overlap",
+        "n_benchmark_positives_in_overlap",
+        "n_benchmark_negatives_in_overlap",
         "roc_auc",
         "pr_auc",
         "top_decile_lift_ci_low",
@@ -313,14 +313,14 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
     assert "confidence" not in " ".join(event_time.columns)
     assert 0 in set(event_time["relative_year"])
 
-    cooccur = pd.read_csv(out / "legacy_positive_public_label_cooccurrence.csv")
+    cooccur = pd.read_csv(out / "benchmark_positive_public_label_cooccurrence.csv")
     assert {
         "label_pattern",
         "label_comment_thread_365",
         "label_amendment_365",
         "label_8k_402_365",
-        "n_legacy_positives",
-        "pct_of_legacy_positives",
+        "n_benchmark_positives",
+        "pct_of_benchmark_positives",
         "display_count",
     }.issubset(cooccur.columns)
 
@@ -348,7 +348,7 @@ def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance
     assert result["validation_tier"] == "wrds_validated"
     assert result["bridge_source"] == "wrds_compustat_cik_gvkey_link"
     assert result["bridge_provenance"]["source_values"] == ["wrds_compustat_cik_gvkey_link"]
-    ranking = pd.read_csv(out / "public_score_legacy_ranking.csv")
+    ranking = pd.read_csv(out / "public_score_benchmark_ranking.csv")
     assert set(ranking["bridge_source"]) == {"wrds_compustat_cik_gvkey_link"}
     summary = (out / "construct_overlap_summary.md").read_text(encoding="utf-8")
     assert "WRDS-validated bridge sample" in summary

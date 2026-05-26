@@ -96,6 +96,10 @@ Repository context:
 - Generated evidence lives under artifacts/. Discover study outputs from
   manifests, summaries, component subdirectories, and artifact indexes. Do not
   assume that a directory name is a just recipe.
+- When docs/results_snapshot.md is generated from artifacts/full_with_peer and
+  its manifest timestamp is not older than the relevant data/model artifacts,
+  treat it as the current artifact-backed result surface rather than as a
+  placeholder.
 - The raw benchmark source is the local gvkey x data_year misstatement panel
   when available. Public evidence comes from the public SEC/PCAOB lake and its
   derived gold panels when available.

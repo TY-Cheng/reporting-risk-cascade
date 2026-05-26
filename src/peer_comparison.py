@@ -267,7 +267,7 @@ def _status_row(
     imbalance_strategy: str = "none",
 ) -> Dict[str, object]:
     return {
-        "task_space": "legacy_benchmark",
+        "task_space": "detected_misstatement_benchmark",
         "peer_model_id": peer_model_id,
         "label_mode": label_mode,
         "test_year": int(test_year),
@@ -913,7 +913,7 @@ def _fit_one_spec(
 
         metrics = compute_metrics(np.asarray(y_test, dtype=int), prob, top_k=top_k)
         metric_row = {
-            "task_space": "legacy_benchmark",
+            "task_space": "detected_misstatement_benchmark",
             "peer_model_id": peer_model_id,
             "label_mode": label_mode,
             "test_year": int(test_year),
@@ -987,9 +987,9 @@ def _empty_outputs(out_dir: Path, *, mode: str, reason: str) -> Dict[str, Path]:
         out_dir / "feature_mapping_attrition.csv", index=False
     )
     pd.DataFrame().to_csv(out_dir / "imbalance_strategy_report.csv", index=False)
-    pd.DataFrame().to_csv(out_dir / "legacy_model_family_metrics.csv", index=False)
-    write_table(pd.DataFrame(columns=PREDICTION_COLUMNS), out_dir / "legacy_model_family_predictions.parquet")
-    pd.DataFrame(columns=IMPORTANCE_COLUMNS).to_csv(out_dir / "legacy_feature_importance.csv", index=False)
+    pd.DataFrame().to_csv(out_dir / "detected_misstatement_model_family_metrics.csv", index=False)
+    write_table(pd.DataFrame(columns=PREDICTION_COLUMNS), out_dir / "detected_misstatement_model_family_predictions.parquet")
+    pd.DataFrame(columns=IMPORTANCE_COLUMNS).to_csv(out_dir / "detected_misstatement_feature_importance.csv", index=False)
     blockers = {"status": "skipped", "reason": reason}
     (out_dir / "peer_blockers.json").write_text(json.dumps(blockers, indent=2), encoding="utf-8")
     manifest = _manifest(
@@ -997,7 +997,7 @@ def _empty_outputs(out_dir: Path, *, mode: str, reason: str) -> Dict[str, Path]:
         mapping_quality="skipped",
         imbalance_strategy="none",
         calibration_method="not_applicable",
-        sample_scope="legacy_benchmark",
+        sample_scope="detected_misstatement_benchmark",
         implementation_differences=[reason],
     )
     (out_dir / "peer_comparison_manifest.json").write_text(
@@ -1036,7 +1036,7 @@ def _manifest(
         "calibration_method": calibration_method,
         "crosswalk_version": "not_applicable",
         "sample_scope": sample_scope,
-        "task_estimand": "legacy_detected_misstatement_benchmark",
+        "task_estimand": "detected_misstatement_benchmark",
         "random_seed": SEED_DEFAULT,
         "implementation_differences": list(implementation_differences),
     }
@@ -1089,6 +1089,8 @@ def _summary_markdown(
 
 
 def validate_parallel_budget(*, parallel_jobs: int, model_threads: int) -> None:
+    if int(parallel_jobs) < 1 or int(model_threads) < 1:
+        raise ValueError("peer_comparison parallel_jobs and model_threads must be positive integers")
     env_limit = os.environ.get("PEER_MAX_WORKERS")
     if env_limit:
         available = max(1, int(env_limit))
@@ -1258,7 +1260,7 @@ def run_peer_comparison(
         if predictions_df.duplicated(
             subset=["gvkey", "data_year", "label_mode", "test_year", "train_window", "peer_model_id"]
         ).any():
-            raise ValueError("legacy_model_family_predictions has duplicate unique-key rows")
+            raise ValueError("detected_misstatement_model_family_predictions has duplicate unique-key rows")
     importance_df = pd.DataFrame(importance_rows, columns=IMPORTANCE_COLUMNS)
     imbalance_df = pd.DataFrame(imbalance_rows)
 
@@ -1295,9 +1297,9 @@ def run_peer_comparison(
     status_df.to_csv(out_dir / "peer_task_status.csv", index=False)
     mapping_df.to_csv(out_dir / "feature_mapping_attrition.csv", index=False)
     imbalance_df.to_csv(out_dir / "imbalance_strategy_report.csv", index=False)
-    metrics_df.to_csv(out_dir / "legacy_model_family_metrics.csv", index=False)
-    write_table(predictions_df, out_dir / "legacy_model_family_predictions.parquet")
-    importance_df.to_csv(out_dir / "legacy_feature_importance.csv", index=False)
+    metrics_df.to_csv(out_dir / "detected_misstatement_model_family_metrics.csv", index=False)
+    write_table(predictions_df, out_dir / "detected_misstatement_model_family_predictions.parquet")
+    importance_df.to_csv(out_dir / "detected_misstatement_feature_importance.csv", index=False)
     blockers = {
         "skipped_tasks": int(status_df["status"].eq("skipped").sum()) if not status_df.empty else 0,
         "reason_counts": status_df["reason_code"].value_counts().to_dict()
@@ -1318,7 +1320,7 @@ def run_peer_comparison(
         mapping_quality=str(fitted_quality),
         imbalance_strategy="mixed_peer_specific",
         calibration_method="uniform_ece_plus_quantile_ece",
-        sample_scope="legacy_benchmark",
+        sample_scope="detected_misstatement_benchmark",
         implementation_differences=implementation_differences,
     )
     (out_dir / "peer_comparison_manifest.json").write_text(
@@ -1337,7 +1339,7 @@ def run_peer_comparison(
         "out_dir": out_dir,
         "manifest_json": out_dir / "peer_comparison_manifest.json",
         "summary_md": out_dir / "peer_comparison_summary.md",
-        "metrics_csv": out_dir / "legacy_model_family_metrics.csv",
-        "predictions_table": out_dir / "legacy_model_family_predictions.parquet",
+        "metrics_csv": out_dir / "detected_misstatement_model_family_metrics.csv",
+        "predictions_table": out_dir / "detected_misstatement_model_family_predictions.parquet",
         "task_status_csv": out_dir / "peer_task_status.csv",
     }

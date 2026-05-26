@@ -7,6 +7,8 @@ import pytest
 
 import src.public_peer_comparison as ppc
 from src.public_peer_comparison import (
+    PUBLIC_DECHOW_PROXY_FEATURE_SET,
+    PUBLIC_DECHOW_PROXY_MODEL_ID,
     PUBLIC_MAPPING_COLUMNS,
     PUBLIC_PREDICTION_COLUMNS,
     PUBLIC_STATUS_COLUMNS,
@@ -106,12 +108,18 @@ def test_public_peer_full_mode_writes_pr2_artifacts(tmp_path: Path) -> None:
 
     status = pd.read_csv(out_dir / "public_model_family_task_status.csv")
     assert list(status.columns) == PUBLIC_STATUS_COLUMNS
+    assert PUBLIC_DECHOW_PROXY_MODEL_ID in set(status["peer_model_id"])
+    assert "dechow_variable_logit" not in set(status["peer_model_id"])
+    proxy_status = status.loc[status["peer_model_id"].eq(PUBLIC_DECHOW_PROXY_MODEL_ID)]
+    assert set(proxy_status["feature_set"]) == {PUBLIC_DECHOW_PROXY_FEATURE_SET}
     fixed = status.loc[status["peer_model_id"].eq("dechow_fixed_fscore_model1")]
     assert not fixed.empty
     assert fixed["reason_code"].eq("missing_required_mapping").all()
 
     mapping = pd.read_csv(out_dir / "public_model_family_mapping_attrition.csv")
     assert list(mapping.columns) == PUBLIC_MAPPING_COLUMNS
+    assert PUBLIC_DECHOW_PROXY_MODEL_ID in set(mapping["peer_model_id"])
+    assert "dechow_variable_logit" not in set(mapping["peer_model_id"])
     soft_assets = mapping.loc[mapping["source_variable"].eq("soft_assets")]
     assert not soft_assets.empty
     assert not soft_assets["mapping_status"].eq("exact").any()
@@ -119,6 +127,11 @@ def test_public_peer_full_mode_writes_pr2_artifacts(tmp_path: Path) -> None:
 
     predictions = read_table(out_dir / "public_model_family_predictions.parquet")
     assert list(predictions.columns) == PUBLIC_PREDICTION_COLUMNS
+    proxy_predictions = predictions.loc[
+        predictions["peer_model_id"].astype(str).eq(PUBLIC_DECHOW_PROXY_MODEL_ID)
+    ]
+    assert not proxy_predictions.empty
+    assert set(proxy_predictions["feature_set"].astype(str)) == {PUBLIC_DECHOW_PROXY_FEATURE_SET}
     assert not predictions.duplicated(
         subset=[
             "issuer_cik",

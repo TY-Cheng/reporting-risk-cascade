@@ -61,8 +61,8 @@ Claim-strength ladder:
 
 Core manuscript thesis to preserve:
 The paper is a measurement redesign, not an uninterpreted model-ranking exercise. It combines:
-- a benchmark layer using the old gvkey x data_year restatement CSV to diagnose
-  naive timing, drift, and missingness problems; and
+- a detected-misstatement benchmark layer at `gvkey x data_year` grain to
+  diagnose naive timing, drift, and missingness problems; and
 - a public cascade layer using filing-native SEC/PCAOB first-public-date events
   to estimate a pre-disclosure reporting-risk state for public scrutiny,
   correction, and public Item 4.02 material-correction outcomes.
@@ -86,9 +86,9 @@ Files to read first:
    public_cascade_metrics.csv.
 7. If artifacts/full_with_peer exists, inspect the peer-enabled result set before
    judging manuscript claims: study_summary.md, study_run_manifest.json,
-   legacy_model_family_metrics.csv, public_model_family_metrics.csv,
+   detected_misstatement_model_family_metrics.csv, public_model_family_metrics.csv,
    public_model_family_task_status.csv, construct_overlap_summary.md,
-   label_contingency_lift.csv, public_score_legacy_ranking.csv,
+   label_contingency_lift.csv, public_score_benchmark_ranking.csv,
    reciprocal_alignment.csv, and event_time_concentration.csv.
 
 If reporting-risk-cascade-manuscript is empty or incomplete, report that as a manuscript-readiness

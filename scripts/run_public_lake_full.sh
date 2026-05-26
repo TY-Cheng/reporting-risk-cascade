@@ -1,26 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODE="full"
-AS_OF_DATE="2026-04-23"
-SUBMISSIONS_MAX_CIKS=""
-DRY_RUN=0
-FORCE=0
-MONITOR_INTERVAL=60
-SKIP_PUBLIC_CASCADE=0
-FETCH_WORKERS=2
-ENGINE="duckdb"
-DUCKDB_THREADS=4
-DUCKDB_MEMORY_LIMIT="10GB"
-DUCKDB_TEMP_DIRECTORY=""
-DUCKDB_MAX_TEMP_SIZE="400GB"
-SKIP_SETUP=0
-STORAGE_FORMAT="parquet"
-NOTES_MODE="summary"
-FSDS_BATCH_SIZE=4
-NOTES_BATCH_SIZE=2
-FRESH_BUILD=0
-RESUME=0
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+if [[ -f ".env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source ".env"
+    set +a
+fi
+
+MODE="${MODE:-full}"
+AS_OF_DATE="${AS_OF_DATE:-2026-05-26}"
+SUBMISSIONS_MAX_CIKS="${SUBMISSIONS_MAX_CIKS:-}"
+DRY_RUN="${DRY_RUN:-0}"
+FORCE="${FORCE:-0}"
+MONITOR_INTERVAL="${MONITOR_INTERVAL:-60}"
+SKIP_PUBLIC_CASCADE="${SKIP_PUBLIC_CASCADE:-0}"
+FETCH_WORKERS="${FETCH_WORKERS:-2}"
+ENGINE="${ENGINE:-duckdb}"
+DUCKDB_THREADS="${DUCKDB_THREADS:-4}"
+DUCKDB_MEMORY_LIMIT="${DUCKDB_MEMORY_LIMIT:-10GB}"
+DUCKDB_TEMP_DIRECTORY="${DUCKDB_TEMP_DIRECTORY:-}"
+DUCKDB_MAX_TEMP_SIZE="${DUCKDB_MAX_TEMP_SIZE:-400GB}"
+SKIP_SETUP="${SKIP_SETUP:-0}"
+STORAGE_FORMAT="${STORAGE_FORMAT:-parquet}"
+NOTES_MODE="${NOTES_MODE:-summary}"
+FSDS_BATCH_SIZE="${FSDS_BATCH_SIZE:-4}"
+NOTES_BATCH_SIZE="${NOTES_BATCH_SIZE:-2}"
+SOURCE_END_YEAR="${SOURCE_END_YEAR:-}"
+FRESH_BUILD="${FRESH_BUILD:-0}"
+RESUME="${RESUME:-0}"
 
 usage() {
     cat <<'EOF'
@@ -28,7 +39,7 @@ Usage: bash scripts/run_public_lake_full.sh [options]
 
 Options:
   --mode full|smoke              Run against DATA_DIR/public_lake or DATA_DIR/public_lake_smoke.
-  --as-of-date YYYY-MM-DD        Censoring date for gold panels. Default: 2026-04-23.
+  --as-of-date YYYY-MM-DD        Censoring date for gold panels. Default: 2026-05-26.
   --submissions-max-ciks N       Optional cap for submissions.zip normalization.
   --dry-run                      Print commands without executing them.
   --force                        Re-download source files even when cached.
@@ -40,10 +51,11 @@ Options:
   --duckdb-memory-limit SIZE     DuckDB memory_limit for build-lake. Default: 10GB.
   --duckdb-temp-directory PATH   DuckDB temp_directory. Default: silver-local temp dir.
   --duckdb-max-temp-size SIZE    DuckDB max_temp_directory_size. Default: 400GB.
-  --storage-format parquet|csv-gz Heavy-table storage format. Default: parquet; csv-gz is legacy.
+  --storage-format parquet|csv-gz Heavy-table storage format. Default: parquet; csv-gz is compatibility fallback.
   --notes-mode summary|raw|skip   Notes extraction mode. Default: summary.
   --fsds-batch-size N            FSDS archive batch size for Parquet builds. Default: 4.
   --notes-batch-size N           Notes archive batch size for Parquet builds. Default: 2.
+  --source-end-year YEAR         Source archive end year. Default: year from --as-of-date.
   --fresh-build                  Rebuild silver/gold from bronze without force-fetching bronze.
   --resume                       Reuse build-lake DAG done markers.
   --skip-setup                   Skip just setup; useful when called from just full.
@@ -117,6 +129,10 @@ while [[ $# -gt 0 ]]; do
             NOTES_BATCH_SIZE="$2"
             shift 2
             ;;
+        --source-end-year)
+            SOURCE_END_YEAR="$2"
+            shift 2
+            ;;
         --fresh-build)
             FRESH_BUILD=1
             shift
@@ -181,15 +197,12 @@ if ! [[ "$NOTES_BATCH_SIZE" =~ ^[0-9]+$ ]] || [[ "$NOTES_BATCH_SIZE" -lt 1 ]]; t
     echo "--notes-batch-size must be a positive integer" >&2
     exit 2
 fi
-
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
-
-if [[ -f ".env" ]]; then
-    set -a
-    # shellcheck source=/dev/null
-    source ".env"
-    set +a
+if [[ -z "$SOURCE_END_YEAR" ]]; then
+    SOURCE_END_YEAR="${AS_OF_DATE%%-*}"
+fi
+if ! [[ "$SOURCE_END_YEAR" =~ ^[0-9]{4}$ ]]; then
+    echo "--source-end-year must be a four-digit year, got: ${SOURCE_END_YEAR}" >&2
+    exit 2
 fi
 
 if [[ -z "${UV_PROJECT_ENVIRONMENT:-}" ]]; then
@@ -207,20 +220,44 @@ LAKE_SILVER_DIR="${LAKE_SILVER_DIR:-${PUBLIC_LAKE_DIR}/silver}"
 LAKE_GOLD_DIR="${LAKE_GOLD_DIR:-${PUBLIC_LAKE_DIR}/gold}"
 PUBLIC_LAKE_SMOKE_DIR="${PUBLIC_LAKE_SMOKE_DIR:-${DATA_DIR}/public_lake_smoke}"
 
-case "${DATA_DIR}" in
-    /*)
-        ;;
-    *)
-        echo "DATA_DIR must be an absolute path, got: ${DATA_DIR}" >&2
-        exit 1
-        ;;
-esac
-case "${DATA_DIR%/}" in
-    "${PWD}"|"${PWD}/"*)
-        echo "DATA_DIR must point outside this repo, got: ${DATA_DIR}" >&2
-        exit 1
-        ;;
-esac
+physical_path() {
+    python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$1"
+}
+
+REPO_REAL="$(physical_path "$REPO_ROOT")"
+
+require_absolute_path() {
+    local name="$1"
+    local value="$2"
+    case "$value" in
+        /*) ;;
+        *)
+            echo "${name} must be an absolute path, got: ${value}" >&2
+            exit 1
+            ;;
+    esac
+}
+
+require_outside_repo() {
+    local name="$1"
+    local value="$2"
+    local value_real
+    require_absolute_path "$name" "$value"
+    value_real="$(physical_path "$value")"
+    case "$value_real" in
+        "${REPO_REAL}"|"${REPO_REAL}/"*)
+            echo "${name} must point outside this repo, got: ${value}" >&2
+            exit 1
+            ;;
+    esac
+}
+
+require_outside_repo "DATA_DIR" "$DATA_DIR"
+require_outside_repo "PUBLIC_LAKE_DIR" "$PUBLIC_LAKE_DIR"
+require_outside_repo "PUBLIC_LAKE_SMOKE_DIR" "$PUBLIC_LAKE_SMOKE_DIR"
+require_outside_repo "LAKE_BRONZE_DIR" "$LAKE_BRONZE_DIR"
+require_outside_repo "LAKE_SILVER_DIR" "$LAKE_SILVER_DIR"
+require_outside_repo "LAKE_GOLD_DIR" "$LAKE_GOLD_DIR"
 case "${ARTIFACTS_DIR}" in
     /*)
         ;;
@@ -239,12 +276,7 @@ case "${UV_PROJECT_ENVIRONMENT}" in
         ;;
 esac
 
-case "${UV_PROJECT_ENVIRONMENT%/}" in
-    "${PWD}"|"${PWD}/"*)
-        echo "UV_PROJECT_ENVIRONMENT must point outside this repo, got: ${UV_PROJECT_ENVIRONMENT}" >&2
-        exit 1
-        ;;
-esac
+require_outside_repo "UV_PROJECT_ENVIRONMENT" "$UV_PROJECT_ENVIRONMENT"
 mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"
 
 RUN_ID="$(date -u +"%Y%m%dT%H%M%SZ")"
@@ -382,6 +414,7 @@ echo "Storage format: ${STORAGE_FORMAT}"
 echo "Notes mode: ${NOTES_MODE}"
 echo "FSDS batch size: ${FSDS_BATCH_SIZE}"
 echo "Notes batch size: ${NOTES_BATCH_SIZE}"
+echo "Source archive end year: ${SOURCE_END_YEAR}"
 echo "Fresh build: ${FRESH_BUILD}"
 echo "Resume: ${RESUME}"
 echo "Skip setup: ${SKIP_SETUP}"
@@ -406,8 +439,8 @@ run_step "status" just status
 start_fetch "sec-bulk" ""
 start_fetch "form-ap" ""
 start_fetch "pcaob-inspections" "${SOURCE_LIMIT_EXTRA}"
-start_fetch "fsds" "--start-year 2011 --end-year 2023 ${SOURCE_LIMIT_EXTRA}"
-start_fetch "notes" "--start-year 2020 --end-year 2023 ${SOURCE_LIMIT_EXTRA}"
+start_fetch "fsds" "--start-year 2011 --end-year ${SOURCE_END_YEAR} ${SOURCE_LIMIT_EXTRA}"
+start_fetch "notes" "--start-year 2020 --end-year ${SOURCE_END_YEAR} ${SOURCE_LIMIT_EXTRA}"
 wait_for_all_fetches
 
 BUILD_ARGS=(

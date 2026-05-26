@@ -54,6 +54,8 @@ PUBLIC_FEATURE_SETS = ["metadata", "xbrl", "auditor", "oversight", "all"]
 HEADLINE_TASKS = ["comment_thread", "amendment", "8k_402"]
 SEVERITY_TAIL_TASKS: list[str] = []
 PUBLIC_INPUT_KIND = "public_issuer_origin"
+PUBLIC_DECHOW_PROXY_MODEL_ID = "dechow_public_xbrl_proxy_logit"
+PUBLIC_DECHOW_PROXY_FEATURE_SET = "xbrl_proxy"
 
 PUBLIC_MAPPING_COLUMNS = [
     "peer_model_id",
@@ -204,7 +206,7 @@ def _public_mapping_report(panel: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str,
     ]
     dechow = _public_mapping_rows(
         panel=panel,
-        peer_model_id="dechow_variable_logit",
+        peer_model_id=PUBLIC_DECHOW_PROXY_MODEL_ID,
         peer="dechow2011",
         variables=dechow_variables,
     )
@@ -268,13 +270,29 @@ def _feature_columns_for_public_spec(
     if peer_model_id == "dechow_fixed_fscore_model1":
         mapping = mapping_by_peer["dechow_fixed"]
         return _mapped_columns(mapping), aggregate_mapping_quality(mapping), _mapping_attrition_rate(mapping)
-    if peer_model_id == "dechow_variable_logit":
+    if peer_model_id == PUBLIC_DECHOW_PROXY_MODEL_ID:
         mapping = mapping_by_peer["dechow"]
         return _mapped_columns(mapping), aggregate_mapping_quality(mapping), _mapping_attrition_rate(mapping)
     if peer_model_id in {"bao_inspired_tree_ensemble", "bao_style_ensemble"}:
         mapping = mapping_by_peer["bao"]
         return list(feature_cols), aggregate_mapping_quality(mapping), _mapping_attrition_rate(mapping)
     return list(feature_cols), "full", 0.0
+
+
+def _public_model_specs(*, model_threads: int) -> List[Dict[str, object]]:
+    specs = _model_specs(
+        mode="full",
+        model_threads=model_threads,
+        benchmark_input_kind=PUBLIC_INPUT_KIND,
+        bao_mapping_quality="skipped",
+    )
+    public_specs: List[Dict[str, object]] = []
+    for spec in specs:
+        public_spec = dict(spec)
+        if str(public_spec["peer_model_id"]) == "dechow_variable_logit":
+            public_spec["peer_model_id"] = PUBLIC_DECHOW_PROXY_MODEL_ID
+        public_specs.append(public_spec)
+    return public_specs
 
 
 def _prepare_numeric_xy(
@@ -830,17 +848,22 @@ def run_public_peer_comparison(
         )
     )
     mapping_df, mapping_by_peer = _public_mapping_report(panel)
-    specs = _model_specs(
-        mode="full",
-        model_threads=model_threads,
-        benchmark_input_kind=PUBLIC_INPUT_KIND,
-        bao_mapping_quality="skipped",
-    )
-    units = [
-        {"spec": spec, "feature_set": feature_set, "feature_cols": families.get(feature_set, [])}
-        for spec in specs
-        for feature_set in feature_sets
-    ]
+    specs = _public_model_specs(model_threads=model_threads)
+    units = []
+    for spec in specs:
+        if str(spec["peer_model_id"]) == PUBLIC_DECHOW_PROXY_MODEL_ID:
+            units.append(
+                {
+                    "spec": spec,
+                    "feature_set": PUBLIC_DECHOW_PROXY_FEATURE_SET,
+                    "feature_cols": [],
+                }
+            )
+            continue
+        units.extend(
+            {"spec": spec, "feature_set": feature_set, "feature_cols": families.get(feature_set, [])}
+            for feature_set in feature_sets
+        )
     fit_kwargs = {
         "panel": panel,
         "tasks": tasks,

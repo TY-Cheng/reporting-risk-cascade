@@ -19,7 +19,7 @@ def _bootstrap_repo_root() -> None:
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
-    from src import DATA_DIR, RAW_DATASET_PATH
+    from src import LAKE_GOLD_DIR, PUBLIC_LAKE_SMOKE_DIR, RAW_DATASET_PATH
     from src.linkage import (
         DEFAULT_LINKAGE_OUT_DIR,
         DEFAULT_RAW_CIK_GVKEY_LINK_PATH,
@@ -52,13 +52,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--public-lake-panel",
         type=Path,
-        default=DATA_DIR / "public_lake" / "gold" / "issuer_origin_panel.parquet",
+        default=LAKE_GOLD_DIR / "issuer_origin_panel.parquet",
         help="Full public-lake issuer_origin_panel path for overlap output",
     )
     parser.add_argument(
         "--public-lake-smoke-panel",
         type=Path,
-        default=DATA_DIR / "public_lake_smoke" / "gold" / "issuer_origin_panel.parquet",
+        default=PUBLIC_LAKE_SMOKE_DIR / "gold" / "issuer_origin_panel.parquet",
         help="Smoke public-lake issuer_origin_panel path for overlap output",
     )
     parser.add_argument(

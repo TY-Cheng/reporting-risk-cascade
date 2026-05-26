@@ -72,10 +72,10 @@ Current paper-facing counts:
 | Detected-misstatement benchmark firms | 9,156 |
 | Benchmark years | 2001-2019 |
 | Detected-misstatement positives | 2,460 |
-| Public filing provenance rows | 21,786,118 |
-| Public issuer-year gold rows | 205,719 |
-| Main domestic public-cascade sample rows | 90,342 |
-| Main public fiscal-year span | 2011-2023 |
+| Public filing provenance rows | 21,832,838 |
+| Public issuer-year gold rows | 205,652 |
+| Main domestic public-cascade sample rows | 96,827 |
+| Main public fiscal-year span | 2011-2024 |
 
 ### What public sources are in the lake?
 
@@ -300,13 +300,13 @@ Current public task metrics:
 
 | Task | Positives | Mean prevalence | Mean PR-AUC | Mean ROC-AUC |
 | --- | ---: | ---: | ---: | ---: |
-| `comment_thread` | 24,840 | 0.2615 | 0.3654 | 0.6327 |
-| `amendment` | 17,241 | 0.1552 | 0.2530 | 0.6271 |
-| `8k_402` | 2,008 | 0.0221 | 0.0506 | 0.6544 |
+| `comment_thread` | 26,018 | 0.2531 | 0.3679 | 0.6434 |
+| `amendment` | 17,949 | 0.1499 | 0.2557 | 0.6356 |
+| `8k_402` | 2,078 | 0.0208 | 0.0508 | 0.6617 |
 
 The strongest current public-cascade specification reported in the snapshot is
-`all + expanding`, with mean PR-AUC `0.2887`. The all-feature family is also
-the strongest feature-family summary, with mean PR-AUC `0.2875`.
+`all + rolling_7y`, with reported mean PR-AUC `0.2950`. The all-feature family
+is also the strongest feature-family summary, with mean PR-AUC `0.2942`.
 
 The appropriate reading is feature-fusion gain, not XBRL dominance. Metadata is
 already strong, and non-metadata feature families add value most clearly when
@@ -318,8 +318,8 @@ In the detected-misstatement peer benchmark, `bertomeu_style_xgb` has the strong
 (`0.0427`).
 
 In the public-label peer transfer, `bertomeu_style_xgb` and
-`bao_inspired_tree_ensemble` are essentially tied on mean PR-AUC (`0.2247` and
-`0.2245`).
+`bao_inspired_tree_ensemble` are essentially tied on mean PR-AUC (`0.2267` and
+`0.2266`).
 
 These are model-family transfer results. They should not be described as exact
 numeric replications of prior papers.
@@ -334,16 +334,16 @@ severe public correction channel:
 
 | Public label | Lift public given benchmark |
 | --- | ---: |
-| `label_comment_thread_365` | 1.0279 |
-| `label_amendment_365` | 1.9229 |
-| `label_8k_402_365` | 8.5832 |
+| `label_comment_thread_365` | 1.0304 |
+| `label_amendment_365` | 1.9246 |
+| `label_8k_402_365` | 8.5351 |
 
 Reciprocal ranking evidence also points to related constructs:
 
 | Direction | Target | PR-AUC | ROC-AUC | Top-decile lift |
 | --- | --- | ---: | ---: | ---: |
-| Public cascade score -> benchmark positives | `8k_402` | 0.0310 | 0.6836 | 2.9627 |
-| Detected-misstatement score -> public labels | `label_8k_402_365` | 0.0463 | 0.7101 | 3.1495 |
+| Public cascade score -> benchmark positives | `8k_402` | 0.0415 | 0.6986 | 2.9637 |
+| Detected-misstatement score -> public labels | `label_8k_402_365` | 0.0463 | 0.7099 | 3.1557 |
 
 The interpretation is construct overlap, not identity. Comment threads capture
 broad scrutiny; amendments capture correction/friction; 8-K Item 4.02 is closer
@@ -411,10 +411,11 @@ Use `just check` as the data-free quality gate.
 Use `just data` or `just data full resume` to rebuild data engineering and the
 raw-only linkage outputs without rerunning all modeling.
 
-Use `just full mode=full dataset=raw` for the paper-facing core run.
+Use `just full mode=full dataset=raw` only when the raw/public-lake/linkage data
+layer or core full-run protocol needs to be rebuilt end to end.
 
-Use the peer-enabled study command when the detected-misstatement and public
-peer suites need to be refreshed:
+Use the peer-enabled study command for the normal paper-facing result refresh
+when the detected-misstatement and public peer suites need to be current:
 
 ```bash
 just task study raw artifacts/full_with_peer \
@@ -424,8 +425,8 @@ just task study raw artifacts/full_with_peer \
 Then run:
 
 ```bash
-just snapshot
-just manuscript
+just snapshot study_dir=artifacts/full_with_peer
+just manuscript study_dir=artifacts/full_with_peer
 ```
 
 ### Which artifacts answer the core questions?

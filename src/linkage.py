@@ -15,7 +15,7 @@ from typing import Any, Iterable, Sequence
 
 import pandas as pd
 
-from . import DATA_DIR, RAW_DATASET_PATH
+from . import DATA_DIR, LAKE_GOLD_DIR, PUBLIC_LAKE_SMOKE_DIR, RAW_DATASET_PATH
 from .table_io import read_table, write_table
 
 
@@ -66,10 +66,13 @@ def _normalize_cik(value: object) -> str | None:
     text = str(value).strip()
     if not text or text.lower() in {"nan", "none"}:
         return None
-    digits = "".join(ch for ch in text if ch.isdigit())
-    if not digits:
-        return None
-    numeric = int(digits)
+    try:
+        numeric = int(float(text))
+    except ValueError:
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if not digits:
+            return None
+        numeric = int(digits)
     if numeric <= 0:
         return None
     return str(numeric).zfill(10)
@@ -182,14 +185,14 @@ def _raw_year_set(raw_data: pd.DataFrame | None) -> set[int]:
 
 def _raw_key_frame(raw_data: pd.DataFrame | None) -> pd.DataFrame:
     if raw_data is None or raw_data.empty:
-        return pd.DataFrame(columns=["gvkey", "data_year", "legacy_label"])
+        return pd.DataFrame(columns=["gvkey", "data_year", "benchmark_label"])
     if "gvkey" not in raw_data.columns or "data_year" not in raw_data.columns:
-        return pd.DataFrame(columns=["gvkey", "data_year", "legacy_label"])
+        return pd.DataFrame(columns=["gvkey", "data_year", "benchmark_label"])
     label_col = "misstatement firm-year" if "misstatement firm-year" in raw_data.columns else None
     frame = raw_data[["gvkey", "data_year", *([label_col] if label_col else [])]].copy()
     frame["gvkey"] = frame["gvkey"].map(_normalize_gvkey)
     frame["data_year"] = frame["data_year"].map(_normalize_year)
-    frame["legacy_label"] = (
+    frame["benchmark_label"] = (
         pd.to_numeric(frame[label_col], errors="coerce").fillna(0).astype(int)
         if label_col
         else 0
@@ -197,7 +200,7 @@ def _raw_key_frame(raw_data: pd.DataFrame | None) -> pd.DataFrame:
     return frame.loc[frame["gvkey"].notna() & frame["data_year"].notna(), [
         "gvkey",
         "data_year",
-        "legacy_label",
+        "benchmark_label",
     ]].drop_duplicates()
 
 
@@ -440,7 +443,7 @@ def _raw_coverage(combined: pd.DataFrame, raw_data: pd.DataFrame | None) -> dict
     combined_covered = combined_hit["_covered"].eq(True)
     raw_covered = raw_hit["_covered"].eq(True)
     total = int(len(raw_keys))
-    positives = raw_keys["legacy_label"].eq(1)
+    positives = raw_keys["benchmark_label"].eq(1)
     return {
         "raw_rows": total,
         "raw_positive_rows": int(positives.sum()),
@@ -495,7 +498,7 @@ def _conflict_stats(conflicts: pd.DataFrame, raw_data: pd.DataFrame | None) -> d
     return {
         **base,
         "raw_benchmark_conflict_rows": int(len(raw_conflicts)),
-        "raw_benchmark_positive_conflict_rows": int(raw_conflicts["legacy_label"].eq(1).sum()),
+        "raw_benchmark_positive_conflict_rows": int(raw_conflicts["benchmark_label"].eq(1).sum()),
     }
 
 
@@ -548,7 +551,7 @@ def public_overlap_outputs(
             how="left",
         )
         hit = raw_hits["_public_overlap"].eq(True)
-        positives = raw_hits["legacy_label"].eq(1)
+        positives = raw_hits["benchmark_label"].eq(1)
         raw_overlap_summary = {
             "raw_benchmark_rows": int(len(raw_hits)),
             "raw_benchmark_overlap_rows": int(hit.sum()),
@@ -604,10 +607,10 @@ def build_raw_primary_linkage(
     write_table(combined, combined_path)
     write_table(conflicts, conflicts_path)
 
-    public_lake_panel_path = public_lake_panel_path or DATA_DIR / "public_lake" / "gold" / "issuer_origin_panel.parquet"
+    public_lake_panel_path = public_lake_panel_path or LAKE_GOLD_DIR / "issuer_origin_panel.parquet"
     public_lake_smoke_panel_path = (
         public_lake_smoke_panel_path
-        or DATA_DIR / "public_lake_smoke" / "gold" / "issuer_origin_panel.parquet"
+        or PUBLIC_LAKE_SMOKE_DIR / "gold" / "issuer_origin_panel.parquet"
     )
     public_lake_summary = public_overlap_outputs(
         combined,

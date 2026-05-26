@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--seed-policy",
-        choices=["task-isolated", "legacy"],
+        choices=["task-isolated", "shared"],
         default=None,
         help="Random seed policy for rolling tasks; defaults to config analysis.seed_policy",
     )

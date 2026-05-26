@@ -616,10 +616,10 @@ def _run_public_cascade_unit(
             model_seed = stable_task_seed(
                 seed, "public_cascade", family, train_window_label, test_year, task_name
             )
-        elif seed_policy == "legacy":
+        elif seed_policy == "shared":
             model_seed = int(seed)
         else:
-            raise ValueError("seed_policy must be 'task_isolated' or 'legacy'")
+            raise ValueError("seed_policy must be 'task_isolated' or 'shared'")
 
         x_task_train = preprocessor.transform(task_train[active_feature_cols])
         x_task_test = preprocessor.transform(task_test[active_feature_cols])
@@ -650,7 +650,12 @@ def _run_public_cascade_unit(
             }
         )
         task_status_rows.append({**status_base, "status": "fit"})
-        pred_frame = task_test[["issuer_cik", "fiscal_year", "origin_date"]].copy()
+        pred_id_cols = [
+            col
+            for col in ["issuer_cik", "accession", "fiscal_year", "origin_date"]
+            if col in task_test.columns
+        ]
+        pred_frame = task_test[pred_id_cols].copy()
         pred_frame["_task_order"] = int(task_order)
         pred_frame["_task_suborder"] = int(task_suborder)
         pred_frame["_row_order"] = pred_frame.index.to_numpy()
@@ -755,9 +760,9 @@ def run_public_cascade(
     if model_threads is not None:
         model_cfg["xgb"]["n_jobs"] = int(model_threads)
     parallel_jobs = max(1, int(parallel_jobs or analysis_cfg.get("parallel_jobs", 1)))
-    seed_policy = str(seed_policy or analysis_cfg.get("seed_policy", "legacy"))
-    if seed_policy not in {"task_isolated", "legacy"}:
-        raise ValueError("seed_policy must be 'task_isolated' or 'legacy'")
+    seed_policy = str(seed_policy or analysis_cfg.get("seed_policy", "shared"))
+    if seed_policy not in {"task_isolated", "shared"}:
+        raise ValueError("seed_policy must be 'task_isolated' or 'shared'")
     years = panel["fiscal_year"].dropna().astype(int).sort_values().unique().tolist()
     opacity_dml_cfg = dict(analysis_cfg.get("opacity_dml", {}))
 
@@ -854,6 +859,7 @@ def run_public_cascade(
         "issuer_cik",
         "accession",
         "fiscal_year",
+        "origin_date",
         "feature_set",
         "train_window",
         "task",
@@ -888,9 +894,11 @@ def run_public_cascade(
             .reindex(columns=metric_columns)
         )
     if not predictions_df.empty:
-        predictions_df = predictions_df.sort_values(
-            ["_task_order", "_task_suborder", "_row_order"]
-        ).drop(columns=["_task_order", "_task_suborder", "_row_order"])
+        predictions_df = (
+            predictions_df.sort_values(["_task_order", "_task_suborder", "_row_order"])
+            .drop(columns=["_task_order", "_task_suborder", "_row_order"])
+            .reindex(columns=prediction_columns)
+        )
     if not task_status_df.empty:
         task_status_df = (
             pd.DataFrame(task_status_rows)

@@ -35,7 +35,7 @@ FULL_REQUIRED_ARTIFACTS = [
     "bridge_probe/coverage_report.csv",
     "bridge_probe/multiplicity_report.csv",
     "peer_comparison/peer_comparison_summary.md",
-    "peer_comparison/legacy_model_family_metrics.csv",
+    "peer_comparison/detected_misstatement_model_family_metrics.csv",
     "peer_comparison/peer_task_status.csv",
     "public_peer_comparison/public_model_family_summary.md",
     "public_peer_comparison/public_model_family_metrics.csv",
@@ -43,11 +43,11 @@ FULL_REQUIRED_ARTIFACTS = [
     "construct_overlap/construct_overlap_manifest.json",
     "construct_overlap/construct_overlap_summary.md",
     "construct_overlap/overlap_sample_flow.csv",
-    "construct_overlap/public_score_legacy_ranking.csv",
+    "construct_overlap/public_score_benchmark_ranking.csv",
     "construct_overlap/reciprocal_alignment.csv",
     "construct_overlap/label_contingency_lift.csv",
     "construct_overlap/event_time_concentration.csv",
-    "construct_overlap/legacy_positive_public_label_cooccurrence.csv",
+    "construct_overlap/benchmark_positive_public_label_cooccurrence.csv",
     "construct_overlap/aggregation_sensitivity.csv",
 ]
 
@@ -538,7 +538,7 @@ def _simple_csv_rows(path: Path, columns: list[str], *, max_rows: int | None = N
 def _overlap_sample_flow_rows(study_dir: Path) -> list[list[str]]:
     return _simple_csv_rows(
         study_dir / "construct_overlap" / "overlap_sample_flow.csv",
-        ["bridge_tier", "rows", "legacy_positives"],
+        ["bridge_tier", "rows", "benchmark_positives"],
     )
 
 
@@ -550,11 +550,11 @@ def _label_contingency_rows(study_dir: Path) -> list[list[str]]:
         "public_label",
         "bridge_tier",
         "n",
-        "legacy_positive_rows",
+        "benchmark_positive_rows",
         "public_positive_rows",
         "both_positive_rows",
-        "lift_public_given_legacy",
-        "lift_legacy_given_public",
+        "lift_public_given_benchmark",
+        "lift_benchmark_given_public",
     ]
     if not set(columns).issubset(frame.columns):
         return []
@@ -565,11 +565,11 @@ def _label_contingency_rows(study_dir: Path) -> list[list[str]]:
                 _code(row["public_label"]),
                 _code(row["bridge_tier"]),
                 _fmt(row["n"]),
-                _fmt(row["legacy_positive_rows"]),
+                _fmt(row["benchmark_positive_rows"]),
                 _fmt(row["public_positive_rows"]),
                 _fmt(row["both_positive_rows"]),
-                _fmt(row["lift_public_given_legacy"]),
-                _fmt(row["lift_legacy_given_public"]),
+                _fmt(row["lift_public_given_benchmark"]),
+                _fmt(row["lift_benchmark_given_public"]),
             ]
         )
     return rows
@@ -586,10 +586,10 @@ def _event_time_rows(study_dir: Path) -> list[list[str]]:
     columns = [
         "relative_year",
         "public_label",
-        "n_legacy_positive",
-        "n_legacy_negative",
-        "public_label_rate_legacy_positive",
-        "public_label_rate_legacy_negative",
+        "n_benchmark_positive",
+        "n_benchmark_negative",
+        "public_label_rate_benchmark_positive",
+        "public_label_rate_benchmark_negative",
         "raw_difference",
         "balanced_window",
     ]
@@ -601,10 +601,10 @@ def _event_time_rows(study_dir: Path) -> list[list[str]]:
             [
                 _fmt(row["relative_year"]),
                 _code(row["public_label"]),
-                _fmt(row["n_legacy_positive"]),
-                _fmt(row["n_legacy_negative"]),
-                _fmt(row["public_label_rate_legacy_positive"]),
-                _fmt(row["public_label_rate_legacy_negative"]),
+                _fmt(row["n_benchmark_positive"]),
+                _fmt(row["n_benchmark_negative"]),
+                _fmt(row["public_label_rate_benchmark_positive"]),
+                _fmt(row["public_label_rate_benchmark_negative"]),
                 _fmt(row["raw_difference"]),
                 _fmt(bool(row["balanced_window"])),
             ]
@@ -655,11 +655,11 @@ def _bridge_coverage_rows(path: Path) -> list[list[str]]:
 
 
 def _construct_alignment_rows(study_dir: Path) -> list[list[str]]:
-    public_to_legacy = _read_csv(study_dir / "construct_overlap" / "public_score_legacy_ranking.csv")
-    legacy_to_public = _read_csv(study_dir / "construct_overlap" / "reciprocal_alignment.csv")
+    public_to_benchmark = _read_csv(study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv")
+    benchmark_to_public = _read_csv(study_dir / "construct_overlap" / "reciprocal_alignment.csv")
     rows = []
-    if not public_to_legacy.empty and "top_decile_lift" in public_to_legacy.columns:
-        best = public_to_legacy.sort_values("top_decile_lift", ascending=False).iloc[0]
+    if not public_to_benchmark.empty and "top_decile_lift" in public_to_benchmark.columns:
+        best = public_to_benchmark.sort_values("top_decile_lift", ascending=False).iloc[0]
         rows.append(
             [
                 "Public cascade score -> benchmark positives",
@@ -670,8 +670,8 @@ def _construct_alignment_rows(study_dir: Path) -> list[list[str]]:
                 _fmt(best.get("top_decile_lift")),
             ]
         )
-    if not legacy_to_public.empty and "top_decile_lift" in legacy_to_public.columns:
-        best = legacy_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
+    if not benchmark_to_public.empty and "top_decile_lift" in benchmark_to_public.columns:
+        best = benchmark_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
         rows.append(
             [
                 "Detected-misstatement score -> public labels",
@@ -694,13 +694,13 @@ def _artifact_index(study_dir: Path) -> list[str]:
         "public_cascade/public_cascade_summary.md",
         "public_cascade/public_cascade_metrics.csv",
         "peer_comparison/peer_comparison_summary.md",
-        "peer_comparison/legacy_model_family_metrics.csv",
+        "peer_comparison/detected_misstatement_model_family_metrics.csv",
         "public_peer_comparison/public_model_family_summary.md",
         "public_peer_comparison/public_model_family_metrics.csv",
         "bridge_probe/bridge_probe_summary.json",
         "bridge_probe/coverage_report.csv",
         "construct_overlap/construct_overlap_summary.md",
-        "construct_overlap/public_score_legacy_ranking.csv",
+        "construct_overlap/public_score_benchmark_ranking.csv",
         "construct_overlap/reciprocal_alignment.csv",
         "opacity_validation_refresh/opacity_diagnostics_summary.csv",
     ]
@@ -980,7 +980,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         _table(
             ["Model", "Rows", "Mean PR-AUC", "Mean ROC-AUC", "Max PR-AUC", "Mean Brier"],
-            _peer_model_rows(study_dir / "peer_comparison" / "legacy_model_family_metrics.csv"),
+            _peer_model_rows(study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv"),
         ),
         "",
         "### Detected-Misstatement Peer Fit and Skip Status",
@@ -1098,14 +1098,14 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                 "Display count",
             ],
             _simple_csv_rows(
-                study_dir / "construct_overlap" / "legacy_positive_public_label_cooccurrence.csv",
+                study_dir / "construct_overlap" / "benchmark_positive_public_label_cooccurrence.csv",
                 [
                     "label_pattern",
                     "label_comment_thread_365",
                     "label_amendment_365",
                     "label_8k_402_365",
-                    "n_legacy_positives",
-                    "pct_of_legacy_positives",
+                    "n_benchmark_positives",
+                    "pct_of_benchmark_positives",
                     "display_count",
                 ],
             ),

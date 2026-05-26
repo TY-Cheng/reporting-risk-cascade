@@ -40,23 +40,51 @@ if [ -f ".env" ]; then
   set +a
 fi
 
+if [ -z "${UV_PROJECT_ENVIRONMENT:-}" ]; then
+  echo "UV_PROJECT_ENVIRONMENT is missing in .env" >&2
+  exit 1
+fi
+
+physical_path() {
+  python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$1"
+}
+
+repo_root_real="$(physical_path "${repo_root}")"
+
+require_absolute_path() {
+  local name="$1"
+  local value="$2"
+  case "${value}" in
+    /*) ;;
+    *)
+      echo "${name} must be an absolute path, got: ${value}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+require_outside_repo() {
+  local name="$1"
+  local value="$2"
+  local value_real
+  require_absolute_path "${name}" "${value}"
+  value_real="$(physical_path "${value}")"
+  case "${value_real}" in
+    "${repo_root_real}"|"${repo_root_real}/"*)
+      echo "${name} must point outside this repo, got: ${value}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+require_outside_repo "UV_PROJECT_ENVIRONMENT" "${UV_PROJECT_ENVIRONMENT}"
+mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"
+
 if [ -z "${DATA_DIR:-}" ]; then
   echo "DATA_DIR is missing in .env; farr bridge data must be written to the external data root." >&2
   exit 1
 fi
-case "${DATA_DIR}" in
-  /*) ;;
-  *)
-    echo "DATA_DIR must be an absolute path, got: ${DATA_DIR}" >&2
-    exit 1
-    ;;
-esac
-case "${DATA_DIR%/}" in
-  "${repo_root}"|"${repo_root}/"*)
-    echo "DATA_DIR must point outside this repo, got: ${DATA_DIR}" >&2
-    exit 1
-    ;;
-esac
+require_outside_repo "DATA_DIR" "${DATA_DIR}"
 
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${repo_root}/artifacts}"
 case "${ARTIFACTS_DIR}" in

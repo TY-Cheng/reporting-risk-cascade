@@ -741,10 +741,10 @@ def _run_rolling_task(
 
     if seed_policy == "task_isolated":
         task_seed = stable_task_seed(seed, "benchmark", window_label, test_year, label_mode)
-    elif seed_policy == "legacy":
+    elif seed_policy == "shared":
         task_seed = int(seed) + int(test_year)
     else:
-        raise ValueError("seed_policy must be 'task_isolated' or 'legacy'")
+        raise ValueError("seed_policy must be 'task_isolated' or 'shared'")
 
     model = fit_xgb_classifier(X_train, y_train, seed=task_seed, model_cfg=model_cfg)
     y_prob = model.predict_proba(X_test)[:, 1]
@@ -850,7 +850,7 @@ def run_rolling_backtest(
     model_cfg: Dict[str, Any],
     seed: int,
     parallel_jobs: int = 1,
-    seed_policy: str = "legacy",
+    seed_policy: str = "shared",
 ) -> RollingResult:
     metrics_rows: List[Dict[str, Any]] = []
     importance_rows: List[Dict[str, Any]] = []
@@ -860,8 +860,8 @@ def run_rolling_backtest(
     if len(years) <= min_train_years:
         raise ValueError("Not enough years to run rolling backtests.")
 
-    if seed_policy not in {"task_isolated", "legacy"}:
-        raise ValueError("seed_policy must be 'task_isolated' or 'legacy'")
+    if seed_policy not in {"task_isolated", "shared"}:
+        raise ValueError("seed_policy must be 'task_isolated' or 'shared'")
 
     tasks: List[Tuple[int, Optional[int], int, str]] = []
     task_order = 0
@@ -1337,7 +1337,7 @@ def run_benchmark(
         model_cfg=model_cfg,
         seed=int(analysis.get("seed", SEED_DEFAULT)),
         parallel_jobs=int(parallel_jobs or analysis.get("parallel_jobs", 1)),
-        seed_policy=str(seed_policy or analysis.get("seed_policy", "legacy")),
+        seed_policy=str(seed_policy or analysis.get("seed_policy", "shared")),
     )
     window_summary = compute_window_summary(rolling.metrics)
     structural_breaks = compute_structural_breaks(
