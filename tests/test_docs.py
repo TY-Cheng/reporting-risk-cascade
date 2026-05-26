@@ -614,7 +614,7 @@ def test_faq_explains_cross_audience_design_and_current_boundaries() -> None:
         "No. The detected-misstatement benchmark uses a `gvkey x data_year` feature table",
         "PR-AUC is the primary headline ranking metric",
         "Comparisons are valid within the same task, split, feature family, and label definition",
-        "`all + expanding`",
+        "`all + rolling_7y`",
         "feature-fusion gain, not XBRL dominance",
         "`bertomeu_style_xgb`",
         "`bao_inspired_tree_ensemble`",
