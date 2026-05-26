@@ -59,9 +59,7 @@ def _issuer_panel(tmp_path: Path, *, duplicate: bool = False) -> Path:
                     "label_comment_thread_365": int((issuer_id + year) % 3 == 0),
                     "label_amendment_365": int((issuer_id + year) % 4 == 0),
                     "label_8k_402_365": int((issuer_id + year) % 5 == 0),
-                    "label_aaer_proxy_730": int(issuer_id == 1 and year >= 2021),
                     "censored_365": 0,
-                    "censored_730": 0,
                     "k402_item_metadata_unknown_365": 0,
                     "xbrl_ratio_receivables_to_revenue": 0.05 + issuer_id / 100,
                     "xbrl_ratio_inventory_to_assets": 0.02 + (year - 2018) / 100,
@@ -99,7 +97,6 @@ def test_public_peer_full_mode_writes_pr2_artifacts(tmp_path: Path) -> None:
     assert "top_50_precision" in metrics.columns
     assert "bao_top_5pct_ndcg" in metrics.columns
     assert set(metrics["input_kind"]) == {"public_issuer_origin"}
-    assert "aaer_proxy" not in set(metrics["task"])
     assert "bao_inspired_tree_ensemble" in set(metrics["peer_model_id"])
     assert "bao_style_ensemble" not in set(metrics["peer_model_id"])
     assert metrics.loc[

@@ -21,7 +21,6 @@ from src.public_lake import (
     build_public_lake,
     build_xbrl_core_features,
     fetch_source_assets,
-    normalize_aaer_events,
     normalize_fsds_archive,
     normalize_notes_archive,
 )
@@ -134,46 +133,6 @@ def _write_notes_zip(path: Path, adsh: str, tag: str, *, ddate: object = "202112
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("txt.txt", txt.to_csv(sep="\t", index=False))
         zf.writestr("sub.txt", sub.to_csv(sep="\t", index=False))
-
-
-def test_state_hq_features_are_asof_and_date_bounded() -> None:
-    panel = pd.DataFrame(
-        [
-            {"issuer_cik": "1", "origin_date": "2020-01-15"},
-            {"issuer_cik": "1", "origin_date": "2021-02-01"},
-            {"issuer_cik": "2", "origin_date": "2021-03-01"},
-            {"issuer_cik": "3", "origin_date": "2021-03-01"},
-        ]
-    )
-    state_hq = pd.DataFrame(
-        [
-            {
-                "issuer_cik": "0000000001",
-                "ba_state": "CA",
-                "min_date": "2019-01-01",
-                "max_date": "2020-12-31",
-            },
-            {
-                "issuer_cik": "0000000001",
-                "ba_state": "WA",
-                "min_date": "2021-01-01",
-                "max_date": "",
-            },
-            {
-                "issuer_cik": "0000000002",
-                "ba_state": "TX",
-                "min_date": "2021-04-01",
-                "max_date": "",
-            },
-        ]
-    )
-
-    out = public_lake._add_state_hq_features(panel, state_hq)
-
-    assert out["issuer_hq_state"].tolist()[:2] == ["CA", "WA"]
-    assert pd.isna(out["issuer_hq_state"].tolist()[2])
-    assert pd.isna(out["issuer_hq_state"].tolist()[3])
-    assert out["issuer_hq_state_observed"].tolist() == [1, 1, 0, 0]
 
 
 def test_event_within_horizon_strictly_after_origin_and_matches_reference() -> None:
@@ -317,7 +276,7 @@ def test_metadata_hash_table_readers_and_link_filters_are_defensive(
     assert public_lake._verify_metadata_hash(no_hash_meta) is False
 
 
-def test_low_level_download_and_aaer_discovery_are_mockable(
+def test_low_level_download_and_html_fetch_are_mockable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = public_lake._session("unit-test-agent")
@@ -391,22 +350,6 @@ def test_low_level_download_and_aaer_discovery_are_mockable(
     html_session = FakeSession([FakeResponse(status_code=200, text="<html>ok</html>")])
     monkeypatch.setattr(public_lake, "_session", lambda user_agent: html_session)
     assert public_lake._fetch_html("https://example.com/page") == "<html>ok</html>"
-
-    html = """
-    <time datetime="2022-01-01">Jan 1</time>
-    <a href="/enforcement/accounting-auditing-enforcement-releases/aaer-1">
-      Alpha <span>Beta</span> Release
-    </a>
-    <time datetime="2022-01-01">Jan 1</time>
-    <a href="/enforcement/accounting-auditing-enforcement-releases/aaer-1">duplicate</a>
-    <a href="/enforcement/accounting-auditing-enforcement-releases/aaer-2">No date</a>
-    """
-    monkeypatch.setattr(public_lake, "_fetch_html", lambda *args, **kwargs: html)
-    releases = public_lake._extract_aaer_release_links("https://www.sec.gov/root/")
-    assert releases["basename"].tolist() == ["aaer-1", "aaer-2"]
-    assert releases.loc[0, "event_date"] == "2022-01-01"
-    assert releases.loc[0, "title"] == "Alpha  Beta  Release"
-    assert pd.isna(releases.loc[1, "event_date"])
 
 
 def test_table_reader_routes_cover_supported_suffixes(
@@ -1632,82 +1575,6 @@ def test_fetch_source_assets_uses_cached_files_without_force(
     assert set(manifest["status"]) == {"cached"}
 
 
-def test_aaer_matching_uses_strict_token_overlap(tmp_path: Path) -> None:
-    bronze = tmp_path / "bronze" / "aaer"
-    silver = tmp_path / "silver"
-    bronze.mkdir(parents=True)
-    (bronze / "aaer_listing.html").write_text(
-        """
-        <time datetime="2022-01-01">Jan 1</time>
-        <a href="/enforcement/accounting-auditing-enforcement-releases/aaer-1">
-        In the Matter of Apple Hospitality REIT Inc.</a>
-        <time datetime="2022-01-02">Jan 2</time>
-        <a href="/enforcement/accounting-auditing-enforcement-releases/aaer-2">
-        In the Matter of Alpha Beta Corporation</a>
-        """,
-        encoding="utf-8",
-    )
-    issuer_dim = tmp_path / "issuer_dim.parquet"
-    write_table(
-        pd.DataFrame(
-            [
-                {"issuer_cik": "0000000001", "entity_name": "Apple Inc."},
-                {"issuer_cik": "0000000002", "entity_name": "Alpha Beta Corp"},
-            ]
-        ),
-        issuer_dim,
-    )
-
-    out = normalize_aaer_events(
-        aaer_bronze_dir=bronze,
-        silver_dir=silver,
-        issuer_dim_path=issuer_dim,
-    )
-    aaer = pd.read_csv(out)
-
-    apple_row = aaer.loc[aaer["release_title"].str.contains("Apple Hospitality", na=False)].iloc[0]
-    alpha_row = aaer.loc[aaer["release_title"].str.contains("Alpha Beta", na=False)].iloc[0]
-    assert pd.isna(apple_row["issuer_cik"]) or str(apple_row["issuer_cik"]) in {"", "nan"}
-    assert str(int(pd.to_numeric(alpha_row["issuer_cik"]))).zfill(10) == "0000000002"
-    assert alpha_row["aaer_match_method"] == "token_all"
-
-
-def test_aaer_normalizer_empty_listing_and_deprecated_arg_guard(tmp_path: Path) -> None:
-    bronze = tmp_path / "bronze" / "aaer"
-    silver = tmp_path / "silver"
-    bronze.mkdir(parents=True)
-    issuer_a = tmp_path / "issuer_a.parquet"
-    issuer_b = tmp_path / "issuer_b.parquet"
-    write_table(pd.DataFrame({"issuer_cik": ["1"], "entity_name": ["Alpha Corp"]}), issuer_a)
-    write_table(pd.DataFrame({"issuer_cik": ["2"], "entity_name": ["Beta Corp"]}), issuer_b)
-
-    with pytest.raises(ValueError, match="Pass only one"):
-        normalize_aaer_events(
-            aaer_bronze_dir=bronze,
-            silver_dir=silver,
-            issuer_dim_path=issuer_a,
-            issuer_dim_csv=issuer_b,
-        )
-
-    out = normalize_aaer_events(aaer_bronze_dir=bronze, silver_dir=silver)
-    empty = pd.read_csv(out)
-    assert empty.empty
-    assert list(empty.columns) == [
-        "release_url",
-        "release_title",
-        "event_date",
-        "issuer_cik",
-        "aaer_match_score",
-        "aaer_match_method",
-    ]
-
-    weak = public_lake._best_aaer_issuer_match(
-        "Alpha",
-        pd.DataFrame({"issuer_cik": ["0000000001"], "entity_tokens": [{"alpha", "corp"}]}),
-    )
-    assert weak["method"] == "unmatched"
-
-
 def test_gold_panel_period_semantics_annual_priority_and_fpi_year_state(tmp_path: Path) -> None:
     silver = tmp_path / "silver"
     gold = tmp_path / "gold"
@@ -1968,8 +1835,6 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         "xbrl_coverage_assets",
         "note_text_count",
         "note_text_char_count",
-        "issuer_hq_state",
-        "issuer_hq_state_observed",
     ]
 
     pd.testing.assert_frame_equal(
@@ -2046,14 +1911,6 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
             "report_date",
             "correction_type",
             "identified_from",
-        ],
-        "aaer_event.csv.gz": [
-            "release_url",
-            "release_title",
-            "event_date",
-            "issuer_cik",
-            "aaer_match_score",
-            "aaer_match_method",
         ],
     }.items():
         pd.DataFrame(columns=cols).to_csv(silver / filename, index=False, compression="gzip")
@@ -2199,16 +2056,6 @@ def test_parquet_gold_build_matches_csv_gz_gold_build(tmp_path: Path) -> None:
                 "identified_from",
             ]
         ).to_csv(silver / "correction_event.csv.gz", index=False, compression="gzip")
-        pd.DataFrame(
-            columns=[
-                "release_url",
-                "release_title",
-                "event_date",
-                "issuer_cik",
-                "aaer_match_score",
-                "aaer_match_method",
-            ]
-        ).to_csv(silver / "aaer_event.csv.gz", index=False, compression="gzip")
     _write_csv_gz(
         csv_gz / "xbrl_fact.csv.gz",
         [

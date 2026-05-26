@@ -3,7 +3,7 @@ hide:
   - navigation
 ---
 
-# Manuscript Skeleton
+# Paper Plan
 
 Working title:
 
@@ -19,32 +19,7 @@ Working title:
 - **Primary target.** The cascade measures public review-and-correction outcomes from the filing origin, not unobserved fraud occurrence.
 - **Why this work.** Users of reporting-risk models need signals that are aligned with the public information set available when a filing is made. A filing-origin design is closer to the decision problem than an ex post detected-misstatement label alone.
 
-### Research Question and Contribution
-
-- **Core question.** Can reporting-risk prediction be reframed from ex post detected misconduct to filing-origin public review-and-correction risk?
-- **Timing contamination.** Static detected-misstatement labels mix occurrence, discovery, disclosure lag, and public visibility.
-- **Main contribution.** The intended contribution is a measurement redesign, not a claim that a new classifier performs better than prior fraud-prediction models.
-- **Filing-origin estimand.** The repo defines a filing-origin public reporting-risk estimand based only on information visible at or before `origin_date`.
-- **Construct claim.** The public cascade is expected to be related to, but not identical with, detected-misstatement benchmark labels.
-- **Peer comparison boundary.** Peer models and metrics are used for compatibility checks; comparisons provide metric-compatible ranking evidence, not same-estimand performance rankings.
-- **Model-family boundary.** The detected-misstatement peer benchmark and the public-label transfer suite use the same Dechow, Perols, Bao, and Bertomeu model-family vocabulary. Mapping quality determines whether Dechow/Bao adapters can use stronger names or must be reported as mapped or inspired variants. Public peer transfer runs only in `full` mode so the default workflow stays bounded.
-- **Evidence requirement.** Credible bridge-based overlap validation is required before any integrated benchmark-to-public claim.
-
-### Research Gap
-
-- **Gap 1: outcome observability.** Existing detected-misstatement and fraud-prediction studies typically evaluate labels observed after detection and disclosure. They do not isolate whether a filing-year model is predicting underlying misconduct, later discovery, public disclosure, or enforcement visibility.
-- **Gap 2: public review process.** SEC comment-letter and disclosure-review studies establish that public scrutiny is economically meaningful, but they usually do not build a multi-outcome, filing-origin prediction cascade from public SEC/PCAOB data.
-- **Gap 3: comparable but different targets.** Hidden-misconduct and partial-observability papers motivate separating occurrence and detection. They are construct anchors, not PR-AUC comparators for the public filing-origin target.
-- **Gap 4: reproducible bridge evidence.** The detected-misstatement benchmark uses `gvkey x data_year`; the public cascade uses `issuer_cik x fiscal_year x origin_date`. An integrated claim requires a documented gvkey-CIK-year bridge with coverage, multiplicity, conflict, and overlap diagnostics.
-
-### Sellable Thesis
-
-- **Sell.** The paper sells a measurement-and-ranking framework for public reporting-risk states. The contribution is a public, filing-origin outcome system and a transparent comparison to the detected-misstatement benchmark.
-- **Not the sell.** The paper does not sell an unobserved-fraud detector, a causal enforcement model, or a same-estimand performance ranking against prior fraud-prediction papers.
-
-## Literature and Research Gap
-
-### Literature Streams and Existing Results
+### Literature Review and Existing Results
 
 - **Literature role.** Prior work supplies model families, performance metrics, and construct anchors.
 - **Estimand shift.** Prior fraud and restatement studies often predict detected ex post misconduct labels; this paper predicts subsequent public review-and-correction events from a filing-origin information set.
@@ -65,7 +40,38 @@ Working title:
 - **What prior results can support.** The prior literature supports the model-family vocabulary, the importance of hidden detection, the economic relevance of SEC review, and the use of ranking/calibration metrics.
 - **What prior results cannot support.** Prior results do not make public review-and-correction labels equivalent to fraud, and they do not make the public cascade a same-estimand benchmark against detected-misstatement classifiers.
 
-## Data and Sample Construction
+### Research Gap
+
+- **Gap 1: outcome observability.** Existing detected-misstatement and fraud-prediction studies typically evaluate labels observed after detection and disclosure. They do not isolate whether a filing-year model is predicting underlying misconduct, later discovery, public disclosure, or enforcement visibility.
+- **Gap 2: public review process.** SEC comment-letter and disclosure-review studies establish that public scrutiny is economically meaningful, but they usually do not build a multi-outcome, filing-origin prediction cascade from public SEC/PCAOB data.
+- **Gap 3: comparable but different targets.** Hidden-misconduct and partial-observability papers motivate separating occurrence and detection. They are construct anchors, not PR-AUC comparators for the public filing-origin target.
+- **Gap 4: reproducible bridge evidence.** The detected-misstatement benchmark uses `gvkey x data_year`; the public cascade uses `issuer_cik x fiscal_year x origin_date`. An integrated claim requires a documented gvkey-CIK-year bridge with coverage, multiplicity, conflict, and overlap diagnostics.
+
+### Research Question and Contribution
+
+- **Core question.** Can reporting-risk prediction be reframed from ex post detected misconduct to filing-origin public review-and-correction risk?
+- **Timing contamination.** Static detected-misstatement labels mix occurrence, discovery, disclosure lag, and public visibility.
+- **Main contribution.** The intended contribution is a measurement redesign, not a claim that a new classifier performs better than prior fraud-prediction models.
+- **Filing-origin estimand.** The repo defines a filing-origin public reporting-risk estimand based only on information visible at or before `origin_date`.
+- **Construct claim.** The public cascade is expected to be related to, but not identical with, detected-misstatement benchmark labels.
+- **Peer comparison boundary.** Peer models and metrics are used for compatibility checks; comparisons provide metric-compatible ranking evidence, not same-estimand performance rankings.
+- **Model-family boundary.** The detected-misstatement peer benchmark and the public-label transfer suite use the same Dechow, Perols, Bao, and Bertomeu model-family vocabulary. Mapping quality determines whether Dechow/Bao adapters can use stronger names or must be reported as mapped or inspired variants. Public peer transfer runs only in `full` mode so the default workflow stays bounded.
+- **Evidence requirement.** Credible bridge-based overlap validation is required before any integrated benchmark-to-public claim.
+
+### Our Contribution and Claim Boundary
+
+- **Sellable thesis.** The paper sells a measurement-and-ranking framework for public reporting-risk states. The contribution is a public, filing-origin outcome system and a transparent comparison to the detected-misstatement benchmark.
+- **Not the thesis.** The paper does not sell an unobserved-fraud detector, a causal enforcement model, or a same-estimand performance ranking against prior fraud-prediction papers.
+- **Boundary for results.** Results should be interpreted as evidence about public review-and-correction risk rather than unobserved fraud occurrence, causal effects, or full SEC-review coverage.
+
+## Materials and Methods
+
+### Data and Market/Institutional Setting
+
+- **Issuer setting.** The empirical setting is U.S. public-company reporting, where issuers release periodic filings into EDGAR and public downstream signals emerge through SEC review, amended filings, 8-K Item 4.02 non-reliance disclosures, PCAOB auditor-participant records, and inspection histories.
+- **Information set.** The public-cascade information set is filing-origin: predictors must be observable at or before `origin_date`.
+- **Two data layers.** The detected-misstatement benchmark supplies the historical `gvkey x data_year` diagnostic layer; the SEC/PCAOB public lake supplies the filing-native `issuer_cik x fiscal_year` public review-and-correction layer.
+- **Bridge layer.** A `gvkey-CIK-year` bridge is needed only for construct-overlap interpretation between the benchmark layer and the public layer.
 
 ### Reproduction Inputs
 
@@ -117,7 +123,7 @@ flowchart LR
     end
 
     subgraph VALIDATION["Bridge and interpretation layer"]
-        V0["Bridge gate<br/>raw-only gvkey-CIK-year crosswalk<br/>confirmed WRDS SEC Analytics Suite CIK-GVKEY link table<br/>no farr/external CIK supplement in the default bridge"]
+        V0["Bridge gate<br/>raw-only gvkey-CIK-year crosswalk<br/>confirmed WRDS SEC Analytics Suite CIK-GVKEY link table<br/>no external CIK supplement in the default bridge"]
         V1["Linkage QA<br/>coverage, multiplicity, unmatched rows,<br/>raw source composition,<br/>public_lake and public_lake_smoke overlap summaries<br/>before any construct-overlap claim"]
         V2["Construct-overlap checks<br/>matched 2011-2019 benchmark/public sample<br/>benchmark labels vs public labels<br/>public scores rank benchmark positives<br/>benchmark scores rank public labels<br/>event-time concentration"]
         V3["Final claim boundary<br/>public cascade is related to,<br/>but not identical with,<br/>detected-misstatement benchmark labels<br/>current bridge tier: wrds_validated"]
@@ -183,7 +189,7 @@ flowchart LR
 - **Bridge file.** `$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv`.
 - **Required fields.** `gvkey`, `issuer_cik`, a single year or start/end years, and provenance fields such as source, version, extraction date, match method, and match score.
 - **Bridge grain.** Bridge validation maps detected-misstatement benchmark `gvkey x data_year` rows to public `issuer_cik x fiscal_year` rows. It must report coverage, multiplicity, high-confidence and ambiguous matches, and unmatched diagnostics before overlap evidence is interpreted.
-- **Raw-only rule.** `raw/CIK-GVKEY Link Table.csv` is the default bridge source. The previous farr/external gvkey-CIK bridge is no longer used as a supplement for missing raw gvkey-years.
+- **Raw-only rule.** `raw/CIK-GVKEY Link Table.csv` is the default bridge source. External gvkey-CIK bridge rows are no longer used as a supplement for missing raw gvkey-years.
 - **Current raw-only WRDS route.**
 
 ```bash
@@ -209,15 +215,15 @@ uv run python scripts/run_construct_overlap.py \
 
 - **Current WRDS bridge.** The raw-only bridge is the working WRDS bridge. The confirmed source is WRDS SEC Analytics Suite `CIK-GVKEY Link Table.csv`, received from the collaborator via Outlook. Its source field includes CRSP/Compustat Merged, Compustat Company, Compustat Security, and Capital IQ rows.
 - **Validation tier.** Construct-overlap outputs infer `validation_tier` from normalized crosswalk provenance: the current raw-only WRDS bridge is `wrds_validated`.
-- **External support policy.** The default pipeline no longer uses farr/external support files. The only unique external support field was date-bounded headquarters/business-address state from `farr::state_hq`; it is dropped as a nonessential metadata feature.
 - **Missing bridge behavior.** If no usable crosswalk exists, the bridge probe must report `raw_identifier_blocker` rather than infer links from benchmark identifiers alone.
 
 ### Preprocessing and Feature Construction
 
+- **Pretreatment target.** All preprocessing is designed to preserve the filing-origin information set: transform raw public-source tables into issuer-year features without introducing any post-`origin_date` information.
 - **Common sample rule.** Feature families use the same filtered issuer-year sample for fair ablations.
 - **Missing-value rule.** Tree models with native missing-value handling retain numeric `np.nan`; non-tree adapters use fold-internal imputation only when required.
 - **Excluded columns.** Label, censoring, identifier, source-availability, public-date, and vintage columns are excluded by default.
-- **Metadata.** SIC, form, SEC submissions `entityType`, filing size, XBRL flags, prior filing count, days since prior filing, and headquarters-state controls when available.
+- **Metadata.** SIC, form, SEC submissions `entityType`, filing size, XBRL flags, prior filing count, and days since prior filing.
 - **Filing friction and public history.** Current-cycle NT status and amendment friction, plus strictly pre-origin rolling counts and recency for prior NT filings, comment threads, amendments, and 8-K instability items. Rolling public-history features must use only events with `event_date < origin_date`.
 - **XBRL.** `xbrl_ratio_*` and `xbrl_coverage_*` features from controlled core tags, including size, leverage, profitability, working capital, receivables, inventory, cash, debt, operating cash flow, and year-over-year revenue/assets changes.
 - **Auditor and oversight.** PCAOB Form AP fields, engagement-partner exposure, and PCAOB inspection features in their public source windows.
@@ -235,9 +241,9 @@ uv run python scripts/run_construct_overlap.py \
 - **Split design.** Prediction experiments use annual out-of-time evaluation, not random cross-validation.
 - **Training windows.** For a given test year, training uses earlier years only, with expanding or rolling 5-, 7-, and 10-year windows.
 
-## Methods and Models
+### Methods Including Models
 
-### Measurement Design
+#### Measurement Design
 
 - **Detected-Misstatement Benchmark Labels.** The benchmark panel uses `gvkey`, `data_year`, and `misstatement firm-year`. It tests whether traditional restatement prediction is sensitive to timing, drift, and missingness.
 - **Label modes.**
@@ -248,7 +254,7 @@ uv run python scripts/run_construct_overlap.py \
 - **Leakage rule.** `res_an0`, `res_an1`, `res_an2`, and `res_an3` are timing proxies only and never enter predictors.
 - **Required reporting.** `timing_coverage.csv` must report same-row timing coverage, unknown positives, retained-positive share, and class-balance changes.
 
-### Model Families
+#### Model Families
 
 | Component | Models | Inputs | Role |
 | --- | --- | --- | --- |
@@ -259,16 +265,16 @@ uv run python scripts/run_construct_overlap.py \
 | Public-label opacity DML | Double / Debiased Machine Learning (DML) partially linear regressions with cross-fitted nuisance models | `missingness_density_score` and pre-origin controls | Adjusted association between opacity/missingness and public labels, not a causal effect. |
 | Construct-overlap layer | Contingency, top-decile lift, reciprocal ranking, and event-time concentration checks | Raw-only WRDS gvkey-CIK-year bridge, benchmark predictions, public predictions | Tests related but non-identical construct evidence. |
 
-### Model Selection and Skip Rules
+#### Model Selection and Skip Rules
 
 - **Primary public model.** The public cascade reports XGBoost by feature family and training window because tree models handle nonlinear interactions and native missingness while keeping feature-family ablations interpretable.
 - **Peer models.** Peer suites are included to place results in Dechow, Perols, Bao, and Bertomeu-style model-family language. They are not treated as exact replications unless the variable mapping and sample gates support that claim.
 - **Public peer mapping.** Public peer transfer reuses Dechow/Perols/Bao/Bertomeu model-family language. Dechow and Bao labels are reported as fixed, mapped, or inspired variants according to mapping quality; public Bao transfer uses `public_issuer_origin` input and is therefore `bao_inspired_tree_ensemble`, not a Bao raw-accounting-number replication.
 - **Skip rule.** Skip task/family/window fits with one-class train or test labels.
 
-## Evaluation Metrics
+### Performance Metrics and Selection Criteria
 
-### Metric Selection Criteria
+#### Metric Selection Criteria
 
 - **Primary criterion.** PR-AUC relative to prevalence is the first-read metric because the labels are rare and ranking useful public review-and-correction cases is the main empirical task.
 - **Discrimination criterion.** ROC-AUC is reported for compatibility with prior fraud-prediction studies, but it is not sufficient on its own in rare-event settings.
@@ -276,7 +282,7 @@ uv run python scripts/run_construct_overlap.py \
 - **Operational ranking criterion.** Top-50/100/200 precision and top-decile lift describe what a reviewer sees when inspecting the highest-risk issuer-years.
 - **Literature-comparability criterion.** Bao-style top-fraction precision, sensitivity, specificity, balanced accuracy, and binary-relevance NDCG@k are retained for model-family comparability.
 
-### Metric Definitions and Interpretation
+#### Metric Definitions and Interpretation
 
 - **Predictive metrics.** PR-AUC, ROC-AUC, Brier score, Brier Skill Score, expected calibration error, top-50/100/200 precision, and Bao-style top-fraction metrics.
 - **Bao-style metrics.** Top-fraction precision, sensitivity, specificity, balanced accuracy, and binary-relevance NDCG@k.
@@ -287,7 +293,7 @@ uv run python scripts/run_construct_overlap.py \
 - **DML separation.** Cross-fitting appears separately in Double / Debiased Machine Learning (DML) opacity diagnostics; it is not the train/test split used for headline prediction tables.
 - **No absolute sufficiency threshold.** Prediction metrics are read relative to each task's prevalence; there is no absolute PR-AUC sufficiency threshold.
 
-## Experiments
+## Expected Experiments
 
 ### Experiment 1: Label Observability and Detection Timing
 
@@ -336,23 +342,23 @@ uv run python scripts/run_construct_overlap.py \
 - **Outputs.** `bridge_probe_summary.json`, `coverage_report.csv`, `multiplicity_report.csv`, `unmatched_raw_characteristics.csv`, `construct_overlap/label_contingency_lift.csv`, `construct_overlap/public_score_benchmark_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, and `construct_overlap/event_time_concentration.csv`.
 - **Interpretation.** This is the integrated-paper gate; the raw-only bridge now supports WRDS-validated overlap evidence while preserving the related-but-non-identical construct boundary.
 
-## Expected and Current Results
+### Expected Evidence Pattern and Reporting Plan
 
-### Expected Evidence Pattern
+#### Expected Evidence Pattern
 
 - **Benchmark expectation.** Detected-misstatement benchmark performance should be sensitive to timing assumptions, label observability, class balance, and retraining window.
 - **Public-cascade expectation.** Public features should predict later public review-and-correction outcomes above each task's prevalence baseline, especially for comment-thread and amendment/friction labels.
 - **Feature-family expectation.** Metadata is a readiness baseline; XBRL, auditor, oversight, note-opacity, and all-feature models test whether non-metadata public information adds empirical value.
 - **Overlap expectation.** Detected-misstatement benchmark labels and public labels should show enrichment and reciprocal ranking alignment, but not one-to-one equivalence.
 
-### Current Result Snapshot
+#### Connection to Results Snapshot
 
-- **Public cascade.** Current full-run public-cascade state is complete; the best specification in the current snapshot is `all + expanding` with reported mean PR-AUC `0.2887`. The all-feature family is also the strongest feature-family summary, with mean PR-AUC `0.2875`.
-- **Public sample.** The refreshed public-lake panel covers fiscal years 2011-2024, with nonzero positives for comment-thread, amendment, and 8-K Item 4.02 tasks. Rerun the public-cascade study outputs before treating FY2024 as part of the result snapshot.
+- **Source of realized estimates.** Empirical numbers and realized interpretations live in `docs/results_snapshot.md` and `artifacts/manuscript_package`. This plan is the design contract and should not freeze stale PR-AUC values.
+- **Public sample.** The refreshed public-lake panel covers fiscal years 2011-2024, with nonzero positives for comment-thread, amendment, and 8-K Item 4.02 tasks.
 - **Detected-misstatement benchmark.** Benchmark outputs include non-empty rolling metrics, timing coverage, and missingness diagnostics.
 - **Bridge overlap.** Raw-only WRDS overlap is implemented. Construct-overlap outputs carry `validation_tier = wrds_validated` for the current raw-only bridge.
 
-### Artifact Map
+#### Artifact Map
 
 | Evidence | Primary artifacts |
 | --- | --- |
@@ -363,9 +369,9 @@ uv run python scripts/run_construct_overlap.py \
 | Construct overlap | `artifacts/full_with_peer/construct_overlap/public_score_benchmark_ranking.csv`, `construct_overlap/reciprocal_alignment.csv`, `event_time_concentration.csv` |
 | Paper-facing summary | `docs/results_snapshot.md`, `artifacts/manuscript_package` |
 
-## Claim Boundaries
+### Claim Boundaries for the Expected Experiments
 
-### Claim Boundaries
+#### Claim Boundaries
 
 > The public-cascade design supports evidence about a public reporting-risk state. It does not by itself identify unobserved fraud occurrence, causal effects, or a stable enforcement-prediction result.
 
@@ -373,7 +379,7 @@ uv run python scripts/run_construct_overlap.py \
 
 > Bridge validation is mandatory for an integrated claim that the public cascade and the detected-misstatement benchmark measure related but non-identical constructs. Without that validation, the public-cascade result remains a public-data measurement result rather than a validated fraud/restatement overlap paper.
 
-### Evidence Gates
+#### Evidence Gates
 
 | Component | Current status | Gate before paper claim |
 | --- | --- | --- |

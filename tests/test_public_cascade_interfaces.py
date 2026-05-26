@@ -37,8 +37,6 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
             "censored_365": [0],
             "label_amendment_365": [0],
             "label_8k_402_365": [0],
-            "label_aaer_proxy_730": [0],
-            "censored_730": [0],
             "k402_item_metadata_unknown_365": [1],
             "xbrl_fact_count": [10],
             "note_text_count": [1],
@@ -62,9 +60,7 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
     assert "public_date_notes" not in all_features
     assert "vintage_notes" not in all_features
     assert "label_comment_thread_365" not in all_features
-    assert "label_aaer_proxy_730" not in all_features
     assert "censored_365" not in all_features
-    assert "censored_730" not in all_features
     assert "k402_item_metadata_unknown_365" not in all_features
 
 
@@ -184,8 +180,6 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
                     "label_comment_thread_365": int(opaque or (year + issuer_id) % 7 == 0),
                     "label_amendment_365": int(opaque and year % 2 == 0),
                     "label_8k_402_365": int(opaque and issuer_id % 2 == 0),
-                    "label_aaer_proxy_730": int(issuer_id == 1 and year >= 2015),
-                    "censored_730": 0,
                     "censored_365": 0,
                 }
             )
@@ -542,7 +536,7 @@ model:
 
 
 @pytest.mark.parametrize(
-    "mode", ["sec-index", "sec-download", "filings-index", "filings-download", "aaer"]
+    "mode", ["sec-index", "sec-download", "filings-index", "filings-download"]
 )
 def test_fetch_cli_rejects_removed_non_current_modes(
     mode: str, monkeypatch: pytest.MonkeyPatch
@@ -578,13 +572,11 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
     }
     assert script_files == {
         "convert_raw_dataset.py",
-        "export_farr_gvkey_ciks.R",
         "fetch_public_data.py",
         "generate_sample_dataset.py",
         "build_manuscript_package.py",
         "build_linkage_bridge.py",
         "monitor_public_lake.py",
-        "prepare_farr_gvkey_cik_bridge.sh",
         "prepare_gvkey_cik_crosswalk.py",
         "refresh_results_snapshot.py",
         "run_bridge_probe.py",

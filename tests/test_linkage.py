@@ -62,10 +62,10 @@ def _external_crosswalk() -> pd.DataFrame:
             "gvkey": ["100", "200"],
             "data_year": [2011, 2013],
             "issuer_cik": ["0000009999", "0000002222"],
-            "source": ["farr_gvkey_ciks", "farr_gvkey_ciks"],
-            "source_version": ["farr 1.0.1", "farr 1.0.1"],
+            "source": ["external_cik_gvkey", "external_cik_gvkey"],
+            "source_version": ["external 2026-05-01", "external 2026-05-01"],
             "extracted_at": ["2026-05-01T00:00:00Z", "2026-05-01T00:00:00Z"],
-            "match_method": ["farr_gvkey_ciks_date_range", "farr_gvkey_ciks_date_range"],
+            "match_method": ["external_date_range", "external_date_range"],
             "match_score": ["", ""],
         }
     )

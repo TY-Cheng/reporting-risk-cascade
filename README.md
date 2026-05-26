@@ -257,8 +257,8 @@ The default integration bridge is the raw-primary derived linkage file:
 $DATA_DIR/linkage/raw_only/gvkey_cik_year.csv
 ```
 
-It is built only from the raw `CIK-GVKEY Link Table.csv`. The old farr/external
-gvkey-CIK bridge is no longer used in the default integration bridge:
+It is built only from the raw `CIK-GVKEY Link Table.csv`. External gvkey-CIK
+supplements are no longer used in the default integration bridge:
 
 ```bash
 set -a; source .env; set +a
@@ -300,25 +300,6 @@ just task bridge raw artifacts/full_with_peer/bridge_probe
 uv run python scripts/run_construct_overlap.py --study-dir artifacts/full_with_peer
 ```
 
-The historical `farr::gvkey_ciks` bridge export script remains in the repository
-for reproducibility, but it is not part of the default bridge and does not feed
-the current paper-facing pipeline:
-
-```bash
-bash scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing
-```
-
-This exports `$DATA_DIR/external/farr_gvkey_ciks_raw.csv` and normalizes annual
-links to `$DATA_DIR/external/gvkey_cik_year.csv` for historical comparison only.
-It does not supplement `$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv`.
-
-The old farr support exports are no longer required. `farr::state_hq` was the
-only external support file with unique information not present in the raw WRDS
-bridge: date-bounded headquarters/business-address state. The default pipeline
-no longer uses farr/external support files; it drops that optional metadata
-feature so the bridge and public-cascade claims do not depend on
-`$DATA_DIR/external`.
-
 Accepted crosswalk columns are `gvkey`, `issuer_cik` or `cik`, plus either
 `data_year`/`fiscal_year`/`fyear` or `start_year` and `end_year`. Prepared files
 retain provenance fields: `source`, `source_version`, `extracted_at`,
@@ -326,19 +307,26 @@ retain provenance fields: `source`, `source_version`, `extracted_at`,
 
 Construct-overlap validation reads those provenance fields to infer
 `validation_tier`: the current raw-only WRDS SEC Analytics Suite CIK-GVKEY export
-is `wrds_validated`; historical farr-only exports remain candidate diagnostics
-only if run manually.
+is `wrds_validated`; non-WRDS external crosswalks remain candidate evidence only
+if run manually.
 
-## Current Gates
+## Current Artifact Boundary
 
-1. The public-cascade run is the current non-metadata `xbrl_ratio_baseline`
-   snapshot.
-2. The raw-only bridge is the current high-coverage WRDS-validated bridge;
-   coverage, multiplicity, and inferred validation tier must be reported.
-3. Candidate bridge overlap can support a related-but-non-identical construct
-   argument. The construct-overlap manifest should report `wrds_validated` after
-   the overlap layer is rerun with the raw-only WRDS bridge.
-4. AAER and farr support files are dropped from the paper-facing design because
-   AAER positives are too sparse for a stable ranking target and external files
-   are no longer needed for the bridge.
+1. The current paper-facing study directory is `artifacts/full_with_peer`.
+   Benchmark, public cascade, detected-misstatement peer comparison,
+   public-label peer comparison, bridge probe, and construct overlap have all
+   been generated there.
+2. The public-cascade run is the current non-metadata `xbrl_ratio_baseline`
+   snapshot. The reported best public-cascade specification is
+   `all + rolling_7y`.
+3. The raw-only bridge is the current high-coverage WRDS-validated bridge.
+   Bridge coverage, multiplicity, reciprocal alignment, and construct-overlap
+   diagnostics are part of the paper-facing evidence boundary.
+4. The construct-overlap manifest reports `validation_tier = wrds_validated` for
+   the raw-only WRDS bridge. This supports a related-but-non-identical construct
+   argument, not causal fraud-occurrence claims or same-estimand rankings.
+5. The current manuscript package is `artifacts/manuscript_package`, with
+   generated tables, figures, and result narrative for drafting and review.
+6. Retired enforcement-tail outputs and external bridge support files are not
+   part of the paper-facing design or default artifact boundary.
 <!-- --8<-- [end:docs-home] -->

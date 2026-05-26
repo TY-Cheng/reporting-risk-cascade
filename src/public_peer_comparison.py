@@ -762,7 +762,6 @@ def _summary_markdown(
         "",
         "- Scope: public-label peer-compatible model-family transfer.",
         "- This is not same-estimand performance-ranking evidence against prior fraud papers.",
-        "- AAER is excluded from the public-label peer suite.",
         f"- Mode: `{mode}`",
         "",
         "## Status Counts",

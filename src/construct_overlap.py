@@ -28,6 +28,10 @@ PUBLIC_LABELS = [
 ]
 RES_AN_COLS = ["res_an0", "res_an1", "res_an2", "res_an3"]
 BOOTSTRAP_REPS = 1000
+BOOTSTRAP_SEED = 42
+BOOTSTRAP_INTERVAL_METHOD = "row_level_percentile_bootstrap"
+BOOTSTRAP_CHUNK_REPS = 100
+BOOTSTRAP_INTERVAL_TOP_ROWS = 5
 MIN_RANKING_POSITIVES = 10
 BOOTSTRAP_POSITIVE_THRESHOLD = 30
 BRIDGE_PROVENANCE_COLUMNS = ["source", "source_version", "match_method"]
@@ -167,9 +171,8 @@ def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
         r"raw_cik_gvkey|raw_primary|wrds_sec_analytics_cik_gvkey",
         regex=True,
     ).any()
-    has_farr = evidence_text.str.contains("farr|gvkey_ciks", regex=True).any()
 
-    if has_wrds and not has_farr:
+    if has_wrds:
         all_wrds_sec_analytics = bool(source_values) and all(
             "wrds_sec_analytics_cik_gvkey" in value for value in source_values
         )
@@ -178,18 +181,9 @@ def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
         else:
             bridge_source = source_values[0] if len(source_values) == 1 else "wrds_compustat_crosswalk"
         validation_tier = "wrds_validated"
-    elif has_wrds and has_farr:
-        bridge_source = "mixed_wrds_farr_crosswalk"
-        validation_tier = "candidate_mixed"
-    elif has_raw and has_farr:
-        bridge_source = "mixed_wrds_farr_crosswalk"
-        validation_tier = "candidate_mixed"
     elif has_raw:
         bridge_source = "wrds_sec_analytics_cik_gvkey_link"
         validation_tier = "wrds_validated"
-    elif has_farr:
-        bridge_source = "farr_candidate"
-        validation_tier = "candidate_farr"
     else:
         bridge_source = source_values[0] if len(source_values) == 1 else "external_crosswalk"
         validation_tier = "candidate_external"
@@ -258,38 +252,55 @@ def _bootstrap_lift_ci(
     score: np.ndarray,
     *,
     reps: int = BOOTSTRAP_REPS,
-    seed: int = 42,
+    seed: int = BOOTSTRAP_SEED,
 ) -> tuple[float, float]:
-    """Efficient row bootstrap for top-decile lift using multinomial counts."""
+    """Row-level percentile bootstrap for top-decile lift.
+
+    The implementation resamples rows with replacement by drawing multinomial
+    row counts. Rows are sorted by score once; for each bootstrap draw, the
+    top-decile set is recomputed from the resampled row counts.
+    """
     y = np.asarray(y_true, dtype=int)
+    s = np.asarray(score, dtype=float)
     if int(y.sum()) < BOOTSTRAP_POSITIVE_THRESHOLD or len(y) == 0:
         return (float("nan"), float("nan"))
-    k = min(max(matlab_round_positive(len(y) * 0.10), 1), len(y))
-    selected = np.zeros(len(y), dtype=bool)
-    selected[np.argsort(-np.nan_to_num(score, nan=-np.inf), kind="mergesort")[:k]] = True
-    categories = np.array(
-        [
-            int(np.sum(selected & (y == 1))),
-            int(np.sum(selected & (y == 0))),
-            int(np.sum(~selected & (y == 1))),
-            int(np.sum(~selected & (y == 0))),
-        ],
-        dtype=float,
-    )
-    probs = categories / categories.sum()
+    order = np.argsort(-np.nan_to_num(s, nan=-np.inf), kind="mergesort")
+    y_sorted = y[order].astype(np.int64)
+    sample_size = len(y_sorted)
+    top_k = min(max(matlab_round_positive(sample_size * 0.10), 1), sample_size)
+    row_prob = np.full(sample_size, 1.0 / sample_size)
     rng = np.random.default_rng(seed)
-    draws = rng.multinomial(int(categories.sum()), probs, size=int(reps))
-    top_n = draws[:, 0] + draws[:, 1]
-    pos_n = draws[:, 0] + draws[:, 2]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        lift = (draws[:, 0] / top_n) / (pos_n / draws.sum(axis=1))
-    lift = lift[np.isfinite(lift)]
-    if len(lift) == 0:
+    lift_values: list[float] = []
+    for start in range(0, int(reps), BOOTSTRAP_CHUNK_REPS):
+        batch_reps = min(BOOTSTRAP_CHUNK_REPS, int(reps) - start)
+        counts = rng.multinomial(sample_size, row_prob, size=batch_reps).astype(np.int64)
+        cumulative = np.cumsum(counts, axis=1)
+        top_counts = counts * (cumulative <= top_k)
+        boundary = np.argmax(cumulative >= top_k, axis=1)
+        previous = np.where(boundary > 0, cumulative[np.arange(batch_reps), boundary - 1], 0)
+        boundary_take = np.maximum(top_k - previous, 0)
+        top_counts[np.arange(batch_reps), boundary] = boundary_take
+
+        top_positive = top_counts @ y_sorted
+        total_positive = counts @ y_sorted
+        with np.errstate(divide="ignore", invalid="ignore"):
+            batch_lift = (top_positive / top_k) / (total_positive / sample_size)
+        finite = batch_lift[np.isfinite(batch_lift)]
+        lift_values.extend(float(value) for value in finite)
+    if not lift_values:
         return (float("nan"), float("nan"))
-    return (float(np.quantile(lift, 0.025)), float(np.quantile(lift, 0.975)))
+    return (
+        float(np.quantile(lift_values, 0.025)),
+        float(np.quantile(lift_values, 0.975)),
+    )
 
 
-def _ranking_metrics(y_true: Iterable[Any], score: Iterable[Any]) -> dict[str, float]:
+def _ranking_metrics(
+    y_true: Iterable[Any],
+    score: Iterable[Any],
+    *,
+    bootstrap_ci: bool = True,
+) -> dict[str, float]:
     y = pd.to_numeric(pd.Series(list(y_true)), errors="coerce").fillna(0).astype(int).to_numpy()
     s = pd.to_numeric(pd.Series(list(score)), errors="coerce").fillna(-np.inf).to_numpy(float)
     positives = int(y.sum())
@@ -310,7 +321,10 @@ def _ranking_metrics(y_true: Iterable[Any], score: Iterable[Any]) -> dict[str, f
         }
     roc_auc = float(roc_auc_score(y, s)) if len(np.unique(y)) > 1 else float("nan")
     pr_auc = float(average_precision_score(y, s)) if len(np.unique(y)) > 1 else float("nan")
-    ci_low, ci_high = _bootstrap_lift_ci(y, s)
+    if bootstrap_ci:
+        ci_low, ci_high = _bootstrap_lift_ci(y, s)
+    else:
+        ci_low, ci_high = (float("nan"), float("nan"))
     return {
         "n_pos": positives,
         "n_neg": negatives,
@@ -617,6 +631,7 @@ def _score_metric_rows(
     score_col: str,
     count_prefix: str,
     bridge_source: str,
+    bootstrap_top_rows: int = BOOTSTRAP_INTERVAL_TOP_ROWS,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if frame.empty:
@@ -624,7 +639,7 @@ def _score_metric_rows(
     for keys, group in frame.groupby(list(group_cols), dropna=False):
         key_values = keys if isinstance(keys, tuple) else (keys,)
         row = dict(zip(group_cols, key_values))
-        metrics = _ranking_metrics(group[target_col], group[score_col])
+        metrics = _ranking_metrics(group[target_col], group[score_col], bootstrap_ci=False)
         row.update(
             {
                 f"n_{count_prefix}_positives_in_overlap": metrics["n_pos"],
@@ -642,7 +657,50 @@ def _score_metric_rows(
             }
         )
         rows.append(row)
+    _add_bootstrap_intervals_to_top_rows(
+        rows,
+        frame=frame,
+        group_cols=group_cols,
+        target_col=target_col,
+        score_col=score_col,
+        top_n=bootstrap_top_rows,
+    )
     return rows
+
+
+def _add_bootstrap_intervals_to_top_rows(
+    rows: list[dict[str, Any]],
+    *,
+    frame: pd.DataFrame,
+    group_cols: Sequence[str],
+    target_col: str,
+    score_col: str,
+    top_n: int,
+) -> None:
+    if not rows or top_n <= 0:
+        return
+    ranked = sorted(
+        (
+            (idx, row)
+            for idx, row in enumerate(rows)
+            if row.get("metric_status") == "fit"
+            and np.isfinite(row.get("top_decile_lift", np.nan))
+        ),
+        key=lambda item: float(item[1]["top_decile_lift"]),
+        reverse=True,
+    )[:top_n]
+    for idx, row in ranked:
+        mask = pd.Series(True, index=frame.index)
+        for col in group_cols:
+            value = row.get(col)
+            if pd.isna(value):
+                mask &= frame[col].isna()
+            else:
+                mask &= frame[col].eq(value)
+        sample = frame.loc[mask]
+        ci_low, ci_high = _bootstrap_lift_ci(sample[target_col].to_numpy(), sample[score_col].to_numpy())
+        rows[idx]["top_decile_lift_ci_low"] = ci_low
+        rows[idx]["top_decile_lift_ci_high"] = ci_high
 
 
 def _public_score_frames(con: Any, public_predictions_path: Path) -> dict[str, pd.DataFrame]:
@@ -1108,8 +1166,6 @@ def _write_summary(
     )
     if validation_tier == "wrds_validated":
         lines.append("- Bridge tier is inferred from WRDS/Compustat provenance in the normalized crosswalk.")
-    elif validation_tier == "candidate_farr":
-        lines.append("- farr bridge evidence is candidate validation. WRDS remains preferred for final manuscript claims.")
     else:
         lines.append("- Bridge tier is inferred from crosswalk provenance; non-WRDS tiers remain candidate evidence.")
     (out_dir / "construct_overlap_summary.md").write_text(
@@ -1220,6 +1276,11 @@ def run_construct_overlap(
         "validation_tier": validation_tier,
         "bridge_source": bridge_source,
         "bridge_provenance": bridge_evidence["bridge_provenance"],
+        "interval_method": BOOTSTRAP_INTERVAL_METHOD,
+        "interval_seed": BOOTSTRAP_SEED,
+        "interval_reps": BOOTSTRAP_REPS,
+        "interval_scope": "top_lift_rows_per_construct_overlap_artifact",
+        "interval_top_rows_per_artifact": BOOTSTRAP_INTERVAL_TOP_ROWS,
         "study_dir": str(study_dir),
         "out_dir": str(out_dir),
         "opacity_refresh": opacity_status,

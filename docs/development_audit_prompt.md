@@ -41,9 +41,8 @@ FactSet, Refinitiv, RavenPack, or additional institutional database access
 unless the user explicitly says otherwise.
 
 Do not treat absence of Audit Analytics or other unprovided paid databases as a
-code bug. The default raw-only bridge should report `wrds_validated`; historical
-farr gvkey-CIK output can support manual comparison, but it should not override
-the WRDS bridge. Paid or professional data can be
+code bug. The default raw-only bridge should report `wrds_validated`. Paid or
+professional data can be
 mentioned only as an optional validation or enrichment path after a concrete
 blocker is identified.
 
@@ -136,8 +135,6 @@ Audit dimensions:
 - Treat raw_identifier_blocker as a bridge/input condition, not as proof that
   the public lake design is wrong.
 - Treat the raw-only WRDS SEC Analytics Suite bridge as `wrds_validated`.
-- Treat farr gvkey-CIK output as historical/manual comparison, not as a
-  replacement for the WRDS bridge.
 
 1. Workflow and command contract
 - Discover the active command surface from justfile rather than assuming recipe
@@ -248,8 +245,8 @@ Audit dimensions:
   label_amendment_365, and label_8k_402_365 as primary outcomes?
 - Are public-label DML results described as adjusted associations, not causal
   evidence of strategic silence?
-- Is AAER absent from the paper-facing labels, metrics, feature-family rankings,
-  and manuscript claims?
+- Are retired enforcement-tail outputs absent from paper-facing labels, metrics,
+  feature-family rankings, and manuscript claims?
 
 6. Benchmark and public peer model-family transfer
 - Discover detected-misstatement peer and public-peer artifacts from their component
@@ -303,8 +300,8 @@ Audit dimensions:
   constructs.
 - Check whether amendment and 8-K Item 4.02 evidence are separated from the
   broader comment-letter signal.
-- Check whether stale AAER outputs are excluded from current results and
-  manuscript claims.
+- Check whether stale retired-output artifacts are excluded from current results
+  and manuscript claims.
 
 8. Public Data Utilization Audit
 - Before recommending external data, check whether public SEC/PCAOB sources are
@@ -458,7 +455,6 @@ Constraints:
 - Do not recommend LLM/GNN or multimodal extensions until the benchmark, public
   cascade, XBRL ratios, peer-transfer evidence, and bridge/construct-overlap
   gates are stable.
-- Do not present historical farr bridge diagnostics as WRDS-quality validation.
 - Do not use vague phrases such as "robust evidence" unless you say which
   artifact supports it.
 - Keep the tone direct and technical. Avoid sales language and generic praise.

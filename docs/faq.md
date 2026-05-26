@@ -99,9 +99,9 @@ Analytics files for the main public-cascade task.
 table. This is treated as primary for the bridge because it is closest to the
 benchmark-side source.
 
-`external/` is now historical support only. The previous farr bridge and support
-exports no longer feed the default bridge, public-cascade labels, or paper-facing
-feature set.
+`external/` is outside the current paper-facing bridge boundary. External bridge
+supplements no longer feed the default bridge, public-cascade labels, or
+paper-facing feature set.
 
 `linkage/raw_only/` is the derived bridge folder. It is not part of
 `public_lake` because the bridge is a cross-source validation layer, not a
@@ -116,16 +116,13 @@ tables. The linkage builder still writes public-overlap QA summaries for both
 The current rule is:
 
 1. Use raw `CIK-GVKEY Link Table.csv` for bridge rows.
-2. Do not supplement missing raw `gvkey x year` rows with farr/external
-   gvkey-CIK rows.
+2. Do not supplement missing raw `gvkey x year` rows with external gvkey-CIK rows.
 3. Report raw coverage, multiplicity, and public-lake overlap directly.
 
 This rule is now cleaner than the earlier raw-primary plus external-supplement
 design. The raw table has institutional source labels such as CRSP/Compustat
-Merged, Compustat Company, Compustat Security, and Capital IQ; farr/external
-rows no longer alter the default bridge. The only unique external field was
-date-bounded headquarters/business-address state from `farr::state_hq`, and the
-current pipeline drops it as nonessential metadata.
+Merged, Compustat Company, Compustat Security, and Capital IQ; external rows no
+longer alter the default bridge.
 
 ### What happened to the raw/external conflict file?
 

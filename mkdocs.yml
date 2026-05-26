@@ -65,8 +65,8 @@ extra_javascript:
   - assets/javascripts/mermaid-init.js
 nav:
   - Home: index.md
-  - Results Snapshot: results_snapshot.md
   - Paper Plan: paper_plan.md
+  - Results Snapshot: results_snapshot.md
   - FAQ: faq.md
   - Audit Briefs:
       - Development Audit: development_audit_prompt.md

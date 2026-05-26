@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
+from scipy import stats
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src import ARTIFACTS_DIR, PROJECT_ROOT  # noqa: E402
+from src import ARTIFACTS_DIR, LAKE_GOLD_DIR, PROJECT_ROOT  # noqa: E402
 
 
 REQUIRED_ARTIFACTS = [
@@ -31,8 +34,83 @@ REQUIRED_ARTIFACTS = [
     "construct_overlap/construct_overlap_manifest.json",
     "construct_overlap/public_score_benchmark_ranking.csv",
     "construct_overlap/reciprocal_alignment.csv",
+    "construct_overlap/benchmark_positive_public_label_cooccurrence.csv",
+    "construct_overlap/label_contingency_lift.csv",
+    "construct_overlap/overlap_sample_flow.csv",
     "bridge_probe/coverage_report.csv",
+    "bridge_probe/unmatched_raw_characteristics.csv",
 ]
+
+MIN_VALID_FOLDS_FOR_CI = 5
+SPARSE_POSITIVE_THRESHOLD = 10
+
+ANNUAL_INTERVAL_NOTE = (
+    "PR-AUC dispersion entries are descriptive fold-dispersion intervals over "
+    "annual out-of-time test folds after excluding sparse folds with fewer "
+    "than 10 positives. "
+    "Rolling and expanding training windows overlap, so the intervals describe "
+    "evaluation-period dispersion rather than independent sampling uncertainty, "
+    "superpopulation confidence intervals, or causal inference uncertainty."
+)
+CONSTRUCT_LIFT_NOTE = (
+    "Lift bootstrap intervals are row-level percentile bootstrap intervals "
+    "from the bridge-gated artifacts, not annual fold-dispersion intervals. "
+    "Bridge tier is wrds_validated, and displayed rows are restricted to "
+    "high-confidence bridge rows. Top-10% precision and FDR report the absolute "
+    "base-rate burden behind lift. These Item 4.02 rows are severe-tail "
+    "diagnostics within the broader construct-validation case; they support "
+    "related-construct enrichment rather than label equivalence."
+)
+PEER_TRANSFER_NOTE = (
+    ANNUAL_INTERVAL_NOTE
+    + " Peer-compatible families are ranking checks under transferred model "
+    "vocabularies, not calibrated probability comparisons or original-paper "
+    "replications. Peer-model folds and public-cascade folds can cover "
+    "different historical sequences, so dispersion widths should not be "
+    "compared across evidence layers."
+)
+DML_INTERVAL_NOTE = (
+    "Intervals equal coefficient plus or minus 1.96 times the HC3 OLS standard "
+    "error after cross-fitted residualization. The estimates are adjusted "
+    "associations, not identified structural estimates."
+)
+PUBLIC_TASK_NOTE = (
+    ANNUAL_INTERVAL_NOTE
+    + " Brier Skill Score is measured relative to the corresponding prevalence-only "
+    "Brier baseline. ECE is a calibration diagnostic. Weak calibration should be "
+    "read as evidence against using the scores as calibrated decision rules, not "
+    "against the paper's ranking estimand."
+)
+FOLD_SUPPORT_NOTE = (
+    "Rows report annual out-of-time test support collapsed across configurations "
+    "because test rows and positive counts are task-year properties. Sparse folds "
+    f"are those with fewer than {SPARSE_POSITIVE_THRESHOLD} positives; such folds "
+    "are excluded from formal fold-dispersion intervals."
+)
+TASK_FEATURE_NOTE = (
+    ANNUAL_INTERVAL_NOTE
+    + " Entries are task-by-feature-family averages over the configured public-cascade "
+    "training windows. They clarify the aggregation behind the feature-family "
+    "summary and should be read as information-set evidence, not causal decomposition."
+)
+BRIDGE_OVERLAP_NOTE = (
+    "Rows are bridge-gated label-overlap diagnostics. They report absolute public "
+    "and benchmark rates and lift for each public label by bridge tier. These "
+    "descriptive rates broaden construct-validation evidence beyond the sparse "
+    "Item 4.02 severe-tail ranking rows; they do not imply label equivalence."
+)
+BRIDGE_BOUNDARY_NOTE = (
+    "Rows summarize the bridge-gated overlap sample. Construct-overlap claims are "
+    "bounded to mapped rows, with high-confidence rows used for manuscript-grade "
+    "alignment evidence. Dropped and unmatched rows define the generalizability "
+    "boundary of the bridge exercise."
+)
+SELECTION_PROFILE_NOTE = (
+    "Rows are descriptive strata from the existing public issuer-origin panel. "
+    "They show how public-label rates vary with filing visibility, history, and "
+    "issuer profile variables. The table is selection-aware evidence, not a causal "
+    "adjustment model or proof that SEC scrutiny selection has been solved."
+)
 
 
 def _resolve_repo_path(path: str | Path) -> Path:
@@ -60,15 +138,18 @@ def _read_csv(path: Path) -> pd.DataFrame:
 def _fmt(value: Any, digits: int = 4) -> str:
     if value is None:
         return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
     if isinstance(value, str):
         return value
     if isinstance(value, bool):
         return "True" if value else "False"
-    if isinstance(value, int):
+    if isinstance(value, (int, np.integer)):
         return f"{value:,}"
-    if isinstance(value, float):
-        if pd.isna(value):
-            return ""
+    if isinstance(value, (float, np.floating)):
         if value.is_integer() and abs(value) >= 100:
             return f"{int(value):,}"
         return f"{value:.{digits}f}"
@@ -105,13 +186,14 @@ def _markdown_table(df: pd.DataFrame) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _latex_table(df: pd.DataFrame, *, caption: str, label: str) -> str:
+def _latex_table(df: pd.DataFrame, *, caption: str, label: str, note: str | None = None) -> str:
     columns = "l" * len(df.columns)
     lines = [
         r"\begin{table}[!htbp]",
         r"\centering",
         rf"\caption{{{_latex_escape(caption)}}}",
         rf"\label{{{_latex_escape(label)}}}",
+        r"\resizebox{\textwidth}{!}{%",
         rf"\begin{{tabular}}{{{columns}}}",
         r"\toprule",
         " & ".join(_latex_escape(col) for col in df.columns) + r" \\",
@@ -119,7 +201,17 @@ def _latex_table(df: pd.DataFrame, *, caption: str, label: str) -> str:
     ]
     for _, row in df.iterrows():
         lines.append(" & ".join(_latex_escape(row[col]) for col in df.columns) + r" \\")
-    lines.extend([r"\bottomrule", r"\end{tabular}", r"\end{table}", ""])
+    lines.extend([r"\bottomrule", r"\end{tabular}%", r"}"])
+    if note:
+        lines.extend(
+            [
+                r"\begin{minipage}{0.98\textwidth}",
+                r"\footnotesize",
+                rf"\emph{{Note:}} {_latex_escape(note)}",
+                r"\end{minipage}",
+            ]
+        )
+    lines.extend([r"\end{table}", ""])
     return "\n".join(lines)
 
 
@@ -130,15 +222,156 @@ def _write_table_bundle(
     stem: str,
     caption: str,
     label: str,
+    display_df: pd.DataFrame | None = None,
+    note: str | None = None,
 ) -> dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / f"{stem}.csv"
     md_path = out_dir / f"{stem}.md"
     tex_path = out_dir / f"{stem}.tex"
+    rendered = display_df if display_df is not None else df
     df.to_csv(csv_path, index=False)
-    md_path.write_text(f"Table: {caption}\n\n{_markdown_table(df)}", encoding="utf-8")
-    tex_path.write_text(_latex_table(df, caption=caption, label=label), encoding="utf-8")
+    note_text = f"\n\nNote: {note}\n" if note else ""
+    md_path.write_text(f"Table: {caption}\n\n{_markdown_table(rendered)}{note_text}", encoding="utf-8")
+    tex_path.write_text(_latex_table(rendered, caption=caption, label=label, note=note), encoding="utf-8")
     return {"csv": _rel(csv_path), "md": _rel(md_path), "tex": _rel(tex_path)}
+
+
+def _positive_counts(frame: pd.DataFrame) -> pd.Series:
+    if "n_pos_test" in frame.columns:
+        return pd.to_numeric(frame["n_pos_test"], errors="coerce")
+    if {"positive_rate_test", "n_test"}.issubset(frame.columns):
+        rate = pd.to_numeric(frame["positive_rate_test"], errors="coerce")
+        n_test = pd.to_numeric(frame["n_test"], errors="coerce")
+        return (rate * n_test).round()
+    if {"pos_rate", "n_obs"}.issubset(frame.columns):
+        rate = pd.to_numeric(frame["pos_rate"], errors="coerce")
+        n_obs = pd.to_numeric(frame["n_obs"], errors="coerce")
+        return (rate * n_obs).round()
+    return pd.Series(np.nan, index=frame.index, dtype=float)
+
+
+def _annual_fold_frame(
+    metrics: pd.DataFrame,
+    group_cols: list[str],
+    *,
+    metric_col: str = "pr_auc",
+) -> pd.DataFrame:
+    needed = [*group_cols, "test_year", metric_col]
+    if not set(needed).issubset(metrics.columns):
+        return pd.DataFrame(
+            columns=[
+                *group_cols,
+                "test_year",
+                "fold_value",
+                "n_pos",
+                "metric_rows",
+                "valid_metric",
+                "sparse_excluded",
+                "valid_for_interval",
+            ]
+        )
+    work = metrics.copy()
+    work["_metric_value"] = pd.to_numeric(work[metric_col], errors="coerce")
+    work["_n_pos"] = _positive_counts(work)
+    folds = (
+        work.groupby([*group_cols, "test_year"], dropna=False)
+        .agg(
+            fold_value=("_metric_value", "mean"),
+            n_pos=("_n_pos", "min"),
+            metric_rows=("_metric_value", "size"),
+        )
+        .reset_index()
+    )
+    folds["valid_metric"] = np.isfinite(pd.to_numeric(folds["fold_value"], errors="coerce"))
+    folds["sparse_excluded"] = (
+        folds["n_pos"].notna() & (pd.to_numeric(folds["n_pos"], errors="coerce") < SPARSE_POSITIVE_THRESHOLD)
+    )
+    folds["valid_for_interval"] = folds["valid_metric"] & ~folds["sparse_excluded"]
+    return folds
+
+
+def _format_excluded_years(frame: pd.DataFrame) -> str:
+    if frame.empty:
+        return ""
+    parts: list[str] = []
+    for _, row in frame.sort_values("test_year").iterrows():
+        year = row.get("test_year", "")
+        pos = row.get("n_pos")
+        try:
+            pos_text = str(int(float(pos)))
+        except (TypeError, ValueError):
+            pos_text = ""
+        parts.append(f"{year}:{pos_text}")
+    return "; ".join(parts)
+
+
+def _annual_metric_summary(
+    metrics: pd.DataFrame,
+    group_cols: list[str],
+    *,
+    metric_col: str = "pr_auc",
+) -> pd.DataFrame:
+    folds = _annual_fold_frame(metrics, group_cols, metric_col=metric_col)
+    rows: list[dict[str, Any]] = []
+    if folds.empty:
+        return pd.DataFrame(columns=[*group_cols])
+
+    grouped = folds.groupby(group_cols, dropna=False) if group_cols else [((), folds)]
+    for key, group in grouped:
+        key_values = key if isinstance(key, tuple) else (key,)
+        valid = group.loc[group["valid_for_interval"], "fold_value"].astype(float).to_numpy()
+        n_valid = int(len(valid))
+        sd = float(np.std(valid, ddof=1)) if n_valid >= 2 else np.nan
+        se = float(sd / math.sqrt(n_valid)) if n_valid >= 2 and np.isfinite(sd) else np.nan
+        mean = float(np.mean(valid)) if n_valid else np.nan
+        if n_valid >= MIN_VALID_FOLDS_FOR_CI and np.isfinite(se):
+            t_crit = float(stats.t.ppf(0.975, df=n_valid - 1))
+            ci_low = mean - t_crit * se
+            ci_high = mean + t_crit * se
+            method = "annual_fold_dispersion_t95"
+        else:
+            ci_low = np.nan
+            ci_high = np.nan
+            method = "annual_fold_dispersion_insufficient_folds"
+        sparse = group.loc[group["sparse_excluded"]]
+        row = {
+            col: value for col, value in zip(group_cols, key_values, strict=False)
+        }
+        row.update(
+            {
+                "metric_rows": int(group["metric_rows"].sum()),
+                "n_folds": int(group["test_year"].nunique()),
+                "valid_folds": n_valid,
+                "excluded_sparse_folds": int(group["sparse_excluded"].sum()),
+                "excluded_sparse_years": _format_excluded_years(sparse),
+                "mean": mean,
+                "sd": sd,
+                "se": se,
+                "ci_low": ci_low,
+                "ci_high": ci_high,
+                "fold_min": float(np.min(valid)) if n_valid else np.nan,
+                "fold_max": float(np.max(valid)) if n_valid else np.nan,
+                "interval_method": method,
+            }
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _dispersion_text(row: pd.Series) -> str:
+    low = row.get("ci_low")
+    high = row.get("ci_high")
+    if pd.notna(low) and pd.notna(high):
+        return f"[{float(low):.4f}, {float(high):.4f}]"
+    valid_folds = row.get("valid_folds")
+    if pd.notna(valid_folds) and int(valid_folds) > 0:
+        return f"diagnostic only (<{MIN_VALID_FOLDS_FOR_CI} valid folds)"
+    return ""
+
+
+def _table_view(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    return df[[col for col in columns if col in df.columns]].copy()
 
 
 def _latest_public_lake_report() -> dict[str, Any]:
@@ -201,43 +434,83 @@ def _public_lake_scale(report: dict[str, Any]) -> pd.DataFrame:
 
 def _public_task_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.DataFrame:
     positives = summary.get("task_positive_counts", {})
-    if "task" in metrics.columns:
-        metrics = metrics.loc[~metrics["task"].astype(str).str.contains("aaer", case=False)].copy()
+    uncertainty = _annual_metric_summary(metrics, ["task"])
     grouped = (
         metrics.groupby("task", dropna=False)
         .agg(
-            Rows=("pr_auc", "size"),
             Mean_Prevalence=("positive_rate_test", "mean"),
-            Mean_PR_AUC=("pr_auc", "mean"),
             Mean_ROC_AUC=("roc_auc", "mean"),
             Mean_Brier=("brier", "mean"),
-            Max_PR_AUC=("pr_auc", "max"),
+            Mean_Brier_Skill=("brier_skill_score", "mean"),
+            Mean_ECE=("ece", "mean"),
         )
         .reset_index()
-        .sort_values("Mean_PR_AUC", ascending=False)
     )
+    grouped = grouped.merge(uncertainty, on="task", how="left")
+    grouped = grouped.sort_values("mean", ascending=False)
     grouped.insert(1, "Positives", grouped["task"].map(positives))
     grouped = grouped.rename(columns={"task": "Task"})
-    for col in ["Mean_Prevalence", "Mean_PR_AUC", "Mean_ROC_AUC", "Mean_Brier", "Max_PR_AUC"]:
+    grouped["Mean_PR_AUC"] = grouped["mean"]
+    grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
+    for col in [
+        "Mean_Prevalence",
+        "Mean_PR_AUC",
+        "Mean_ROC_AUC",
+        "Mean_Brier",
+        "Mean_Brier_Skill",
+        "Mean_ECE",
+    ]:
         grouped[col] = grouped[col].map(_fmt)
-    grouped["Rows"] = grouped["Rows"].map(_fmt)
+    for col in ["metric_rows", "n_folds", "valid_folds", "excluded_sparse_folds"]:
+        grouped[col] = grouped[col].map(_fmt)
     grouped["Positives"] = grouped["Positives"].map(_fmt)
+    return grouped
+
+
+def _public_fold_support(task_status: pd.DataFrame) -> pd.DataFrame:
+    if task_status.empty:
+        return pd.DataFrame()
+    needed = {"task", "test_year", "n_test", "positive_test"}
+    if not needed.issubset(task_status.columns):
+        return pd.DataFrame()
+    work = task_status.copy()
+    work["n_test_num"] = pd.to_numeric(work["n_test"], errors="coerce")
+    work["positive_test_num"] = pd.to_numeric(work["positive_test"], errors="coerce")
+    grouped = (
+        work.groupby(["task", "test_year"], dropna=False)
+        .agg(
+            Configs=("status", "size"),
+            Test_Rows=("n_test_num", "max"),
+            Positives=("positive_test_num", "max"),
+        )
+        .reset_index()
+        .rename(columns={"task": "Task", "test_year": "Test_Year"})
+    )
+    grouped["Prevalence"] = grouped["Positives"] / grouped["Test_Rows"]
+    grouped["Sparse_Excluded"] = grouped["Positives"].lt(SPARSE_POSITIVE_THRESHOLD)
+    grouped = grouped.sort_values(["Task", "Test_Year"]).reset_index(drop=True)
+    for col in ["Configs", "Test_Rows", "Positives"]:
+        grouped[col] = grouped[col].map(_fmt)
+    grouped["Test_Year"] = grouped["Test_Year"].map(
+        lambda value: str(int(float(value))) if pd.notna(value) else ""
+    )
+    grouped["Prevalence"] = grouped["Prevalence"].map(_fmt)
+    grouped["Sparse_Excluded"] = grouped["Sparse_Excluded"].map(lambda value: "Yes" if value else "No")
     return grouped
 
 
 def _feature_family_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.DataFrame:
     family = summary.get("feature_family_summary", {})
+    uncertainty = _annual_metric_summary(metrics, ["feature_set"])
     grouped = (
         metrics.groupby("feature_set", dropna=False)
         .agg(
-            Rows=("pr_auc", "size"),
-            Mean_PR_AUC=("pr_auc", "mean"),
             Mean_ROC_AUC=("roc_auc", "mean"),
-            Max_PR_AUC=("pr_auc", "max"),
         )
         .reset_index()
-        .sort_values("Mean_PR_AUC", ascending=False)
     )
+    grouped = grouped.merge(uncertainty, on="feature_set", how="left")
+    grouped = grouped.sort_values("mean", ascending=False)
     best_window = (
         metrics.groupby(["feature_set", "train_window"], dropna=False)["pr_auc"]
         .mean()
@@ -258,41 +531,68 @@ def _feature_family_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> p
     )
     grouped["Best_Window"] = grouped["feature_set"].map(best_window)
     grouped = grouped.rename(columns={"feature_set": "Feature_Set"})
-    for col in ["Rows", "Features", "XBRL_Ratios", "XBRL_Coverage"]:
+    grouped["Mean_PR_AUC"] = grouped["mean"]
+    grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
+    for col in [
+        "metric_rows",
+        "n_folds",
+        "valid_folds",
+        "excluded_sparse_folds",
+        "Features",
+        "XBRL_Ratios",
+        "XBRL_Coverage",
+    ]:
         grouped[col] = grouped[col].map(_fmt)
-    for col in ["Mean_PR_AUC", "Mean_ROC_AUC", "Max_PR_AUC"]:
+    for col in ["Mean_PR_AUC", "Mean_ROC_AUC"]:
         grouped[col] = grouped[col].map(_fmt)
-    return grouped[
-        [
-            "Feature_Set",
-            "Features",
-            "XBRL_Ratios",
-            "XBRL_Coverage",
-            "Best_Window",
-            "Rows",
-            "Mean_PR_AUC",
-            "Mean_ROC_AUC",
-            "Max_PR_AUC",
-        ]
-    ]
+    return grouped
+
+
+def _task_feature_family_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
+    if metrics.empty or not {"task", "feature_set"}.issubset(metrics.columns):
+        return pd.DataFrame()
+    uncertainty = _annual_metric_summary(metrics, ["task", "feature_set"])
+    grouped = (
+        metrics.groupby(["task", "feature_set"], dropna=False)
+        .agg(
+            Mean_Prevalence=("positive_rate_test", "mean"),
+            Mean_ROC_AUC=("roc_auc", "mean"),
+            Mean_Brier_Skill=("brier_skill_score", "mean"),
+            Mean_ECE=("ece", "mean"),
+        )
+        .reset_index()
+        .merge(uncertainty, on=["task", "feature_set"], how="left")
+        .sort_values(["task", "mean"], ascending=[True, False])
+        .rename(columns={"task": "Task", "feature_set": "Feature_Set"})
+    )
+    grouped["Mean_PR_AUC"] = grouped["mean"]
+    grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
+    for col in ["Mean_Prevalence", "Mean_PR_AUC", "Mean_ROC_AUC", "Mean_Brier_Skill", "Mean_ECE"]:
+        grouped[col] = grouped[col].map(_fmt)
+    for col in ["metric_rows", "n_folds", "valid_folds", "excluded_sparse_folds"]:
+        grouped[col] = grouped[col].map(_fmt)
+    return grouped
 
 
 def _benchmark_timing_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
+    uncertainty = _annual_metric_summary(metrics, ["label_mode", "window"])
     grouped = (
         metrics.groupby(["label_mode", "window"], dropna=False)
         .agg(
-            Mean_PR_AUC=("pr_auc", "mean"),
             Mean_ROC_AUC=("roc_auc", "mean"),
             Top_100_Precision=("top_100_precision", "mean"),
             Brier=("brier", "mean"),
             Retained_Positive_Share=("retained_positive_train_share", "mean"),
         )
         .reset_index()
-        .sort_values("Mean_PR_AUC", ascending=False)
     )
+    grouped = grouped.merge(uncertainty, on=["label_mode", "window"], how="left")
+    grouped = grouped.sort_values("mean", ascending=False)
     best = grouped.drop_duplicates("label_mode").rename(
         columns={"label_mode": "Label_Mode", "window": "Best_Window"}
     )
+    best["Mean_PR_AUC"] = best["mean"]
+    best["PR_AUC_Dispersion"] = best.apply(_dispersion_text, axis=1)
     for col in [
         "Mean_PR_AUC",
         "Mean_ROC_AUC",
@@ -301,26 +601,29 @@ def _benchmark_timing_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
         "Retained_Positive_Share",
     ]:
         best[col] = best[col].map(_fmt)
+    for col in ["metric_rows", "n_folds", "valid_folds", "excluded_sparse_folds"]:
+        best[col] = best[col].map(_fmt)
     return best
 
 
 def _model_family_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
     model_col = "peer_model_id"
+    uncertainty = _annual_metric_summary(metrics, [model_col])
     grouped = (
         metrics.groupby(model_col, dropna=False)
         .agg(
-            Rows=("pr_auc", "size"),
-            Mean_PR_AUC=("pr_auc", "mean"),
             Mean_ROC_AUC=("roc_auc", "mean"),
             Mean_Brier=("brier", "mean"),
-            Max_PR_AUC=("pr_auc", "max"),
         )
         .reset_index()
-        .sort_values("Mean_PR_AUC", ascending=False)
-        .rename(columns={model_col: "Model"})
     )
-    grouped["Rows"] = grouped["Rows"].map(_fmt)
-    for col in ["Mean_PR_AUC", "Mean_ROC_AUC", "Mean_Brier", "Max_PR_AUC"]:
+    grouped = grouped.merge(uncertainty, on=model_col, how="left")
+    grouped = grouped.sort_values("mean", ascending=False).rename(columns={model_col: "Model"})
+    grouped["Mean_PR_AUC"] = grouped["mean"]
+    grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
+    for col in ["Mean_PR_AUC", "Mean_ROC_AUC", "Mean_Brier"]:
+        grouped[col] = grouped[col].map(_fmt)
+    for col in ["metric_rows", "n_folds", "valid_folds", "excluded_sparse_folds"]:
         grouped[col] = grouped[col].map(_fmt)
     return grouped
 
@@ -347,6 +650,14 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
                 "PR_AUC": _fmt(best["pr_auc"]),
                 "ROC_AUC": _fmt(best["roc_auc"]),
                 "Top_Decile_Lift": _fmt(best["top_decile_lift"]),
+                "Top_10pct_Precision": _fmt(best.get("top_10pct_precision")),
+                "Top_10pct_FDR": _fmt(1 - float(best.get("top_10pct_precision"))),
+                "Lift_Bootstrap_Interval": f"[{_fmt(best.get('top_decile_lift_ci_low'))}, {_fmt(best.get('top_decile_lift_ci_high'))}]",
+                "top_decile_lift": float(best["top_decile_lift"]),
+                "ci_low": float(best.get("top_decile_lift_ci_low")),
+                "ci_high": float(best.get("top_decile_lift_ci_high")),
+                "Metric_Status": best.get("metric_status", ""),
+                "Bridge_Tier": best.get("bridge_tier", ""),
             }
         )
     if not benchmark_to_public.empty:
@@ -361,20 +672,259 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
                 "PR_AUC": _fmt(best["pr_auc"]),
                 "ROC_AUC": _fmt(best["roc_auc"]),
                 "Top_Decile_Lift": _fmt(best["top_decile_lift"]),
+                "Top_10pct_Precision": _fmt(best.get("top_10pct_precision")),
+                "Top_10pct_FDR": _fmt(1 - float(best.get("top_10pct_precision"))),
+                "Lift_Bootstrap_Interval": f"[{_fmt(best.get('top_decile_lift_ci_low'))}, {_fmt(best.get('top_decile_lift_ci_high'))}]",
+                "top_decile_lift": float(best["top_decile_lift"]),
+                "ci_low": float(best.get("top_decile_lift_ci_low")),
+                "ci_high": float(best.get("top_decile_lift_ci_high")),
+                "Metric_Status": best.get("metric_status", ""),
+                "Bridge_Tier": best.get("bridge_tier", ""),
             }
         )
     return pd.DataFrame(rows)
 
 
-def _plot_bar(
+def _bridge_overlap_matrix(study_dir: Path) -> pd.DataFrame:
+    path = study_dir / "construct_overlap" / "label_contingency_lift.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    frame = _read_csv(path)
+    if frame.empty:
+        return frame
+    labels = {
+        "label_comment_thread_365": "comment_thread",
+        "label_amendment_365": "amendment",
+        "label_8k_402_365": "8k_402",
+    }
+    keep_cols = [
+        "public_label",
+        "bridge_tier",
+        "n",
+        "benchmark_positive_rows",
+        "public_positive_rows",
+        "both_positive_rows",
+        "benchmark_prevalence",
+        "public_prevalence",
+        "public_rate_given_benchmark_pos",
+        "benchmark_rate_given_public_pos",
+        "lift_public_given_benchmark",
+        "lift_benchmark_given_public",
+    ]
+    out = frame.loc[frame["public_label"].isin(labels), keep_cols].copy()
+    tier_order = {"high_confidence": 0, "ambiguous": 1, "all_matched": 2}
+    out["_label_order"] = out["public_label"].map({key: idx for idx, key in enumerate(labels)})
+    out["_tier_order"] = out["bridge_tier"].map(tier_order).fillna(99)
+    out = out.sort_values(["_label_order", "_tier_order"]).drop(columns=["_label_order", "_tier_order"])
+    out = out.rename(
+        columns={
+            "public_label": "Public_Label",
+            "bridge_tier": "Bridge_Tier",
+            "n": "Rows",
+            "benchmark_positive_rows": "Benchmark_Positives",
+            "public_positive_rows": "Public_Positives",
+            "both_positive_rows": "Both_Positive",
+            "benchmark_prevalence": "Benchmark_Rate",
+            "public_prevalence": "Public_Rate",
+            "public_rate_given_benchmark_pos": "Public_Rate_If_Benchmark_Pos",
+            "benchmark_rate_given_public_pos": "Benchmark_Rate_If_Public_Pos",
+            "lift_public_given_benchmark": "Public_Lift_If_Benchmark_Pos",
+            "lift_benchmark_given_public": "Benchmark_Lift_If_Public_Pos",
+        }
+    )
+    out["Public_Label"] = out["Public_Label"].map(labels)
+    for col in ["Rows", "Benchmark_Positives", "Public_Positives", "Both_Positive"]:
+        out[col] = out[col].map(_fmt)
+    for col in [
+        "Benchmark_Rate",
+        "Public_Rate",
+        "Public_Rate_If_Benchmark_Pos",
+        "Benchmark_Rate_If_Public_Pos",
+        "Public_Lift_If_Benchmark_Pos",
+        "Benchmark_Lift_If_Public_Pos",
+    ]:
+        out[col] = out[col].map(_fmt)
+    return out
+
+
+def _bridge_sample_boundaries(study_dir: Path) -> pd.DataFrame:
+    flow_path = study_dir / "construct_overlap" / "overlap_sample_flow.csv"
+    unmatched_path = study_dir / "bridge_probe" / "unmatched_raw_characteristics.csv"
+    rows: list[dict[str, Any]] = []
+    if flow_path.exists():
+        flow = _read_csv(flow_path)
+        for _, row in flow.iterrows():
+            rows.append(
+                {
+                    "Boundary": row.get("bridge_tier", ""),
+                    "Rows": row.get("rows", ""),
+                    "Benchmark_Positives": row.get("benchmark_positives", ""),
+                    "Positive_Rate": "",
+                    "Years": "",
+                    "Interpretation": "Bridge overlap tier",
+                }
+            )
+    if unmatched_path.exists():
+        unmatched = _read_csv(unmatched_path)
+        if not unmatched.empty:
+            rows.append(
+                {
+                    "Boundary": "unmatched_raw",
+                    "Rows": pd.to_numeric(unmatched["unmatched_rows"], errors="coerce").sum(),
+                    "Benchmark_Positives": "",
+                    "Positive_Rate": pd.to_numeric(
+                        unmatched["unmatched_positive_rate"], errors="coerce"
+                    ).mean(),
+                    "Years": f"{int(unmatched['data_year'].min())}-{int(unmatched['data_year'].max())}",
+                    "Interpretation": "Unmatched benchmark rows outside bridge-overlap claims",
+                }
+            )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    for col in ["Rows", "Benchmark_Positives"]:
+        out[col] = out[col].map(_fmt)
+    out["Positive_Rate"] = out["Positive_Rate"].map(_fmt)
+    return out
+
+
+def _selection_profile_table(panel_path: Path | None = None) -> pd.DataFrame:
+    path = panel_path or LAKE_GOLD_DIR / "issuer_origin_panel.parquet"
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        import duckdb
+    except ImportError:
+        return pd.DataFrame()
+    cols = [
+        "form",
+        "entity_type",
+        "size",
+        "xbrl_ratio_log_assets",
+        "days_since_previous_filing",
+        "prior_filing_count",
+        "public_history_comment_thread_3y_count",
+        "issuer_has_fpi_form_year",
+        "censored_365",
+        "label_comment_thread_365",
+        "label_amendment_365",
+        "label_8k_402_365",
+    ]
+    query = "SELECT " + ", ".join(cols) + " FROM read_parquet(?)"
+    try:
+        panel = duckdb.connect(database=":memory:").execute(query, [str(path)]).fetchdf()
+    except Exception:
+        return pd.DataFrame()
+    if panel.empty:
+        return pd.DataFrame()
+    panel = panel.loc[pd.to_numeric(panel["censored_365"], errors="coerce").fillna(0).eq(0)].copy()
+    if panel.empty:
+        return pd.DataFrame()
+    for col in [
+        "size",
+        "xbrl_ratio_log_assets",
+        "days_since_previous_filing",
+        "prior_filing_count",
+        "public_history_comment_thread_3y_count",
+        "issuer_has_fpi_form_year",
+        "label_comment_thread_365",
+        "label_amendment_365",
+        "label_8k_402_365",
+    ]:
+        panel[col] = pd.to_numeric(panel[col], errors="coerce")
+
+    rows: list[dict[str, Any]] = []
+
+    def add_profile(stratum: str, group: str, mask: pd.Series) -> None:
+        subset = panel.loc[mask.fillna(False)]
+        if subset.empty:
+            return
+        rows.append(
+            {
+                "Stratum": stratum,
+                "Group": group,
+                "Rows": len(subset),
+                "Comment_Rate": subset["label_comment_thread_365"].mean(),
+                "Amendment_Rate": subset["label_amendment_365"].mean(),
+                "Item_4_02_Rate": subset["label_8k_402_365"].mean(),
+            }
+        )
+
+    for col, stratum in [
+        ("size", "Filing size"),
+        ("xbrl_ratio_log_assets", "XBRL log assets"),
+        ("prior_filing_count", "Prior filing count"),
+        ("days_since_previous_filing", "Days since prior filing"),
+    ]:
+        median = panel[col].median(skipna=True)
+        if pd.notna(median):
+            add_profile(stratum, f"Below median ({_fmt(float(median))})", panel[col].lt(median))
+            add_profile(stratum, f"At/above median ({_fmt(float(median))})", panel[col].ge(median))
+
+    add_profile(
+        "Prior public comment-thread history",
+        "No prior 3y public thread",
+        panel["public_history_comment_thread_3y_count"].fillna(0).eq(0),
+    )
+    add_profile(
+        "Prior public comment-thread history",
+        "Any prior 3y public thread",
+        panel["public_history_comment_thread_3y_count"].fillna(0).gt(0),
+    )
+    add_profile("Annual form", "10-K", panel["form"].astype("string").eq("10-K"))
+    add_profile("Annual form", "10-K/A", panel["form"].astype("string").eq("10-K/A"))
+    add_profile("Foreign issuer proxy", "No FPI-year flag", panel["issuer_has_fpi_form_year"].fillna(0).eq(0))
+    add_profile("Foreign issuer proxy", "FPI-year flag", panel["issuer_has_fpi_form_year"].fillna(0).eq(1))
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    for col in ["Rows"]:
+        out[col] = out[col].map(_fmt)
+    for col in ["Comment_Rate", "Amendment_Rate", "Item_4_02_Rate"]:
+        out[col] = out[col].map(_fmt)
+    return out
+
+
+def _public_opacity_dml_table(study_dir: Path) -> pd.DataFrame:
+    path = study_dir / "public_cascade" / "public_opacity_dml.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    dml = _read_csv(path)
+    if dml.empty:
+        return dml
+    dml["coef_num"] = pd.to_numeric(dml.get("coef"), errors="coerce")
+    dml["std_err_num"] = pd.to_numeric(dml.get("std_err"), errors="coerce")
+    dml["ci_low"] = dml["coef_num"] - 1.96 * dml["std_err_num"]
+    dml["ci_high"] = dml["coef_num"] + 1.96 * dml["std_err_num"]
+    dml["interval_method"] = "cross_fit_residual_ols_hc3_95"
+    dml["Coef"] = dml["coef_num"].map(_fmt)
+    dml["Std_Err"] = dml["std_err_num"].map(_fmt)
+    dml["CI_95"] = dml.apply(
+        lambda row: f"[{_fmt(row['ci_low'])}, {_fmt(row['ci_high'])}]"
+        if pd.notna(row["ci_low"]) and pd.notna(row["ci_high"])
+        else "",
+        axis=1,
+    )
+    dml["P_Value"] = pd.to_numeric(dml.get("p_value"), errors="coerce").map(_fmt)
+    dml["N_Obs"] = pd.to_numeric(dml.get("n_obs"), errors="coerce").map(_fmt)
+    dml["Prevalence"] = pd.to_numeric(dml.get("prevalence"), errors="coerce").map(_fmt)
+    dml["Outcome"] = dml["outcome"]
+    dml["Status"] = dml["status"]
+    return dml
+
+
+def _plot_metric_with_uncertainty(
     df: pd.DataFrame,
     *,
-    x: str,
-    y: str,
+    fold_df: pd.DataFrame,
+    summary_group_col: str,
+    fold_group_col: str,
     title: str,
     ylabel: str,
     out_path: Path,
     color: str = "#2a9d8f",
+    plot_style: str = "bar",
 ) -> dict[str, str]:
     import matplotlib
 
@@ -382,30 +932,84 @@ def _plot_bar(
     import matplotlib.pyplot as plt
 
     plot_df = df.copy()
-    plot_df[y] = pd.to_numeric(plot_df[y], errors="coerce")
-    plot_df = plot_df.sort_values(y, ascending=False)
-    labels = plot_df[x].astype(str)
+    plot_df["mean_num"] = pd.to_numeric(plot_df["mean"], errors="coerce")
+    plot_df["ci_low_num"] = pd.to_numeric(plot_df["ci_low"], errors="coerce")
+    plot_df["ci_high_num"] = pd.to_numeric(plot_df["ci_high"], errors="coerce")
+    plot_df = plot_df.sort_values("mean_num", ascending=False)
+    labels = plot_df[summary_group_col].astype(str)
     horizontal = labels.map(len).max() > 14
+    rng = np.random.default_rng(20260526)
     fig, ax = plt.subplots(figsize=(7.2, 4.6 if horizontal else 4.2))
     if horizontal:
-        plot_df = plot_df.sort_values(y, ascending=True)
-        ax.barh(
-            plot_df[x].astype(str),
-            plot_df[y],
-            color=color,
-            edgecolor="#1f2933",
-            linewidth=0.6,
-        )
+        plot_df = plot_df.sort_values("mean_num", ascending=True).reset_index(drop=True)
+        y_pos = np.arange(len(plot_df))
+        if plot_style == "dot":
+            ax.scatter(
+                plot_df["mean_num"],
+                y_pos,
+                s=42,
+                color=color,
+                edgecolor="#1f2933",
+                linewidth=0.6,
+                zorder=5,
+            )
+        else:
+            ax.barh(y_pos, plot_df["mean_num"], color=color, edgecolor="#1f2933", linewidth=0.6)
+        ax.set_yticks(y_pos, plot_df[summary_group_col].astype(str))
+        for idx, row in plot_df.iterrows():
+            if pd.notna(row["ci_low_num"]) and pd.notna(row["ci_high_num"]):
+                ax.errorbar(
+                    row["mean_num"],
+                    idx,
+                    xerr=[[row["mean_num"] - row["ci_low_num"]], [row["ci_high_num"] - row["mean_num"]]],
+                    fmt="none",
+                    ecolor="#222222",
+                    elinewidth=1,
+                    capsize=3,
+                    zorder=3,
+                )
+            dots = fold_df.loc[
+                fold_df[fold_group_col].astype(str).eq(str(row[summary_group_col]))
+                & fold_df["valid_metric"]
+            ]
+            jitter = rng.uniform(-0.08, 0.08, size=len(dots))
+            ax.scatter(dots["fold_value"], idx + jitter, s=15, color="#555555", alpha=0.55, zorder=4)
         ax.set_xlabel(ylabel)
         ax.set_ylabel("")
     else:
-        ax.bar(
-            labels,
-            plot_df[y],
-            color=color,
-            edgecolor="#1f2933",
-            linewidth=0.6,
-        )
+        plot_df = plot_df.reset_index(drop=True)
+        x_pos = np.arange(len(plot_df))
+        if plot_style == "dot":
+            ax.scatter(
+                x_pos,
+                plot_df["mean_num"],
+                s=42,
+                color=color,
+                edgecolor="#1f2933",
+                linewidth=0.6,
+                zorder=5,
+            )
+        else:
+            ax.bar(x_pos, plot_df["mean_num"], color=color, edgecolor="#1f2933", linewidth=0.6)
+        ax.set_xticks(x_pos, plot_df[summary_group_col].astype(str))
+        for idx, row in plot_df.iterrows():
+            if pd.notna(row["ci_low_num"]) and pd.notna(row["ci_high_num"]):
+                ax.errorbar(
+                    idx,
+                    row["mean_num"],
+                    yerr=[[row["mean_num"] - row["ci_low_num"]], [row["ci_high_num"] - row["mean_num"]]],
+                    fmt="none",
+                    ecolor="#222222",
+                    elinewidth=1,
+                    capsize=3,
+                    zorder=3,
+                )
+            dots = fold_df.loc[
+                fold_df[fold_group_col].astype(str).eq(str(row[summary_group_col]))
+                & fold_df["valid_metric"]
+            ]
+            jitter = rng.uniform(-0.08, 0.08, size=len(dots))
+            ax.scatter(idx + jitter, dots["fold_value"], s=15, color="#555555", alpha=0.55, zorder=4)
         ax.set_ylabel(ylabel)
         ax.set_xlabel("")
         ax.tick_params(axis="x", rotation=30)
@@ -416,7 +1020,7 @@ def _plot_bar(
     fig.tight_layout()
     png_path = out_path.with_suffix(".png")
     pdf_path = out_path.with_suffix(".pdf")
-    fig.savefig(png_path, dpi=240)
+    fig.savefig(png_path, dpi=300)
     fig.savefig(pdf_path)
     plt.close(fig)
     return {"png": _rel(png_path), "pdf": _rel(pdf_path)}
@@ -429,9 +1033,25 @@ def _plot_construct_lift(df: pd.DataFrame, *, out_path: Path) -> dict[str, str]:
     import matplotlib.pyplot as plt
 
     plot_df = df.copy()
-    plot_df["Top_Decile_Lift"] = pd.to_numeric(plot_df["Top_Decile_Lift"], errors="coerce")
+    plot_df["Top_Decile_Lift"] = pd.to_numeric(plot_df["top_decile_lift"], errors="coerce")
+    plot_df["ci_low"] = pd.to_numeric(plot_df["ci_low"], errors="coerce")
+    plot_df["ci_high"] = pd.to_numeric(plot_df["ci_high"], errors="coerce")
     fig, ax = plt.subplots(figsize=(7.2, 3.8))
-    ax.barh(plot_df["Direction"], plot_df["Top_Decile_Lift"], color="#457b9d")
+    y_pos = np.arange(len(plot_df))
+    ax.barh(y_pos, plot_df["Top_Decile_Lift"], color="#457b9d")
+    ax.set_yticks(y_pos, plot_df["Direction"])
+    for idx, row in plot_df.iterrows():
+        if pd.notna(row["ci_low"]) and pd.notna(row["ci_high"]):
+            ax.errorbar(
+                row["Top_Decile_Lift"],
+                idx,
+                xerr=[[row["Top_Decile_Lift"] - row["ci_low"]], [row["ci_high"] - row["Top_Decile_Lift"]]],
+                fmt="none",
+                ecolor="#222222",
+                elinewidth=1,
+                capsize=3,
+                zorder=3,
+            )
     ax.axvline(1.0, color="#222222", linewidth=1, linestyle="--")
     ax.set_xlabel("Top-decile lift")
     ax.set_title("Construct-overlap ranking alignment")
@@ -439,7 +1059,7 @@ def _plot_construct_lift(df: pd.DataFrame, *, out_path: Path) -> dict[str, str]:
     fig.tight_layout()
     png_path = out_path.with_suffix(".png")
     pdf_path = out_path.with_suffix(".pdf")
-    fig.savefig(png_path, dpi=240)
+    fig.savefig(png_path, dpi=300)
     fig.savefig(pdf_path)
     plt.close(fig)
     return {"png": _rel(png_path), "pdf": _rel(pdf_path)}
@@ -488,9 +1108,9 @@ def _result_narrative(
         "",
         "## Main Public-Cascade Result",
         "",
-        f"The strongest public-cascade summary configuration is `{best_public}`, with "
+        f"The highest reported public-cascade summary configuration is `{best_public}`, with "
         f"reported mean PR-AUC `{best_public_pr}`. The public tasks show a natural "
-        "severity gradient. Comment-thread scrutiny is the most stable broad-review "
+        "severity gradient. Comment-thread scrutiny is the broadest public-scrutiny "
         f"signal (mean PR-AUC `{value(comment_row, 'Mean_PR_AUC')}`), amendments provide "
         f"a clear correction/friction channel (mean PR-AUC `{value(amendment_row, 'Mean_PR_AUC')}`), "
         f"and 8-K Item 4.02 is rarer but still rankable (mean PR-AUC `{value(severe_row, 'Mean_PR_AUC')}`).",
@@ -510,8 +1130,8 @@ def _result_narrative(
         "## Construct-Overlap Evidence",
         "",
         "The WRDS-validated bridge shows that public-cascade scores and detected-"
-        "misstatement benchmark labels are related but non-identical. The strongest "
-        "public-score-to-benchmark-positive row and the strongest reciprocal "
+        "misstatement benchmark labels are related but non-identical. The highest-lift "
+        "public-score-to-benchmark-positive row and the highest-lift reciprocal "
         "detected-misstatement-score-to-public-label row both show top-decile lift "
         "above one, supporting construct relatedness. "
         f"The validation tier is `{validation_tier}`; this supports manuscript-grade "
@@ -567,6 +1187,7 @@ def main() -> None:
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
     construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
     public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
+    public_task_status = _read_csv(study_dir / "public_cascade" / "public_cascade_task_status.csv")
     benchmark_metrics = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
     benchmark_peer_metrics = _read_csv(study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv")
     public_peer_metrics = _read_csv(
@@ -575,13 +1196,24 @@ def main() -> None:
 
     public_lake = _public_lake_scale(_latest_public_lake_report())
     public_task = _public_task_metrics(public_metrics, public_summary)
+    public_fold_support = _public_fold_support(public_task_status)
     feature_family = _feature_family_metrics(public_metrics, public_summary)
+    task_feature_family = _task_feature_family_metrics(public_metrics)
     benchmark_timing = _benchmark_timing_metrics(benchmark_metrics)
     benchmark_peer = _model_family_metrics(benchmark_peer_metrics)
     public_peer = _model_family_metrics(public_peer_metrics)
     bridge_coverage = _bridge_coverage(study_dir / "bridge_probe" / "coverage_report.csv")
     construct_alignment = _construct_alignment(study_dir)
+    bridge_overlap = _bridge_overlap_matrix(study_dir)
+    bridge_boundaries = _bridge_sample_boundaries(study_dir)
+    selection_profile = _selection_profile_table()
+    public_opacity_dml = _public_opacity_dml_table(study_dir)
     component_status = _component_status(manifest)
+
+    public_task_folds = _annual_fold_frame(public_metrics, ["task"])
+    feature_family_folds = _annual_fold_frame(public_metrics, ["feature_set"])
+    benchmark_peer_folds = _annual_fold_frame(benchmark_peer_metrics, ["peer_model_id"])
+    public_peer_folds = _annual_fold_frame(public_peer_metrics, ["peer_model_id"])
 
     table_manifest = {
         "table_01_component_status": _write_table_bundle(
@@ -604,6 +1236,23 @@ def main() -> None:
             stem="table_03_public_task_metrics",
             caption="Public cascade task metrics",
             label="tab:public-task-metrics",
+            note=PUBLIC_TASK_NOTE,
+            display_df=_table_view(
+                public_task,
+                [
+                    "Task",
+                    "Positives",
+                    "n_folds",
+                    "valid_folds",
+                    "Mean_Prevalence",
+                    "Mean_PR_AUC",
+                    "PR_AUC_Dispersion",
+                    "Mean_ROC_AUC",
+                    "Mean_Brier",
+                    "Mean_Brier_Skill",
+                    "Mean_ECE",
+                ],
+            ),
         ),
         "table_04_feature_family_metrics": _write_table_bundle(
             feature_family,
@@ -611,6 +1260,22 @@ def main() -> None:
             stem="table_04_feature_family_metrics",
             caption="Public cascade feature-family metrics",
             label="tab:feature-family-metrics",
+            note=ANNUAL_INTERVAL_NOTE,
+            display_df=_table_view(
+                feature_family,
+                [
+                    "Feature_Set",
+                    "Features",
+                    "XBRL_Ratios",
+                    "XBRL_Coverage",
+                    "Best_Window",
+                    "n_folds",
+                    "valid_folds",
+                    "Mean_PR_AUC",
+                    "PR_AUC_Dispersion",
+                    "Mean_ROC_AUC",
+                ],
+            ),
         ),
         "table_05_benchmark_timing_metrics": _write_table_bundle(
             benchmark_timing,
@@ -618,6 +1283,21 @@ def main() -> None:
             stem="table_05_benchmark_timing_metrics",
             caption="Detected-misstatement benchmark timing diagnostics",
             label="tab:benchmark-timing",
+            note=ANNUAL_INTERVAL_NOTE,
+            display_df=_table_view(
+                benchmark_timing,
+                [
+                    "Label_Mode",
+                    "Best_Window",
+                    "n_folds",
+                    "valid_folds",
+                    "Mean_PR_AUC",
+                    "PR_AUC_Dispersion",
+                    "Mean_ROC_AUC",
+                    "Top_100_Precision",
+                    "Retained_Positive_Share",
+                ],
+            ),
         ),
         "table_06_detected_misstatement_peer_metrics": _write_table_bundle(
             benchmark_peer,
@@ -625,6 +1305,18 @@ def main() -> None:
             stem="table_06_detected_misstatement_peer_metrics",
             caption="Detected-misstatement peer-compatible model-family metrics",
             label="tab:benchmark-peer",
+            note=PEER_TRANSFER_NOTE,
+            display_df=_table_view(
+                benchmark_peer,
+                [
+                    "Model",
+                    "n_folds",
+                    "valid_folds",
+                    "Mean_PR_AUC",
+                    "PR_AUC_Dispersion",
+                    "Mean_ROC_AUC",
+                ],
+            ),
         ),
         "table_07_public_peer_metrics": _write_table_bundle(
             public_peer,
@@ -632,6 +1324,18 @@ def main() -> None:
             stem="table_07_public_peer_metrics",
             caption="Public-label peer-compatible model-family metrics",
             label="tab:public-peer",
+            note=PEER_TRANSFER_NOTE,
+            display_df=_table_view(
+                public_peer,
+                [
+                    "Model",
+                    "n_folds",
+                    "valid_folds",
+                    "Mean_PR_AUC",
+                    "PR_AUC_Dispersion",
+                    "Mean_ROC_AUC",
+                ],
+            ),
         ),
         "table_08_bridge_coverage": _write_table_bundle(
             bridge_coverage,
@@ -646,45 +1350,142 @@ def main() -> None:
             stem="table_09_construct_alignment",
             caption="Construct-overlap ranking alignment",
             label="tab:construct-alignment",
+            note=CONSTRUCT_LIFT_NOTE,
+            display_df=_table_view(
+                construct_alignment,
+                [
+                    "Direction",
+                    "Model",
+                    "Target",
+                    "Feature_Set",
+                    "Window",
+                    "PR_AUC",
+                    "ROC_AUC",
+                    "Top_Decile_Lift",
+                    "Top_10pct_Precision",
+                    "Top_10pct_FDR",
+                    "Lift_Bootstrap_Interval",
+                    "Bridge_Tier",
+                ],
+            ),
         ),
     }
+    if not public_fold_support.empty:
+        table_manifest["table_13_public_fold_support"] = _write_table_bundle(
+            public_fold_support,
+            out_dir=tables_dir,
+            stem="table_13_public_fold_support",
+            caption="Annual public-label fold support",
+            label="tab:public-fold-support",
+            note=FOLD_SUPPORT_NOTE,
+        )
+    if not task_feature_family.empty:
+        table_manifest["table_14_task_feature_family_metrics"] = _write_table_bundle(
+            task_feature_family,
+            out_dir=tables_dir,
+            stem="table_14_task_feature_family_metrics",
+            caption="Task-by-feature-family public-cascade metrics",
+            label="tab:task-feature-family",
+            note=TASK_FEATURE_NOTE,
+            display_df=_table_view(
+                task_feature_family,
+                [
+                    "Task",
+                    "Feature_Set",
+                    "n_folds",
+                    "valid_folds",
+                    "Mean_Prevalence",
+                    "Mean_PR_AUC",
+                    "PR_AUC_Dispersion",
+                    "Mean_ROC_AUC",
+                    "Mean_Brier_Skill",
+                    "Mean_ECE",
+                ],
+            ),
+        )
+    if not bridge_overlap.empty:
+        table_manifest["table_15_bridge_overlap_matrix"] = _write_table_bundle(
+            bridge_overlap,
+            out_dir=tables_dir,
+            stem="table_15_bridge_overlap_matrix",
+            caption="Bridge-gated public-label overlap matrix",
+            label="tab:bridge-overlap-matrix",
+            note=BRIDGE_OVERLAP_NOTE,
+        )
+    if not bridge_boundaries.empty:
+        table_manifest["table_16_bridge_sample_boundaries"] = _write_table_bundle(
+            bridge_boundaries,
+            out_dir=tables_dir,
+            stem="table_16_bridge_sample_boundaries",
+            caption="Bridge-overlap sample boundaries",
+            label="tab:bridge-sample-boundaries",
+            note=BRIDGE_BOUNDARY_NOTE,
+        )
+    if not selection_profile.empty:
+        table_manifest["table_17_selection_profile"] = _write_table_bundle(
+            selection_profile,
+            out_dir=tables_dir,
+            stem="table_17_selection_profile",
+            caption="Selection-aware public-label profile",
+            label="tab:selection-profile",
+            note=SELECTION_PROFILE_NOTE,
+        )
+    if not public_opacity_dml.empty:
+        table_manifest["table_12_public_opacity_dml"] = _write_table_bundle(
+            public_opacity_dml,
+            out_dir=tables_dir,
+            stem="table_12_public_opacity_dml",
+            caption="Public opacity DML-style adjusted associations",
+            label="tab:public-opacity-dml",
+            note=DML_INTERVAL_NOTE,
+            display_df=_table_view(
+                public_opacity_dml,
+                ["Outcome", "Status", "N_Obs", "Prevalence", "Coef", "Std_Err", "CI_95", "P_Value"],
+            ),
+        )
 
     figure_manifest = {
-        "figure_01_public_task_pr_auc": _plot_bar(
+        "figure_01_public_task_pr_auc": _plot_metric_with_uncertainty(
             public_task,
-            x="Task",
-            y="Mean_PR_AUC",
+            fold_df=public_task_folds,
+            summary_group_col="Task",
+            fold_group_col="task",
             title="Public-cascade task performance",
             ylabel="Mean PR-AUC",
             out_path=figures_dir / "figure_01_public_task_pr_auc",
             color="#2a9d8f",
         ),
-        "figure_02_feature_family_pr_auc": _plot_bar(
+        "figure_02_feature_family_pr_auc": _plot_metric_with_uncertainty(
             feature_family,
-            x="Feature_Set",
-            y="Mean_PR_AUC",
+            fold_df=feature_family_folds,
+            summary_group_col="Feature_Set",
+            fold_group_col="feature_set",
             title="Feature-family comparison",
             ylabel="Mean PR-AUC",
             out_path=figures_dir / "figure_02_feature_family_pr_auc",
             color="#6a994e",
         ),
-        "figure_03_detected_misstatement_peer_pr_auc": _plot_bar(
+        "figure_03_detected_misstatement_peer_pr_auc": _plot_metric_with_uncertainty(
             benchmark_peer,
-            x="Model",
-            y="Mean_PR_AUC",
+            fold_df=benchmark_peer_folds,
+            summary_group_col="Model",
+            fold_group_col="peer_model_id",
             title="Detected-misstatement peer-compatible model families",
             ylabel="Mean PR-AUC",
             out_path=figures_dir / "figure_03_detected_misstatement_peer_pr_auc",
             color="#bc6c25",
+            plot_style="dot",
         ),
-        "figure_04_public_peer_pr_auc": _plot_bar(
+        "figure_04_public_peer_pr_auc": _plot_metric_with_uncertainty(
             public_peer,
-            x="Model",
-            y="Mean_PR_AUC",
+            fold_df=public_peer_folds,
+            summary_group_col="Model",
+            fold_group_col="peer_model_id",
             title="Public-label peer-compatible model families",
             ylabel="Mean PR-AUC",
             out_path=figures_dir / "figure_04_public_peer_pr_auc",
             color="#4361ee",
+            plot_style="dot",
         ),
         "figure_05_construct_overlap_lift": _plot_construct_lift(
             construct_alignment,
@@ -713,6 +1514,17 @@ def main() -> None:
         "tables": table_manifest,
         "figures": figure_manifest,
         "narrative": _rel(narrative_path),
+        "uncertainty": {
+            "annual_metric_interval": "descriptive fold-dispersion interval over valid annual out-of-time fold means when valid_folds >= 5",
+            "sparse_fold_rule": f"folds with positive count < {SPARSE_POSITIVE_THRESHOLD} are excluded from dispersion calculations and listed in excluded_sparse_years",
+            "fold_dependence_caveat": "rolling and expanding training windows overlap, so fold-dispersion intervals describe evaluation-period variation rather than independent sampling error",
+            "construct_overlap_interval": "row-level percentile bootstrap top-decile lift interval from construct-overlap artifacts",
+            "construct_overlap_interval_method": construct_manifest.get("interval_method"),
+            "construct_overlap_interval_seed": construct_manifest.get("interval_seed"),
+            "construct_overlap_interval_reps": construct_manifest.get("interval_reps"),
+            "construct_overlap_interval_scope": construct_manifest.get("interval_scope"),
+            "dml_interval": "coef +/- 1.96 * HC3 OLS SE after cross-fitted residualization",
+        },
         "claim_boundary": {
             "construct_overlap_tier": construct_manifest.get("validation_tier"),
             "causal_claims_supported": False,

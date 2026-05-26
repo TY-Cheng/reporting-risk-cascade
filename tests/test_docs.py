@@ -35,12 +35,16 @@ def _read_toml(path: str) -> dict:
     return tomllib.loads(_read(path))
 
 
+def _squash(text: str) -> str:
+    return " ".join(text.split())
+
+
 def test_mkdocs_nav_uses_paper_plan_and_future_work_pages() -> None:
     mkdocs = _read_yaml("mkdocs.yml")
     assert mkdocs["nav"] == [
         {"Home": "index.md"},
-        {"Results Snapshot": "results_snapshot.md"},
         {"Paper Plan": "paper_plan.md"},
+        {"Results Snapshot": "results_snapshot.md"},
         {"FAQ": "faq.md"},
         {
             "Audit Briefs": [
@@ -296,37 +300,6 @@ def test_readme_points_to_current_docs_pages() -> None:
     assert "[Future Work](future_work.md)" not in readme
 
 
-def test_historical_farr_bridge_script_is_documented_as_non_default() -> None:
-    readme = _read("README.md")
-    plan = _read("docs/paper_plan.md")
-    r_script = _read("scripts/export_farr_gvkey_ciks.R")
-    shell_script = _read("scripts/prepare_farr_gvkey_cik_bridge.sh")
-
-    assert "scripts/prepare_farr_gvkey_cik_bridge.sh --install-missing" in readme
-    assert "farr::gvkey_ciks" in readme
-    assert "not part of the default bridge" in readme
-    assert "old farr support exports are no longer required" in readme
-
-    for text in [readme, plan]:
-        assert "no longer uses farr/external support files" in text
-        assert "coverage" in text
-        assert "multiplicity" in text
-
-    assert "data(\"gvkey_ciks\", package = \"farr\"" in r_script
-    assert "source = \"farr_gvkey_ciks\"" in r_script
-    assert "match_method = \"farr_gvkey_ciks_date_range\"" in r_script
-    assert "scripts/export_farr_gvkey_ciks.R" in shell_script
-    assert "scripts/prepare_gvkey_cik_crosswalk.py" in shell_script
-    assert "--skip-bridge-probe" in shell_script
-    assert "UV_PROJECT_ENVIRONMENT is missing in .env" in shell_script
-    assert "must be an absolute path" in shell_script
-    assert "must point outside this repo" in shell_script
-    assert "physical_path()" in shell_script
-    assert 'repo_root_real="$(physical_path "${repo_root}")"' in shell_script
-    assert 'require_outside_repo "DATA_DIR" "${DATA_DIR}"' in shell_script
-    assert 'mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"' in shell_script
-
-
 def test_docs_home_is_the_readme_snippet_only() -> None:
     home = _read("docs/index.md")
     assert home.strip().endswith('--8<-- "README.md:docs-home"')
@@ -337,6 +310,7 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
     results = _read("docs/results_snapshot.md")
     required_phrases = [
         "Results and Discussion",
+        "Connection to Paper Plan",
         "Results Overview",
         "SEC/PCAOB",
         "gvkey x data_year",
@@ -397,7 +371,7 @@ def test_readme_home_explains_project_and_workflow() -> None:
         "Public Lake",
         "Primary Artifacts",
         "Bridge Inputs",
-        "Current Gates",
+        "Current Artifact Boundary",
         "public observability states",
         "SEC filing review process",
         "SEC EDGAR filing access",
@@ -418,22 +392,19 @@ def test_paper_plan_documents_required_research_spine() -> None:
         if line.startswith("# ") or line.startswith("## ")
     ]
     assert headings == [
-        "# Manuscript Skeleton",
+        "# Paper Plan",
         "## Introduction",
-        "## Literature and Research Gap",
-        "## Data and Sample Construction",
-        "## Methods and Models",
-        "## Evaluation Metrics",
-        "## Experiments",
-        "## Expected and Current Results",
-        "## Claim Boundaries",
+        "## Materials and Methods",
+        "## Expected Experiments",
         "## Reproducibility and Execution Contract",
     ]
     required_phrases = [
         "Overview and Why This Work",
+        "Literature Review and Existing Results",
+        "Positioning Against Existing Results",
         "Research Question and Contribution",
         "Research Gap",
-        "Sellable Thesis",
+        "Our Contribution and Claim Boundary",
         "**Core question.**",
         "**Timing contamination.**",
         "**Main contribution.**",
@@ -454,6 +425,8 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Cross-fitting appears separately",
         "Double / Debiased Machine Learning (DML)",
         "not alternative names for fraud",
+        "Materials and Methods",
+        "Data and Market/Institutional Setting",
         "Reproduction Inputs",
         "Source-to-table mapping",
         "Data Engineering and Preprocessing Overview",
@@ -463,7 +436,9 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Leakage exclusions",
         "Fold-local transformations",
         "Public peer mapping",
+        "Methods Including Models",
         "Model Families",
+        "Performance Metrics and Selection Criteria",
         "Metric Selection Criteria",
         "Public filing-origin cascade",
         "Bridge and interpretation layer",
@@ -493,7 +468,7 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "SEC Form 8-K",
         "operational command surface",
         "Expected Evidence Pattern",
-        "Current Result Snapshot",
+        "Connection to Results Snapshot",
         "Artifact Map",
         "Reproducibility and Execution Contract",
         "just full mode=full dataset=raw",
@@ -506,7 +481,7 @@ def test_paper_plan_documents_required_research_spine() -> None:
         assert phrase in plan
     for experiment in range(1, 7):
         block = plan.split(f"### Experiment {experiment}:", maxsplit=1)[1].split(
-            "### Experiment " if experiment < 6 else "## Expected and Current Results",
+            "### Experiment " if experiment < 6 else "### Expected Evidence Pattern",
             maxsplit=1,
         )[0]
         for anchor in ["**Purpose.**", "**Design.**", "**Outputs.**", "**Interpretation.**"]:
@@ -520,7 +495,7 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
     plan = _read("docs/paper_plan.md")
     required_phrases = [
         "Measurement Design",
-        "Methods and Models",
+        "Methods Including Models",
         "Evidence Gates",
         "Benchmark timing",
         "Public cascade",
@@ -549,7 +524,7 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
         "validation_tier = wrds_validated",
         "raw_identifier_blocker",
         "Evidence Gates",
-        "default pipeline no longer uses farr/external support files",
+        "External gvkey-CIK bridge rows are no longer used",
         "just check",
         "just full mode=full dataset=raw",
         "--peer-comparison-mode full",
@@ -565,8 +540,8 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
 def test_paper_plan_documents_prior_literature_and_intended_contribution() -> None:
     plan = _read("docs/paper_plan.md")
     required_phrases = [
-        "Literature and Research Gap",
-        "Literature Streams and Existing Results",
+        "Literature Review and Existing Results",
+        "Positioning Against Existing Results",
         "Dechow, Ge, Larson, and Sloan",
         "Perols",
         "Bao, Ke, Li, Yu, and Zhang",
@@ -603,7 +578,7 @@ def test_faq_explains_cross_audience_design_and_current_boundaries() -> None:
         "not interchangeable with fraud",
         "detected-misstatement benchmark",
         "raw `CIK-GVKEY Link Table.csv`",
-        "Do not supplement missing raw `gvkey x year` rows with farr/external",
+        "Do not supplement missing raw `gvkey x year` rows with external gvkey-CIK rows",
         "Disjoint raw/external conflict `gvkey x year` cells",
         "Raw benchmark rows affected by those conflicts",
         "372",
@@ -682,7 +657,7 @@ def test_development_audit_prompt_targets_code_against_paper_plan() -> None:
         "task-status tables",
         "manifests",
         "blockers",
-        "AAER absent from the paper-facing labels",
+        "retired enforcement-tail outputs absent from paper-facing labels",
         "model-selection optimism",
         "xbrl_coverage_* by fiscal year",
         "uv.lock",
@@ -773,8 +748,13 @@ def test_manuscript_audit_prompt_targets_manuscript_quality_and_terms() -> None:
         "full audit",
         "likely rejection path",
         "fold dispersion",
+        "annual fold dispersion",
         "uncertainty caveat",
         "limited screening interpretation",
+        "Cross-Discipline Terminology Bridge",
+        "AI-flavored prose patterns",
+        "Audit Workflow",
+        "scale_pos_weight",
         "Do not invent empirical findings",
     ]
     for phrase in required_phrases:
@@ -797,7 +777,7 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
         "bridge-gate assessment",
         "WRDS-validated construct-overlap",
         "feature fusion, not XBRL dominance",
-        "AAER dropped from the paper-facing design",
+        "retired enforcement-tail outputs as outside the current paper-facing",
         "headline public tasks are comment_thread, amendment, and 8k_402",
         "feature fusion helps, metadata remains strong",
         "rare but rankable",
@@ -807,6 +787,10 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
         "event-time concentration",
         "single-fold 2020 8k_402",
         "strong strategic-silence claim",
+        "valid folds >= 5",
+        "fewer than 10 positives",
+        "population confidence interval",
+        "out-of-time evaluation dispersion",
         "public review-and-correction risk",
         "comment_thread_365",
         "amendment_365",
@@ -815,3 +799,99 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
     ]
     for phrase in required_phrases:
         assert phrase in prompt
+
+
+def test_manuscript_audit_prompt_has_structural_hardening_rules() -> None:
+    prompt = _read("docs/manuscript_audit_prompt.md")
+
+    assert prompt.count("## Mode Invocation Rule") == 1
+    assert (
+        prompt.index("Bridge status must be read from the current")
+        < prompt.index("## Review Mode: BAR Readiness Audit")
+    )
+    stale_bridge_sentence = "The current paper-facing bridge" + " must be"
+    assert stale_bridge_sentence not in prompt
+
+    p0_p1 = prompt.split("## P0 and P1 Checks", maxsplit=1)[1].split(
+        "## Elegance and Readability", maxsplit=1
+    )[0]
+    p0_p1_flat = _squash(p0_p1)
+    required_p0_p1 = [
+        "primary-source citations",
+        "point-in-time predictor discipline",
+        "table and figure captions",
+        "model-selection optimism check",
+        "economically informative missingness",
+        "parser/source unavailability",
+        'column named "Rows"',
+        "response memo or design memo",
+    ]
+    for phrase in required_p0_p1:
+        assert phrase in p0_p1_flat
+
+    claim_mode = prompt.split("## Review Mode: Claim-To-Evidence Audit", maxsplit=1)[
+        1
+    ].split("## Review Mode: Section-Level Polish", maxsplit=1)[0]
+    claim_mode_flat = _squash(claim_mode)
+    for phrase in [
+        "Audit every empirical claim and classify it with the Claim-strength ladder.",
+        "bridge status read from the current manifest",
+        "available at or before the filing-origin date",
+        "model imputation",
+    ]:
+        assert phrase in claim_mode_flat
+
+    polish_mode = prompt.split("## Review Mode: Section-Level Polish", maxsplit=1)[
+        1
+    ].split("## Review Mode: Abstract And Introduction", maxsplit=1)[0]
+    polish_mode_flat = _squash(polish_mode)
+    for phrase in [
+        "performance captions state evaluation unit",
+        "base-rate context",
+        "bounded measurement interpretation",
+        "practical screening economics",
+        "max-PR-AUC language",
+    ]:
+        assert phrase in polish_mode_flat
+
+
+def test_manuscript_audit_prompt_primary_source_and_ai_policy_guardrails() -> None:
+    prompt = _read("docs/manuscript_audit_prompt.md")
+    mechanics = prompt.split("## BAR Mechanics and Citation Discipline", maxsplit=1)[1].split(
+        "## Table And Figure Architecture", maxsplit=1
+    )[0]
+    mechanics_flat = _squash(mechanics)
+
+    required_phrases = [
+        "Verify mechanics against primary sources",
+        "SEC/PCAOB/BAR/Elsevier rules",
+        "double-anonymized",
+        "no more than 6 keywords",
+        "current Elsevier length rule",
+        "data availability",
+        "CRediT",
+        "Author-side AI tools",
+        "human oversight, disclosure, and author responsibility",
+        "Reviewers and editors should not upload submitted manuscripts",
+        "author-side QC",
+    ]
+    for phrase in required_phrases:
+        assert phrase in mechanics_flat
+
+
+def test_manuscript_package_generator_uses_dispersion_and_bootstrap_language() -> None:
+    script = _read("scripts/build_manuscript_package.py")
+    assert "PR_AUC_Dispersion" in script
+    assert "Lift_Bootstrap_Interval" in script
+    assert "row-level percentile bootstrap intervals" in script
+    assert "descriptive fold-dispersion intervals" in script
+    assert "PR_AUC_95CI" not in script
+    assert "Lift_95CI" not in script
+    benchmark_peer_block = script.split('"table_06_detected_misstatement_peer_metrics"')[1].split(
+        '"table_07_public_peer_metrics"'
+    )[0]
+    public_peer_block = script.split('"table_07_public_peer_metrics"')[1].split(
+        '"table_08_bridge_coverage"'
+    )[0]
+    assert '"Mean_Brier"' not in benchmark_peer_block
+    assert '"Mean_Brier"' not in public_peer_block

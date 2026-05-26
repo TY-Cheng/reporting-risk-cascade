@@ -7,6 +7,10 @@ import numpy as np
 import pandas as pd
 
 from src.construct_overlap import (
+    BOOTSTRAP_INTERVAL_METHOD,
+    BOOTSTRAP_INTERVAL_TOP_ROWS,
+    BOOTSTRAP_REPS,
+    BOOTSTRAP_SEED,
     _bridge_evidence_from_crosswalk,
     _ranking_metrics,
     run_construct_overlap,
@@ -241,6 +245,13 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
     assert construct_component["out_dir"] == str(out)
     assert construct_component["manifest_json"] == str(out / "construct_overlap_manifest.json")
     assert construct_component["summary_md"] == str(out / "construct_overlap_summary.md")
+    construct_manifest = json.loads(
+        (out / "construct_overlap_manifest.json").read_text(encoding="utf-8")
+    )
+    assert construct_manifest["interval_method"] == BOOTSTRAP_INTERVAL_METHOD
+    assert construct_manifest["interval_seed"] == BOOTSTRAP_SEED
+    assert construct_manifest["interval_reps"] == BOOTSTRAP_REPS
+    assert construct_manifest["interval_top_rows_per_artifact"] == BOOTSTRAP_INTERVAL_TOP_ROWS
     expected = [
         "construct_overlap_manifest.json",
         "construct_overlap_summary.md",
@@ -378,31 +389,24 @@ def test_raw_compustat_link_provenance_is_wrds_validated(
     assert evidence["validation_tier"] == "wrds_validated"
 
 
-def test_mixed_raw_farr_crosswalk_reports_candidate_mixed_source(tmp_path: Path) -> None:
-    crosswalk = tmp_path / "mixed_crosswalk.csv"
+def test_external_crosswalk_without_wrds_provenance_reports_candidate_source(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "external_crosswalk.csv"
     pd.DataFrame(
         [
-            {
-                "gvkey": "1000",
-                "data_year": 2018,
-                "issuer_cik": "0000320000",
-                "source": "wrds_sec_analytics_cik_gvkey:compustat_company",
-                "match_method": "wrds_sec_analytics_cik_gvkey_intersection",
-            },
             {
                 "gvkey": "1001",
                 "data_year": 2018,
                 "issuer_cik": "0000320001",
-                "source": "farr_gvkey_ciks",
-                "match_method": "farr_gvkey_ciks_date_range",
+                "source": "external_cik_gvkey",
+                "match_method": "external_date_range",
             },
         ]
     ).to_csv(crosswalk, index=False)
 
     evidence = _bridge_evidence_from_crosswalk(crosswalk)
 
-    assert evidence["bridge_source"] == "mixed_wrds_farr_crosswalk"
-    assert evidence["validation_tier"] == "candidate_mixed"
+    assert evidence["bridge_source"] == "external_cik_gvkey"
+    assert evidence["validation_tier"] == "candidate_external"
 
 
 def test_construct_overlap_missing_opacity_writes_blocker_without_failing(tmp_path: Path) -> None:
@@ -451,6 +455,9 @@ def test_ranking_metric_sparse_and_bootstrap_thresholds() -> None:
     large_y = np.array([1] * 30 + [0] * 30)
     large_score = np.linspace(1, 0, len(large_y))
     large = _ranking_metrics(large_y, large_score)
+    repeat = _ranking_metrics(large_y, large_score)
     assert large["status"] == "fit"
     assert np.isfinite(large["top_decile_lift_ci_low"])
     assert np.isfinite(large["top_decile_lift_ci_high"])
+    assert large["top_decile_lift_ci_low"] == repeat["top_decile_lift_ci_low"]
+    assert large["top_decile_lift_ci_high"] == repeat["top_decile_lift_ci_high"]
