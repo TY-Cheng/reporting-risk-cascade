@@ -76,13 +76,28 @@ DML_INTERVAL_NOTE = (
 )
 PUBLIC_TASK_NOTE = (
     ANNUAL_INTERVAL_NOTE
+    + " The evaluation unit is a public-cascade task summarized over annual "
+    "out-of-time folds at the issuer-CIK fiscal-year origin grain. "
     + " Brier Skill Score is measured relative to the corresponding prevalence-only "
     "Brier baseline. ECE is a calibration diagnostic. Weak calibration should be "
     "read as evidence against using the scores as calibrated decision rules, not "
     "against the paper's ranking estimand."
 )
+FEATURE_FAMILY_NOTE = (
+    ANNUAL_INTERVAL_NOTE
+    + " Entries are feature-family summaries over public-cascade task-window "
+    "evaluations, not issuer-year sample sizes. Task-specific base-rate context "
+    "is reported in the task tables. Best-window entries are descriptive "
+    "configuration summaries, not headline model-selection claims."
+)
+BENCHMARK_TIMING_NOTE = (
+    ANNUAL_INTERVAL_NOTE
+    + " Entries are detected-misstatement label-mode timing diagnostics. Best-window "
+    "entries are descriptive label-observability sensitivity checks, not "
+    "headline model-selection claims."
+)
 FOLD_SUPPORT_NOTE = (
-    "Rows report annual out-of-time test support collapsed across configurations "
+    "Entries report annual out-of-time test support collapsed across configurations "
     "because test rows and positive counts are task-year properties. Sparse folds "
     f"are those with fewer than {SPARSE_POSITIVE_THRESHOLD} positives; such folds "
     "are excluded from formal fold-dispersion intervals."
@@ -94,19 +109,19 @@ TASK_FEATURE_NOTE = (
     "summary and should be read as information-set evidence, not causal decomposition."
 )
 BRIDGE_OVERLAP_NOTE = (
-    "Rows are bridge-gated label-overlap diagnostics. They report absolute public "
-    "and benchmark rates and lift for each public label by bridge tier. These "
+    "Bridge_Rows are bridge-gated label-overlap diagnostics. The table reports "
+    "absolute public and benchmark rates and lift for each public label by bridge tier. These "
     "descriptive rates broaden construct-validation evidence beyond the sparse "
     "Item 4.02 severe-tail ranking rows; they do not imply label equivalence."
 )
 BRIDGE_BOUNDARY_NOTE = (
-    "Rows summarize the bridge-gated overlap sample. Construct-overlap claims are "
+    "The Benchmark_Rows column reports the bridge-gated overlap sample. Construct-overlap claims are "
     "bounded to mapped rows, with high-confidence rows used for manuscript-grade "
     "alignment evidence. Dropped and unmatched rows define the generalizability "
     "boundary of the bridge exercise."
 )
 SELECTION_PROFILE_NOTE = (
-    "Rows are descriptive strata from the existing public issuer-origin panel. "
+    "Issuer_Years are descriptive strata from the existing public issuer-origin panel. "
     "They show how public-label rates vary with filing visibility, history, and "
     "issuer profile variables. The table is selection-aware evidence, not a causal "
     "adjustment model or proof that SEC scrutiny selection has been solved."
@@ -424,7 +439,7 @@ def _public_lake_scale(report: dict[str, Any]) -> pd.DataFrame:
             {
                 "Layer": layer,
                 "Artifact": artifact,
-                "Rows": _fmt(row_counts.get(artifact)),
+                "Artifact_Rows": _fmt(row_counts.get(artifact)),
                 "Description": description,
             }
             for layer, artifact, description in rows
@@ -720,7 +735,7 @@ def _bridge_overlap_matrix(study_dir: Path) -> pd.DataFrame:
         columns={
             "public_label": "Public_Label",
             "bridge_tier": "Bridge_Tier",
-            "n": "Rows",
+            "n": "Bridge_Rows",
             "benchmark_positive_rows": "Benchmark_Positives",
             "public_positive_rows": "Public_Positives",
             "both_positive_rows": "Both_Positive",
@@ -733,7 +748,7 @@ def _bridge_overlap_matrix(study_dir: Path) -> pd.DataFrame:
         }
     )
     out["Public_Label"] = out["Public_Label"].map(labels)
-    for col in ["Rows", "Benchmark_Positives", "Public_Positives", "Both_Positive"]:
+    for col in ["Bridge_Rows", "Benchmark_Positives", "Public_Positives", "Both_Positive"]:
         out[col] = out[col].map(_fmt)
     for col in [
         "Benchmark_Rate",
@@ -757,7 +772,7 @@ def _bridge_sample_boundaries(study_dir: Path) -> pd.DataFrame:
             rows.append(
                 {
                     "Boundary": row.get("bridge_tier", ""),
-                    "Rows": row.get("rows", ""),
+                    "Benchmark_Rows": row.get("rows", ""),
                     "Benchmark_Positives": row.get("benchmark_positives", ""),
                     "Positive_Rate": "",
                     "Years": "",
@@ -770,7 +785,9 @@ def _bridge_sample_boundaries(study_dir: Path) -> pd.DataFrame:
             rows.append(
                 {
                     "Boundary": "unmatched_raw",
-                    "Rows": pd.to_numeric(unmatched["unmatched_rows"], errors="coerce").sum(),
+                    "Benchmark_Rows": pd.to_numeric(
+                        unmatched["unmatched_rows"], errors="coerce"
+                    ).sum(),
                     "Benchmark_Positives": "",
                     "Positive_Rate": pd.to_numeric(
                         unmatched["unmatched_positive_rate"], errors="coerce"
@@ -782,7 +799,7 @@ def _bridge_sample_boundaries(study_dir: Path) -> pd.DataFrame:
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-    for col in ["Rows", "Benchmark_Positives"]:
+    for col in ["Benchmark_Rows", "Benchmark_Positives"]:
         out[col] = out[col].map(_fmt)
     out["Positive_Rate"] = out["Positive_Rate"].map(_fmt)
     return out
@@ -843,7 +860,7 @@ def _selection_profile_table(panel_path: Path | None = None) -> pd.DataFrame:
             {
                 "Stratum": stratum,
                 "Group": group,
-                "Rows": len(subset),
+                "Issuer_Years": len(subset),
                 "Comment_Rate": subset["label_comment_thread_365"].mean(),
                 "Amendment_Rate": subset["label_amendment_365"].mean(),
                 "Item_4_02_Rate": subset["label_8k_402_365"].mean(),
@@ -879,7 +896,7 @@ def _selection_profile_table(panel_path: Path | None = None) -> pd.DataFrame:
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-    for col in ["Rows"]:
+    for col in ["Issuer_Years"]:
         out[col] = out[col].map(_fmt)
     for col in ["Comment_Rate", "Amendment_Rate", "Item_4_02_Rate"]:
         out[col] = out[col].map(_fmt)
@@ -1141,7 +1158,7 @@ def _result_narrative(
         "## Claim Boundary",
         "",
         "The evidence supports a measurement-and-ranking paper on public review-and-"
-        "correction risk. It does not identify unobserved true fraud occurrence, causal "
+        "correction risk. It does not identify hidden misconduct, causal "
         "effects, or same-estimand superiority over prior fraud-prediction studies.",
     ]
 
@@ -1260,7 +1277,7 @@ def main() -> None:
             stem="table_04_feature_family_metrics",
             caption="Public cascade feature-family metrics",
             label="tab:feature-family-metrics",
-            note=ANNUAL_INTERVAL_NOTE,
+            note=FEATURE_FAMILY_NOTE,
             display_df=_table_view(
                 feature_family,
                 [
@@ -1283,7 +1300,7 @@ def main() -> None:
             stem="table_05_benchmark_timing_metrics",
             caption="Detected-misstatement benchmark timing diagnostics",
             label="tab:benchmark-timing",
-            note=ANNUAL_INTERVAL_NOTE,
+            note=BENCHMARK_TIMING_NOTE,
             display_df=_table_view(
                 benchmark_timing,
                 [

@@ -805,24 +805,36 @@ def test_manuscript_audit_prompt_has_structural_hardening_rules() -> None:
     prompt = _read("docs/manuscript_audit_prompt.md")
 
     assert prompt.count("## Mode Invocation Rule") == 1
+    assert prompt.count("run exactly one Review Mode per invocation") == 1
     assert (
         prompt.index("Bridge status must be read from the current")
         < prompt.index("## Review Mode: BAR Readiness Audit")
     )
     stale_bridge_sentence = "The current paper-facing bridge" + " must be"
     assert stale_bridge_sentence not in prompt
+    stale_wrds_sentence = "current paper-facing bridge " + "must be `wrds_validated`"
+    assert stale_wrds_sentence not in prompt
 
     p0_p1 = prompt.split("## P0 and P1 Checks", maxsplit=1)[1].split(
         "## Elegance and Readability", maxsplit=1
     )[0]
     p0_p1_flat = _squash(p0_p1)
     required_p0_p1 = [
+        "Bridge freshness check.",
+        "Primary-source citation check.",
+        "Point-in-time predictor check.",
+        "Table/figure interpretation check.",
+        "Model-selection optimism check.",
+        "Missingness and opacity check.",
+        "Article-prose contamination check.",
+        "Table-unit clarity check.",
         "primary-source citations",
         "point-in-time predictor discipline",
         "table and figure captions",
-        "model-selection optimism check",
         "economically informative missingness",
         "parser/source unavailability",
+        "model imputation",
+        "weaken strategic-silence language",
         'column named "Rows"',
         "response memo or design memo",
     ]

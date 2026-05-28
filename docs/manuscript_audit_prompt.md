@@ -292,63 +292,72 @@ evidence must remain rare-tail support rather than the whole validation story.
 
 P0 checks:
 
-- Verify the current bridge tier from the study manifest and construct-overlap
-  artifacts before allowing integrated construct-overlap claims. If the tier is
-  missing, stale, candidate-only, or inconsistent across artifacts, downgrade
-  overlap language to candidate evidence or diagnostic only. If the current tier
-  is `wrds_validated`, WRDS-validated construct-overlap language may be reviewed
-  as reportable subject to the stated caveats.
-- Confirm that the manuscript distinguishes public comment-letter scrutiny from
-  the SEC's endogenous scrutiny and release process. A model that ranks
-  `comment_thread_365` may rank both issuer reporting-risk signals and the
-  selection process that makes comment letters public.
-- Require primary-source citations for SEC, PCAOB, BAR, and Elsevier policy
-  claims. Public-release timing, double-anonymization mechanics, AI disclosure,
-  Form AP, inspection data, Item 4.02, and AAER coverage claims should be
-  supported by SEC, PCAOB, BAR, or Elsevier primary sources; otherwise flag P1.
-- Check whether any headline claim relies on sparse `8k_402_365` evidence. If
-  so, require rare-but-rankable and severe-tail caveats.
-- Confirm that retired enforcement-tail outputs are absent from the current
-  paper-facing claims.
-- Check for article prose that still sounds like a response memo or design memo,
-  especially phrases where "the manuscript" is the subject.
+- **Bridge freshness check.** Verify the current bridge tier from the study
+  manifest and construct-overlap artifacts before allowing integrated
+  construct-overlap claims. If the tier is missing, stale, candidate-only, or
+  inconsistent across artifacts, downgrade overlap language to candidate
+  evidence or diagnostic only. If the current tier is `wrds_validated`,
+  WRDS-validated construct-overlap language may be reviewed as reportable
+  subject to the stated caveats.
+- **Comment-letter selection check.** Confirm that the manuscript distinguishes
+  public comment-letter scrutiny from the SEC's endogenous scrutiny and release
+  process. A model that ranks `comment_thread_365` may rank both issuer
+  reporting-risk signals and the selection process that makes comment letters
+  public.
+- **Primary-source citation check.** Require primary-source citations for SEC,
+  PCAOB, BAR, and Elsevier policy claims. Public-release timing,
+  double-anonymization mechanics, AI disclosure, Form AP, inspection data, Item
+  4.02, and AAER coverage claims should be supported by SEC, PCAOB, BAR, or
+  Elsevier primary sources; otherwise flag P1.
+- **Sparse Item 4.02 check.** Check whether any headline claim relies on sparse
+  `8k_402_365` evidence. If so, require rare-but-rankable and severe-tail
+  caveats.
+- **Retired enforcement-tail check.** Confirm that deprecated AAER or
+  enforcement-tail artifacts are absent from the current paper-facing claims
+  unless explicitly reactivated by the Paper Plan.
+- **Article-prose contamination check.** Check for article prose that still
+  sounds like a response memo or design memo, especially phrases where "the
+  manuscript" is the subject.
 
 P1 checks:
 
-- Explain why the paper is not merely another comment-letter prediction paper.
-  Predicting comment threads is not novel by itself; the novelty is the
-  filing-origin estimand, typed public cascade, public-data architecture, and
-  bridge-gated validation.
+- **Comment-letter literature differentiation check.** Explain why the paper is
+  not merely another comment-letter prediction paper. Predicting comment
+  threads is not novel by itself; the novelty is the filing-origin estimand,
+  typed public cascade, public-data architecture, and bridge-gated validation.
 - Keep the accounting problem before the method in the Abstract, Introduction,
   and Discussion.
 - Ensure predictor text and outcome text are separated. Outcome-side amendment,
   Item 4.02, or comment-letter response text filed after `origin_date` must not
   be used as a predictor for the event it defines.
-- Verify point-in-time predictor discipline. Financial and public predictors
-  should be as-first-reported or available at or before the filing-origin date;
-  retroactively restated or post-origin fields require explicit exclusion or a
-  look-ahead-bias caveat.
+- **Point-in-time predictor check.** Verify point-in-time predictor discipline.
+  Financial and public predictors should be as-first-reported or available at or
+  before the filing-origin date; retroactively restated or post-origin fields
+  require explicit exclusion or a look-ahead-bias caveat.
 - Keep feature-family results as feature fusion, not XBRL dominance. The bounded
   phrase is: feature fusion helps, metadata remains strong.
 - Apply a common-sample / coverage caveat to XBRL, auditor, oversight, and
   other narrower feature-family comparisons. If the comparison is not on a
   common evaluation sample, the text must state that differences may reflect
   both source coverage and signal content.
-- Distinguish missingness cases before interpreting opacity: economically
-  informative missingness, public-source coverage limits, parser/source
-  unavailability, and model imputation are not the same. If public-opacity DML
-  p-values are null, avoid a strong strategic-silence claim.
-- Require table and figure captions for performance evidence to state the
-  evaluation unit, task, base-rate context, and bounded measurement
-  interpretation. Captions should translate the number into a measurement claim,
-  not a model-performance slogan.
-- Apply a model-selection optimism check. If the manuscript highlights the best
+- **Missingness and opacity check.** Distinguish missingness cases before
+  interpreting opacity: economically informative missingness, public-source
+  coverage limits, parser/source unavailability, and model imputation are not
+  the same. Do not interpret a missingness pattern as strategic silence unless
+  the artifact supports that claim. If public-opacity DML p-values are null,
+  weaken strategic-silence language.
+- **Table/figure interpretation check.** Require table and figure captions for
+  performance evidence to state the evaluation unit, task, base-rate context,
+  and bounded measurement interpretation. Captions should translate the number
+  into a measurement claim, not a model-performance slogan.
+- **Model-selection optimism check.** If the manuscript highlights the best
   model, best window, best feature family, or max PR-AUC, require descriptive
   language unless there is a pre-specified selection rule or validation
   correction. A single best configuration should not become the headline claim.
-- Audit every column named "Rows". If it counts metric rows, fold-task rows,
-  task-window-feature rows, or model-family rows rather than issuer-years or
-  firm-years, rename it or require a table note explaining the evaluation unit.
+- **Table-unit clarity check.** Audit every column named "Rows". If it counts
+  metric rows, fold-task rows, task-window-feature rows, or model-family rows
+  rather than issuer-years or firm-years, rename it or require a table note
+  explaining the evaluation unit.
 - Avoid claims about unpriced market risk unless market variables and current
   artifacts directly support the claim.
 - Do not let the single-fold 2020 8k_402 result dominate the evidence narrative.
