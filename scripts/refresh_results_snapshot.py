@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +61,119 @@ PARTIAL_REQUIRED_ARTIFACTS = [
     "public_cascade/public_cascade_metrics.csv",
     "public_cascade/public_cascade_task_status.csv",
 ]
+
+
+FIGURE_EXPLANATIONS = {
+    "figure_01_public_task_pr_auc": {
+        "title": "Public task PR-AUC",
+        "claim": "Public filing-origin features rank later public review-and-correction states above task prevalence.",
+        "evidence": "The three public-label tasks are shown with annual out-of-time PR-AUC dispersion, so the reader can compare ranking performance against label base rates.",
+        "boundary": "This is ranking evidence, not calibrated deployment evidence; Brier Skill Score and ECE remain the calibration gate.",
+    },
+    "figure_02_feature_family_pr_auc": {
+        "title": "Feature-family PR-AUC",
+        "claim": "Feature fusion improves the public-cascade signal, while metadata remains a strong baseline.",
+        "evidence": "The figure compares all-feature, metadata, XBRL, auditor, and oversight families under the same public-label evaluation frame.",
+        "boundary": "Interpret as information-set evidence rather than a structural source-importance or mechanism claim.",
+    },
+    "figure_03_detected_misstatement_peer_pr_auc": {
+        "title": "Detected-misstatement peer-family PR-AUC",
+        "claim": "Detected-misstatement peer-compatible model families provide benchmark-side metric-language context.",
+        "evidence": "The figure reports Dechow-, Perols-, Bao-, and Bertomeu-style families on the detected-misstatement benchmark task.",
+        "boundary": "These rows are transferred model-family diagnostics, not original-paper numeric replications.",
+    },
+    "figure_04_public_peer_pr_auc": {
+        "title": "Public-label peer-family PR-AUC",
+        "claim": "Familiar accounting ML model-family vocabularies can be evaluated on public review-and-correction labels.",
+        "evidence": "The figure moves the peer-compatible families to the public-label task and keeps the metric vocabulary comparable.",
+        "boundary": "Do not compare these values as same-estimand superiority over detected-misstatement studies.",
+    },
+    "figure_05_construct_overlap_lift": {
+        "title": "Construct-overlap lift",
+        "claim": "The WRDS-validated bridge supports related-but-non-identical overlap between public labels and detected-misstatement labels.",
+        "evidence": "The figure shows lift for bridge-gated reciprocal severe-tail alignment rows, alongside precision/FDR context in the tables.",
+        "boundary": "Item 4.02 lift is a severe-tail diagnostic, not the sole construct-validity basis or event-identification proof.",
+    },
+}
+
+
+TABLE_EXPLANATIONS = {
+    "table_01_component_status": {
+        "claim": "All paper-facing study components are available for the current artifact-backed run.",
+        "evidence": "Component statuses are read from the peer-enabled study manifest.",
+        "boundary": "Component completion is a reproducibility status, not by itself a substantive empirical claim.",
+    },
+    "table_02_public_lake_scale": {
+        "claim": "The public SEC/PCAOB lake supports the filing-origin measurement surface at scale.",
+        "evidence": "Silver and gold row counts show filing, issuer, XBRL, notes, comment-thread, correction, and annual origin coverage.",
+        "boundary": "Scale and coverage establish feasibility, not causal interpretation or complete regulatory review coverage.",
+    },
+    "table_03_public_task_metrics": {
+        "claim": "The public cascade produces above-prevalence ranking evidence for the three public labels.",
+        "evidence": "Mean PR-AUC, ROC-AUC, fold support, calibration diagnostics, and prevalence are reported by task.",
+        "boundary": "Weak Brier Skill Score and ECE keep the claim to ranking/prioritization rather than calibrated probability rules.",
+    },
+    "table_04_feature_family_metrics": {
+        "claim": "All-feature models and metadata summarize the main feature-family ranking pattern.",
+        "evidence": "Feature counts and PR-AUC dispersion are shown by public feature family.",
+        "boundary": "Feature-family summaries are aggregation evidence and should not be read as causal source dominance.",
+    },
+    "table_05_benchmark_timing_metrics": {
+        "claim": "Detected-misstatement benchmark performance is sensitive to label observability and timing assumptions.",
+        "evidence": "Naive, proxy-imputed, and proxy-drop timing modes are compared under annual out-of-time folds.",
+        "boundary": "This is benchmark-validity evidence, not a hidden-misconduct detector result.",
+    },
+    "table_06_detected_misstatement_peer_metrics": {
+        "claim": "Peer-compatible model families provide benchmark-side metric-language alignment.",
+        "evidence": "Detected-misstatement peer-family PR-AUC and ROC-AUC are reported across valid folds.",
+        "boundary": "These are model-family transfer checks, not exact replications of prior samples or private data settings.",
+    },
+    "table_07_public_peer_metrics": {
+        "claim": "Peer-compatible families also rank public-label outcomes under the public-cascade estimand.",
+        "evidence": "Public-label peer-family PR-AUC and ROC-AUC are reported under the same public-label task design.",
+        "boundary": "These values are within-public-label diagnostics, not cross-estimand superiority claims.",
+    },
+    "table_08_bridge_coverage": {
+        "claim": "The bridge covers most benchmark rows and firms before overlap claims are made.",
+        "evidence": "Row, firm, and positive-row coverage are reported for the raw-only WRDS gvkey-CIK-year bridge.",
+        "boundary": "Construct-overlap claims remain bounded to matched bridge rows.",
+    },
+    "table_09_construct_alignment": {
+        "claim": "Public scores and detected-misstatement scores show reciprocal severe-tail enrichment under the bridge gate.",
+        "evidence": "Top-decile lift, precision, FDR, and bootstrap intervals are shown for the strongest reciprocal rows.",
+        "boundary": "Lift above one supports enrichment, while low absolute precision and high FDR rule out event-identification claims.",
+    },
+    "table_12_public_opacity_dml": {
+        "claim": "Opacity/missingness has at most diagnostic adjusted-association evidence in the current public-label setting.",
+        "evidence": "DML-style coefficients, robust standard errors, intervals, and p-values are reported by public label.",
+        "boundary": "These are adjusted associations and do not identify causal selection or strategic silence.",
+    },
+    "table_13_public_fold_support": {
+        "claim": "Annual public-label test folds have sufficient positive support for reported dispersion summaries.",
+        "evidence": "Task-year rows, positives, prevalence, and sparse-fold flags are reported.",
+        "boundary": "Fold support makes dispersion auditable; it does not remove class-imbalance or calibration concerns.",
+    },
+    "table_14_task_feature_family_metrics": {
+        "claim": "Feature-family rankings vary by label, which supports a qualified feature-fusion claim.",
+        "evidence": "Task-by-feature-family PR-AUC, ROC-AUC, calibration diagnostics, and fold support are reported.",
+        "boundary": "Use this table for label-specific prose rather than a single global feature-family ranking.",
+    },
+    "table_15_bridge_overlap_matrix": {
+        "claim": "Public labels and detected-misstatement labels are related but not identical across bridge tiers.",
+        "evidence": "The matrix reports benchmark/public rates, co-occurrence, and lifts by label and bridge tier.",
+        "boundary": "The typed pattern is construct-validity evidence; it does not establish label equivalence.",
+    },
+    "table_16_bridge_sample_boundaries": {
+        "claim": "The bridge exercise has explicit covered, ambiguous, dropped, and unmatched sample boundaries.",
+        "evidence": "Benchmark rows and positives are shown by bridge-overlap boundary.",
+        "boundary": "Generalization beyond high-confidence mapped rows should be qualified.",
+    },
+    "table_17_selection_profile": {
+        "claim": "Public labels partly reflect selected public scrutiny and issuer visibility states.",
+        "evidence": "Public-label rates are profiled across filing size, XBRL assets, filing history, prior comments, form type, and FPI proxy strata.",
+        "boundary": "This descriptive profile is not a causal SEC-selection correction.",
+    },
+}
 
 
 def _resolve_repo_path(path: str | Path) -> Path:
@@ -746,6 +860,111 @@ def _table_figure_rows(package_dir: Path) -> list[list[str]]:
     return rows
 
 
+def _copy_inline_figures(package_dir: Path) -> dict[str, str]:
+    """Copy generated PNG figures into docs assets and return doc-relative paths."""
+    src_dir = package_dir / "figures"
+    asset_dir = DOCS_DIR / "assets" / "results_snapshot"
+    asset_dir.mkdir(parents=True, exist_ok=True)
+
+    copied: dict[str, str] = {}
+    for src in sorted(src_dir.glob("figure_*.png")):
+        target = asset_dir / src.name
+        shutil.copy2(src, target)
+        copied[src.stem] = f"assets/results_snapshot/{target.name}"
+    return copied
+
+
+def _ars_explanation_block(explanation: dict[str, str]) -> list[str]:
+    return [
+        f"- **ARS claim.** {explanation['claim']}",
+        f"- **Evidence.** {explanation['evidence']}",
+        f"- **Boundary.** {explanation['boundary']}",
+    ]
+
+
+def _inline_figure_gallery(package_dir: Path) -> list[str]:
+    figure_paths = _copy_inline_figures(package_dir)
+    manifest = _read_json(package_dir / "manifest.json")
+    figure_keys = sorted((manifest.get("figures") or {}).keys()) or sorted(figure_paths)
+    lines = [
+        "### Inline Figure Gallery",
+        "",
+        "The figures below are rendered directly from the current manuscript package "
+        "PNG assets. The adjacent PDF files remain the LaTeX manuscript copies.",
+        "",
+    ]
+    for key in figure_keys:
+        explanation = FIGURE_EXPLANATIONS.get(
+            key,
+            {
+                "title": key.replace("_", " ").title(),
+                "claim": "This figure is part of the generated manuscript evidence package.",
+                "evidence": "The figure file is read from the current manuscript package.",
+                "boundary": "Interpretation should follow the surrounding results section and claim-strength ledger.",
+            },
+        )
+        image_path = figure_paths.get(key)
+        pdf_path = package_dir / "figures" / f"{key}.pdf"
+        png_path = package_dir / "figures" / f"{key}.png"
+        lines.extend(
+            [
+                f"#### {explanation['title']}",
+                "",
+                *(_ars_explanation_block(explanation)),
+                "",
+                f"- **Source PNG.** `{_rel(png_path)}`",
+                f"- **Manuscript PDF.** `{_rel(pdf_path)}`",
+                "",
+            ]
+        )
+        if image_path:
+            lines.extend([f"![{explanation['title']}]({image_path})", ""])
+        else:
+            lines.extend([f"_Missing PNG preview for `{key}`._", ""])
+    return lines
+
+
+def _inline_table_gallery(package_dir: Path) -> list[str]:
+    manifest = _read_json(package_dir / "manifest.json")
+    table_keys = sorted((manifest.get("tables") or {}).keys())
+    if not table_keys:
+        table_keys = [path.stem for path in sorted((package_dir / "tables").glob("table_*.md"))]
+
+    lines = [
+        "### Inline Table Gallery",
+        "",
+        "The tables below are expanded directly from the current manuscript package "
+        "Markdown table files. CSV and TeX copies remain listed in the provenance index.",
+        "",
+    ]
+    for key in table_keys:
+        md_path = package_dir / "tables" / f"{key}.md"
+        explanation = TABLE_EXPLANATIONS.get(
+            key,
+            {
+                "claim": "This table is part of the generated manuscript evidence package.",
+                "evidence": "The table is read from the current manuscript package Markdown output.",
+                "boundary": "Interpretation should follow the surrounding results section and claim-strength ledger.",
+            },
+        )
+        lines.extend(
+            [
+                f"#### `{key}`",
+                "",
+                *(_ars_explanation_block(explanation)),
+                "",
+                f"- **Source table.** `{_rel(md_path)}`",
+                "",
+            ]
+        )
+        table_md = _read_text(md_path).strip()
+        if table_md:
+            lines.extend([table_md, ""])
+        else:
+            lines.extend([f"_Missing Markdown table for `{key}`._", ""])
+    return lines
+
+
 def _bridge_coverage_rows(path: Path) -> list[list[str]]:
     coverage = _read_csv(path)
     if coverage.empty or not {"metric", "value"}.issubset(coverage.columns):
@@ -883,7 +1102,8 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "The structure below follows the planned experiment sequence: benchmark "
         "timing, concept drift, opacity, public-cascade construction, public-cascade "
         "prediction, and benchmark-public construct overlap. Tables and figures are "
-        "listed at the end so manuscript claims can be traced to concrete files.",
+        "rendered directly at the end and also indexed so manuscript claims can be "
+        "traced to concrete files.",
         "",
         "When using this page for manuscript prose, read it as an interpretation "
         "guide rather than a model leaderboard. Headline claims should describe "
@@ -1497,6 +1717,20 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "evidence against deployment-ready probability rules.",
         "",
         "## Tables, Figures, and Artifact Index",
+        "",
+        "This section is intentionally redundant with the prose results above: it "
+        "renders every current manuscript-package figure and table in one place, "
+        "then keeps the file index for provenance checks.",
+        "",
+        "### ARS Evidence Gallery",
+        "",
+        "Following the Academic Research Suite argument and visualization checks, "
+        "each display is paired with a claim, the evidence it contributes, and the "
+        "boundary that prevents over-interpretation.",
+        "",
+        *_inline_figure_gallery(manuscript_package),
+        "",
+        *_inline_table_gallery(manuscript_package),
         "",
         "### Manuscript Package Tables and Figures",
         "",

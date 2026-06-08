@@ -344,6 +344,9 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "Label Contingency and Lift",
         "Event-Time Concentration",
         "Tables, Figures, and Artifact Index",
+        "ARS Evidence Gallery",
+        "Inline Figure Gallery",
+        "Inline Table Gallery",
         "Manuscript Package Tables and Figures",
         "Full Study Artifact Inventory",
         "Selected Artifact Index",
@@ -359,6 +362,35 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         or "static documentation snapshot" in results
     )
     assert results.count("Key Readings") >= 1
+    assert results.count("![") >= 5
+    for figure in [
+        "figure_01_public_task_pr_auc.png",
+        "figure_02_feature_family_pr_auc.png",
+        "figure_03_detected_misstatement_peer_pr_auc.png",
+        "figure_04_public_peer_pr_auc.png",
+        "figure_05_construct_overlap_lift.png",
+    ]:
+        assert f"assets/results_snapshot/{figure}" in results
+    for table in [
+        "table_01_component_status",
+        "table_02_public_lake_scale",
+        "table_03_public_task_metrics",
+        "table_04_feature_family_metrics",
+        "table_05_benchmark_timing_metrics",
+        "table_06_detected_misstatement_peer_metrics",
+        "table_07_public_peer_metrics",
+        "table_08_bridge_coverage",
+        "table_09_construct_alignment",
+        "table_12_public_opacity_dml",
+        "table_13_public_fold_support",
+        "table_14_task_feature_family_metrics",
+        "table_15_bridge_overlap_matrix",
+        "table_16_bridge_sample_boundaries",
+        "table_17_selection_profile",
+    ]:
+        assert f"#### `{table}`" in results
+    assert "ARS claim" in results
+    assert "Boundary" in results
 
 
 def test_readme_home_explains_project_and_workflow() -> None:
