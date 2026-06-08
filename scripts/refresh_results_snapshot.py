@@ -109,6 +109,12 @@ def _fmt(value: Any, digits: int = 4) -> str:
     return str(value)
 
 
+def _fmt_year(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(int(value))
+
+
 def _code(value: Any) -> str:
     text = _fmt(value)
     return f"`{text}`" if text else ""
@@ -225,14 +231,20 @@ def _best_equal_task_config(metrics: pd.DataFrame) -> pd.Series | None:
 def _public_task_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list[list[str]]:
     if metrics.empty or "task" not in metrics.columns:
         return []
+    agg_spec = {
+        "metric_rows": ("pr_auc", "size"),
+        "n_folds": ("test_year", "nunique") if "test_year" in metrics.columns else ("pr_auc", "size"),
+        "mean_prevalence": ("positive_rate_test", "mean"),
+        "mean_pr_auc": ("pr_auc", "mean"),
+        "mean_roc_auc": ("roc_auc", "mean"),
+    }
+    if "brier_skill_score" in metrics.columns:
+        agg_spec["mean_brier_skill"] = ("brier_skill_score", "mean")
+    if "ece" in metrics.columns:
+        agg_spec["mean_ece"] = ("ece", "mean")
     grouped = (
         metrics.groupby("task", dropna=False)
-        .agg(
-            rows=("pr_auc", "size"),
-            mean_prevalence=("positive_rate_test", "mean"),
-            mean_pr_auc=("pr_auc", "mean"),
-            mean_roc_auc=("roc_auc", "mean"),
-        )
+        .agg(**agg_spec)
         .reset_index()
     )
     positives = summary.get("task_positive_counts", {})
@@ -246,7 +258,10 @@ def _public_task_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list[li
                 _fmt(row["mean_prevalence"]),
                 _fmt(row["mean_pr_auc"]),
                 _fmt(row["mean_roc_auc"]),
-                _fmt(row["rows"], digits=0),
+                _fmt(row.get("mean_brier_skill")),
+                _fmt(row.get("mean_ece")),
+                _fmt(row["n_folds"], digits=0),
+                _fmt(row["metric_rows"], digits=0),
             ]
         )
     return rows
@@ -275,6 +290,83 @@ def _public_feature_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list
                 _fmt(row["mean_pr_auc"]),
                 _fmt(row["mean_roc_auc"]),
                 _fmt(row["rows"], digits=0),
+            ]
+        )
+    return rows
+
+
+def _public_fold_support_rows(metrics: pd.DataFrame) -> list[list[str]]:
+    required = {"task", "test_year", "n_test", "positive_rate_test"}
+    if metrics.empty or not required.issubset(metrics.columns):
+        return []
+    grouped = (
+        metrics.groupby(["task", "test_year"], dropna=False)
+        .agg(
+            configs=("pr_auc", "size"),
+            test_rows=("n_test", "first"),
+            prevalence=("positive_rate_test", "mean"),
+        )
+        .reset_index()
+    )
+    grouped["positives"] = (grouped["test_rows"] * grouped["prevalence"]).round().astype("Int64")
+    grouped["sparse_excluded"] = grouped["positives"].lt(10)
+    rows = []
+    for _, row in grouped.sort_values(["task", "test_year"]).iterrows():
+        rows.append(
+            [
+                _code(row["task"]),
+                _fmt_year(row["test_year"]),
+                _fmt(row["configs"], digits=0),
+                _fmt(row["test_rows"]),
+                _fmt(row["positives"]),
+                _fmt(row["prevalence"]),
+                "Yes" if bool(row["sparse_excluded"]) else "No",
+            ]
+        )
+    return rows
+
+
+def _task_feature_family_rows(metrics: pd.DataFrame) -> list[list[str]]:
+    required = {
+        "task",
+        "feature_set",
+        "test_year",
+        "positive_rate_test",
+        "pr_auc",
+        "roc_auc",
+    }
+    if metrics.empty or not required.issubset(metrics.columns):
+        return []
+    agg_spec = {
+        "metric_rows": ("pr_auc", "size"),
+        "n_folds": ("test_year", "nunique"),
+        "mean_prevalence": ("positive_rate_test", "mean"),
+        "mean_pr_auc": ("pr_auc", "mean"),
+        "mean_roc_auc": ("roc_auc", "mean"),
+    }
+    if "brier_skill_score" in metrics.columns:
+        agg_spec["mean_brier_skill"] = ("brier_skill_score", "mean")
+    if "ece" in metrics.columns:
+        agg_spec["mean_ece"] = ("ece", "mean")
+    grouped = (
+        metrics.groupby(["task", "feature_set"], dropna=False)
+        .agg(**agg_spec)
+        .reset_index()
+        .sort_values(["task", "mean_pr_auc"], ascending=[True, False])
+    )
+    rows = []
+    for _, row in grouped.iterrows():
+        rows.append(
+            [
+                _code(row["task"]),
+                _code(row["feature_set"]),
+                _fmt(row["mean_prevalence"]),
+                _fmt(row["mean_pr_auc"]),
+                _fmt(row["mean_roc_auc"]),
+                _fmt(row.get("mean_brier_skill")),
+                _fmt(row.get("mean_ece")),
+                _fmt(row["n_folds"], digits=0),
+                _fmt(row["metric_rows"], digits=0),
             ]
         )
     return rows
@@ -462,7 +554,7 @@ def _structural_break_rows(study_dir: Path, *, max_rows: int = 12) -> list[list[
                 _code(row["window"]),
                 _code(row["label_mode"]),
                 _code(row["family"]),
-                _fmt(row["break_year"]),
+                _fmt_year(row["break_year"]),
                 _fmt(row["f_stat"]),
                 _fmt(row["p_value"]),
             ]
@@ -540,6 +632,10 @@ def _label_contingency_rows(study_dir: Path) -> list[list[str]]:
         "benchmark_positive_rows",
         "public_positive_rows",
         "both_positive_rows",
+        "benchmark_prevalence",
+        "public_prevalence",
+        "public_rate_given_benchmark_pos",
+        "benchmark_rate_given_public_pos",
         "lift_public_given_benchmark",
         "lift_benchmark_given_public",
     ]
@@ -555,8 +651,39 @@ def _label_contingency_rows(study_dir: Path) -> list[list[str]]:
                 _fmt(row["benchmark_positive_rows"]),
                 _fmt(row["public_positive_rows"]),
                 _fmt(row["both_positive_rows"]),
+                _fmt(row["benchmark_prevalence"]),
+                _fmt(row["public_prevalence"]),
+                _fmt(row["public_rate_given_benchmark_pos"]),
+                _fmt(row["benchmark_rate_given_public_pos"]),
                 _fmt(row["lift_public_given_benchmark"]),
                 _fmt(row["lift_benchmark_given_public"]),
+            ]
+        )
+    return rows
+
+
+def _selection_profile_rows(manuscript_package: Path) -> list[list[str]]:
+    frame = _read_csv(manuscript_package / "tables" / "table_17_selection_profile.csv")
+    required = {
+        "Stratum",
+        "Group",
+        "Issuer_Years",
+        "Comment_Rate",
+        "Amendment_Rate",
+        "Item_4_02_Rate",
+    }
+    if frame.empty or not required.issubset(frame.columns):
+        return []
+    rows = []
+    for _, row in frame.iterrows():
+        rows.append(
+            [
+                str(row["Stratum"]),
+                str(row["Group"]),
+                _fmt(row["Issuer_Years"]),
+                _fmt(row["Comment_Rate"]),
+                _fmt(row["Amendment_Rate"]),
+                _fmt(row["Item_4_02_Rate"]),
             ]
         )
     return rows
@@ -650,7 +777,10 @@ def _construct_alignment_rows(study_dir: Path) -> list[list[str]]:
                 _code(best.get("task")),
                 _fmt(best.get("pr_auc")),
                 _fmt(best.get("roc_auc")),
+                _fmt(best.get("top_10pct_precision")),
+                _fmt(1 - best.get("top_10pct_precision") if pd.notna(best.get("top_10pct_precision")) else None),
                 _fmt(best.get("top_decile_lift")),
+                f"[{_fmt(best.get('top_decile_lift_ci_low'))}, {_fmt(best.get('top_decile_lift_ci_high'))}]",
             ]
         )
     if not benchmark_to_public.empty and "top_decile_lift" in benchmark_to_public.columns:
@@ -662,7 +792,10 @@ def _construct_alignment_rows(study_dir: Path) -> list[list[str]]:
                 _code(best.get("target_public_label")),
                 _fmt(best.get("pr_auc")),
                 _fmt(best.get("roc_auc")),
+                _fmt(best.get("top_10pct_precision")),
+                _fmt(1 - best.get("top_10pct_precision") if pd.notna(best.get("top_10pct_precision")) else None),
                 _fmt(best.get("top_decile_lift")),
+                f"[{_fmt(best.get('top_decile_lift_ci_low'))}, {_fmt(best.get('top_decile_lift_ci_high'))}]",
             ]
         )
     return rows
@@ -752,6 +885,13 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "prediction, and benchmark-public construct overlap. Tables and figures are "
         "listed at the end so manuscript claims can be traced to concrete files.",
         "",
+        "When using this page for manuscript prose, read it as an interpretation "
+        "guide rather than a model leaderboard. Headline claims should describe "
+        "filing-origin measurement, prevalence-aware ranking, and construct overlap "
+        "within the stated bridge tier. Single best windows, maximum PR-AUC rows, "
+        "and severe-tail lifts are diagnostics unless the manuscript gives a "
+        "pre-specified reason to elevate them.",
+        "",
         "## Results Overview",
         "",
         "- **Research question.** Can filing-origin public SEC/PCAOB information predict "
@@ -773,15 +913,17 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "ROC-AUC, Brier, Brier Skill Score, ECE, top-k precision, top-decile lift, "
         "and Bao-style top-fraction precision, sensitivity, specificity, BAC, and NDCG.",
         "",
-        "- **Current best public-cascade specification.** " + best_public_text + ".",
+        "- **Highest equal-task public-cascade row.** " + best_public_text + ". "
+        "Use this as a descriptive configuration diagnostic, not as a model-selection "
+        "headline.",
         "",
         f"- **Bridge boundary.** Construct overlap is `{validation_tier}` using the "
         "confirmed WRDS SEC Analytics Suite CIK-GVKEY bridge.",
         "",
         "- **Sellable claim.** The strongest current framing is a measurement-and-ranking "
         "paper on filing-origin public reporting-risk states. It does not support causal "
-        "claims, unobserved true-fraud occurrence claims, or same-estimand performance "
-        "rankings over prior fraud-prediction papers.",
+        "claims, hidden-misconduct occurrence claims, or same-estimand performance "
+        "rankings over prior detected-misstatement papers.",
         "",
         "## Reproducibility Metadata",
         "",
@@ -820,10 +962,43 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "    B --> D",
         "```",
         "",
+        "### Manuscript Reading Guide",
+        "",
+        _table(
+            ["Evidence block", "What it supports", "How to bound the claim"],
+            [
+                [
+                    "Public task metrics and Figure 1",
+                    "Filing-origin public information ranks later public review-and-correction labels above task prevalence.",
+                    "Annual-fold intervals describe evaluation-period dispersion; weak calibration rules out deployment-ready probability claims.",
+                ],
+                [
+                    "Feature-family metrics and Figure 2",
+                    "Feature fusion helps, while metadata remains a strong public information set.",
+                    "Treat feature families as information-set evidence, not structural mechanisms or source dominance.",
+                ],
+                [
+                    "Peer-compatible model-family tables and Figures 3-4",
+                    "Detected-misstatement and public-label suites share metric language and transferable model families.",
+                    "These rows are not original-study replications and do not establish same-estimand superiority.",
+                ],
+                [
+                    "Construct-overlap tables and Figure 5",
+                    "The WRDS-validated bridge shows related-but-non-identical overlap, especially in severe public correction states.",
+                    "Read Item 4.02 lift with absolute precision/FDR and the broader label-contingency matrix.",
+                ],
+                [
+                    "Selection profile and DML opacity diagnostics",
+                    "Public labels include selected public scrutiny and source-availability states.",
+                    "The evidence is descriptive or adjusted-association evidence, not causal selection correction.",
+                ],
+            ],
+        ),
+        "",
         "## Results for Experiment 1: Label Observability and Detection Timing",
         "",
         "This experiment reads detected-misstatement benchmark performance as an "
-        "observability diagnostic rather than a true-fraud detection result.",
+        "observability diagnostic rather than a hidden-misconduct detection result.",
         "",
         "### Detected-Misstatement Benchmark Panel",
         "",
@@ -913,9 +1088,11 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "### Interpretation",
         "",
-        "The DML rows report adjusted association between pre-origin opacity and later "
-        "public review/correction outcomes. They support discussion of measurement and "
-        "risk ranking, not causal claims about SEC or issuer behavior.",
+        "The DML rows report adjusted association between filing-origin opacity and "
+        "later public review/correction outcomes. They distinguish source-availability "
+        "and missingness diagnostics from silent-imputation claims, and they support "
+        "discussion of measurement and risk ranking rather than causal claims about "
+        "SEC or issuer behavior.",
         "",
         "## Results for Experiment 4: Public Cascade Construction",
         "",
@@ -957,15 +1134,42 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "## Results for Experiment 5: Public Cascade Prediction",
         "",
-        "This experiment estimates the pre-disclosure public reporting-risk state and "
+        "This experiment estimates the filing-origin public reporting-risk state and "
         "compares feature families and peer-compatible model families.",
         "",
         "### Public Task Metrics",
         "",
         _table(
-            ["Task", "Positives", "Mean prevalence", "Mean PR-AUC", "Mean ROC-AUC", "Rows"],
+            [
+                "Task",
+                "Positives",
+                "Mean prevalence",
+                "Mean PR-AUC",
+                "Mean ROC-AUC",
+                "Brier Skill",
+                "ECE",
+                "Folds",
+                "Metric rows",
+            ],
             _public_task_rows(public_metrics, public_summary),
         ),
+        "",
+        "These task rows are the main ranking evidence. Brier Skill Score and ECE "
+        "are calibration diagnostics; negative skill or large ECE should push the "
+        "manuscript toward a ranking/prioritization interpretation rather than a "
+        "calibrated decision-rule interpretation.",
+        "",
+        "### Annual Fold Support",
+        "",
+        _table(
+            ["Task", "Test year", "Configs", "Test rows", "Positives", "Prevalence", "Sparse excluded"],
+            _public_fold_support_rows(public_metrics),
+        ),
+        "",
+        "Fold support is reported to make sparse-label claims auditable. A task-year "
+        "with fewer than 10 positives should not carry a formal interval claim; in "
+        "the current artifact set, Item 4.02 remains rare but has at least 58 "
+        "positives in every annual test fold.",
         "",
         "### Public Feature-Family Metrics",
         "",
@@ -977,10 +1181,54 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                 "XBRL coverage",
                 "Mean PR-AUC",
                 "Mean ROC-AUC",
-                "Rows",
+                "Metric rows",
             ],
             _public_feature_rows(public_metrics, public_summary),
         ),
+        "",
+        "This aggregate table averages across tasks, train windows, and annual folds. "
+        "Use it for the broad information-set claim only; task-specific feature-family "
+        "rows below are the safer source for label-by-label prose.",
+        "",
+        "### Task by Feature-Family Metrics",
+        "",
+        _table(
+            [
+                "Task",
+                "Feature set",
+                "Mean prevalence",
+                "Mean PR-AUC",
+                "Mean ROC-AUC",
+                "Brier Skill",
+                "ECE",
+                "Folds",
+                "Metric rows",
+            ],
+            _task_feature_family_rows(public_metrics),
+        ),
+        "",
+        "The task-by-family matrix clarifies that feature-family rankings are not "
+        "uniform across labels. It supports a measured feature-fusion claim, not a "
+        "feature-importance-as-mechanism claim.",
+        "",
+        "### Selection-Aware Descriptive Profile",
+        "",
+        _table(
+            [
+                "Stratum",
+                "Group",
+                "Issuer-years",
+                "Comment rate",
+                "Amendment rate",
+                "Item 4.02 rate",
+            ],
+            _selection_profile_rows(manuscript_package),
+        ),
+        "",
+        "Selection-profile rows describe where public-label rates are concentrated "
+        "across issuer visibility, filing-history, and public-scrutiny strata. They "
+        "help interpret comment-thread prediction as selected public scrutiny plus "
+        "issuer reporting-risk signals, but they are not a causal SEC-selection model.",
         "",
         "### Detected-Misstatement Peer-Compatible Literature Benchmarks",
         "",
@@ -989,7 +1237,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "of the original-paper samples.",
         "",
         _table(
-            ["Model", "Rows", "Mean PR-AUC", "Mean ROC-AUC", "Max PR-AUC", "Mean Brier"],
+            ["Model", "Metric rows", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC", "Mean Brier"],
             _peer_model_rows(study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv"),
         ),
         "",
@@ -1003,7 +1251,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "### Public-Label Peer Transfer",
         "",
         _table(
-            ["Model", "Rows", "Mean PR-AUC", "Mean ROC-AUC", "Max PR-AUC", "Mean Brier"],
+            ["Model", "Metric rows", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC", "Mean Brier"],
             _peer_model_rows(
                 study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
             ),
@@ -1012,7 +1260,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "### Public Peer Task Summary",
         "",
         _table(
-            ["Task", "Rows", "Mean prevalence", "Mean PR-AUC", "Mean ROC-AUC", "Max PR-AUC"],
+            ["Task", "Metric rows", "Mean prevalence", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC"],
             _public_peer_task_rows(
                 study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
             ),
@@ -1032,7 +1280,9 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "Prediction results should be read within each label, prevalence, feature "
         "family, training window, and model-family mapping. Public peer rows provide "
         "model-language transfer evidence, not same-estimand superiority over the "
-        "detected-misstatement literature.",
+        "detected-misstatement literature. `Max config PR-AUC` is retained as a "
+        "diagnostic for model-selection optimism; it should not become a headline "
+        "claim without a pre-specified selection rule or external validation.",
         "",
         "## Results for Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap",
         "",
@@ -1054,9 +1304,23 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "### Construct-Overlap Ranking Alignment",
         "",
         _table(
-            ["Direction", "Model", "Target", "PR-AUC", "ROC-AUC", "Top-decile lift"],
+            [
+                "Direction",
+                "Model",
+                "Target",
+                "PR-AUC",
+                "ROC-AUC",
+                "Top-10% precision",
+                "Top-10% FDR",
+                "Top-decile lift",
+                "Lift interval",
+            ],
             _construct_alignment_rows(study_dir),
         ),
+        "",
+        "The ranking-alignment rows are severe-tail diagnostics. Lift above one "
+        "shows enrichment, while low absolute precision and high FDR keep the "
+        "interpretation bounded to construct overlap rather than event identification.",
         "",
         "### Label Contingency and Lift",
         "",
@@ -1068,11 +1332,20 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                 "Benchmark positives",
                 "Public positives",
                 "Both positive",
+                "Benchmark rate",
+                "Public rate",
+                "Public rate if benchmark pos",
+                "Benchmark rate if public pos",
                 "Lift public given benchmark",
                 "Lift benchmark given public",
             ],
             _label_contingency_rows(study_dir),
         ),
+        "",
+        "The contingency matrix is the broader construct-validity evidence. Comment "
+        "threads are broad public scrutiny, amendments show stronger correction/friction "
+        "alignment, and Item 4.02 is a rare severe-tail state; the integrated claim "
+        "rests on this typed pattern plus the bridge gate, not on Item 4.02 alone.",
         "",
         "### Aggregation Sensitivity",
         "",
@@ -1156,21 +1429,72 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "### Key Readings",
         "",
+        "- Public task results support a prevalence-aware ranking claim for three "
+        "public cascade labels, but calibration diagnostics keep the interpretation "
+        "to ranking and prioritization.",
         "- Public labels and detected-misstatement benchmark labels are related but "
         "non-identical constructs.",
         "- Public-cascade scores can rank benchmark positives in the matched overlap; "
         "detected-misstatement scores can also rank severe public correction labels.",
+        "- Selection-profile rows show that public comment-thread outcomes are "
+        "partly public-scrutiny states, not a clean issuer-risk-only label.",
         f"- `{validation_tier}` bridge evidence supports the integrated "
         "benchmark-to-public construct-overlap interpretation.",
         "",
+        "### Claim-Strength Ledger",
+        "",
+        _table(
+            ["Claim", "Evidence", "Strength", "Boundary"],
+            [
+                [
+                    "Filing-origin public information ranks later public review-and-correction labels.",
+                    "Public task metrics, annual fold support, Figure 1.",
+                    "Reportable",
+                    "Ranking evidence relative to prevalence, not calibrated deployment.",
+                ],
+                [
+                    "Feature fusion helps and metadata remains strong.",
+                    "Feature-family aggregate plus task-by-family matrix.",
+                    "Reportable with coverage caveat",
+                    "Information-set evidence, not mechanism or XBRL dominance.",
+                ],
+                [
+                    "Public and detected-misstatement constructs are related but non-identical.",
+                    "WRDS-validated bridge coverage, ranking alignment, label-contingency matrix.",
+                    "Reportable for covered bridge sample",
+                    "Conditional on bridge tier and covered sample.",
+                ],
+                [
+                    "Item 4.02 provides severe-tail enrichment evidence.",
+                    "Construct-alignment lift, precision/FDR, event-time concentration.",
+                    "Diagnostic",
+                    "Rare public correction label; not sole construct-validity basis.",
+                ],
+                [
+                    "Opacity/missingness predicts public labels after adjustment.",
+                    "DML adjusted-association rows.",
+                    "Diagnostic",
+                    "Null or weak rows cannot support strategic-silence claims.",
+                ],
+                [
+                    "Peer-compatible models align metric language across evidence layers.",
+                    "Detected-misstatement and public-label peer-family tables.",
+                    "Candidate/supporting",
+                    "Not original-study replication or same-estimand superiority.",
+                ],
+            ],
+        ),
+        "",
         "### Claim Boundaries",
         "",
-        "- The evidence supports measurement and decision-useful prediction claims, not "
-        "causal proof of fraud occurrence.",
+        "- The evidence supports measurement and decision-useful ranking claims, not "
+        "causal proof of hidden misconduct.",
         "- Comment letters are public scrutiny signals, not the complete SEC review "
         "universe.",
         "- WRDS-validated raw-only overlap can support a related-but-non-identical "
-        "construct argument, while still not supporting causal fraud-occurrence claims.",
+        "construct argument only for the covered bridge sample.",
+        "- Negative Brier Skill Score or large ECE should be described as calibration "
+        "evidence against deployment-ready probability rules.",
         "",
         "## Tables, Figures, and Artifact Index",
         "",
