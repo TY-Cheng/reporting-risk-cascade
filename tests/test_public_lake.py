@@ -589,6 +589,9 @@ def test_build_public_lake_validates_config_and_notes_skip_is_lightweight(
     assert not (silver / "note_text").exists()
     run_metadata = json.loads((silver / "public_lake_run_metadata.json").read_text())
     assert run_metadata["notes_mode"] == "skip"
+    assert {"commit_sha", "dirty", "config_hash", "input_hash", "uv_lock_hash"}.issubset(
+        run_metadata["provenance"]
+    )
 
 
 def test_build_public_lake_writes_parquet_fsds_and_notes_summary(tmp_path: Path) -> None:
@@ -1858,6 +1861,13 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
                     "sic": 1234,
                     "sic_description": "A",
                     "entity_type": "operating",
+                },
+                {
+                    "issuer_cik": "2",
+                    "entity_name": "Beta Gamma Corp",
+                    "sic": 1234,
+                    "sic_description": "A",
+                    "entity_type": "operating",
                 }
             ]
         ),
@@ -1888,6 +1898,18 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
                     "form": "10-K",
                     "items": "",
                     "primary_document": "b.htm",
+                    "primary_doc_description": "10-K",
+                },
+                {
+                    "issuer_cik": "2",
+                    "accession": "a-2021",
+                    "accession_nodash": "a2021",
+                    "filing_date": "2022-03-01",
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": "2022-03-01",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "c.htm",
                     "primary_doc_description": "10-K",
                 },
             ]
@@ -1977,9 +1999,26 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
                 {
                     "issuer_cik": "1",
                     "fiscal_period_end": "2021-12-31",
-                    "form_filing_id": "F1",
+                    "filing_date": "2022-02-15",
+                    "form_filing_id": "F-pre",
                     "engagement_partner_id": "P1",
                     "number_of_participants": 2,
+                },
+                {
+                    "issuer_cik": "1",
+                    "fiscal_period_end": "2021-12-31",
+                    "filing_date": "2022-03-15",
+                    "form_filing_id": "F-post",
+                    "engagement_partner_id": "P2",
+                    "number_of_participants": 10,
+                },
+                {
+                    "issuer_cik": "2",
+                    "fiscal_period_end": "2021-12-31",
+                    "filing_date": "2022-03-15",
+                    "form_filing_id": "F-other-post",
+                    "engagement_partner_id": "P3",
+                    "number_of_participants": 20,
                 }
             ]
         ),
@@ -1990,10 +2029,21 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
         build_gold_panels(silver_dir=silver, gold_dir=gold, as_of_date="2026-04-23", engine="bad")
     build_gold_panels(silver_dir=silver, gold_dir=gold, as_of_date="2026-04-23", engine="pandas")
     issuer = read_table(gold / "issuer_origin_panel.parquet")
-    panel = issuer.sort_values("fiscal_year").reset_index(drop=True)
-    assert panel.loc[1, "xbrl_ratio_assets_yoy_change"] == 0.2
-    assert panel.loc[1, "note_text_count"] == 2
-    assert panel.loc[1, "form_ap_filing_count"] == 1
+    panel = issuer.sort_values(["issuer_cik", "fiscal_year"]).reset_index(drop=True)
+    alpha_2020 = panel.loc[panel["accession"].eq("a-2020")].iloc[0]
+    alpha_2021 = panel.loc[
+        panel["issuer_cik"].eq("0000000001") & panel["fiscal_year"].eq(2021)
+    ].iloc[0]
+    beta_2021 = panel.loc[
+        panel["issuer_cik"].eq("0000000002") & panel["fiscal_year"].eq(2021)
+    ].iloc[0]
+    assert alpha_2021["xbrl_ratio_assets_yoy_change"] == 0.2
+    assert alpha_2021["note_text_count"] == 2
+    assert pd.isna(alpha_2020["form_ap_filing_count"])
+    assert alpha_2021["form_ap_filing_count"] == 1
+    assert alpha_2021["form_ap_unique_partners"] == 1
+    assert alpha_2021["form_ap_avg_participants"] == 2
+    assert pd.isna(beta_2021["form_ap_filing_count"])
 
 
 def test_parquet_gold_build_matches_csv_gz_gold_build(tmp_path: Path) -> None:

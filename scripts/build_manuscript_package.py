@@ -57,7 +57,9 @@ CONSTRUCT_LIFT_NOTE = (
     "from the bridge-gated artifacts, not annual fold-dispersion intervals. "
     "Bridge tier is wrds_validated, and displayed rows are restricted to "
     "high-confidence bridge rows. Top-10% precision and FDR report the absolute "
-    "base-rate burden behind lift. These Item 4.02 rows are severe-tail "
+    "base-rate burden behind lift; the implicit bridge-sample base rate can differ "
+    "from the full public-cascade task prevalence because of the high-confidence "
+    "bridge restriction. These Item 4.02 rows are severe-tail "
     "diagnostics within the broader construct-validation case; they support "
     "related-construct enrichment rather than label equivalence."
 )
@@ -70,6 +72,9 @@ PEER_TRANSFER_NOTE = (
     "compared across evidence layers."
 )
 DML_INTERVAL_NOTE = (
+    "The current public-opacity artifact reports 17 missingness or source-coverage "
+    "components and 65 post-encoding design columns after categorical expansion; "
+    "the accompanying metadata lists the raw controls used to construct that design. "
     "Intervals equal coefficient plus or minus 1.96 times the HC3 OLS standard "
     "error after cross-fitted residualization. The estimates are adjusted "
     "associations, not identified structural estimates."
@@ -78,16 +83,21 @@ PUBLIC_TASK_NOTE = (
     ANNUAL_INTERVAL_NOTE
     + " The evaluation unit is a public-cascade task summarized over annual "
     "out-of-time folds at the issuer-CIK fiscal-year origin grain. "
+    + "Panel positives aggregate task positives over evaluation-year support, while mean "
+    "prevalence is averaged over the reported task-window-feature evaluations; "
+    "it should not be read as positives divided by a single manuscript-wide denominator. "
     + " Brier Skill Score is measured relative to the corresponding prevalence-only "
-    "Brier baseline. ECE is a calibration diagnostic. Weak calibration should be "
-    "read as evidence against using the scores as calibrated decision rules, not "
-    "against the paper's ranking estimand."
+    "Brier baseline. ECE is a 10-bin uniform-width calibration diagnostic from raw "
+    "probability scores. Weak calibration should be read as evidence against using "
+    "the scores as calibrated decision rules, not against the paper's ranking estimand."
 )
 FEATURE_FAMILY_NOTE = (
     ANNUAL_INTERVAL_NOTE
     + " Entries are feature-family summaries over public-cascade task-window "
     "evaluations, not issuer-year sample sizes. Task-specific base-rate context "
-    "is reported in the task tables. Best-window entries are descriptive "
+    "is reported in the task tables. Note/disclosure-breadth variables enter "
+    "the all-feature information set but are not reported as a standalone family row. "
+    "Best-window entries are descriptive "
     "configuration summaries, not headline model-selection claims."
 )
 BENCHMARK_TIMING_NOTE = (
@@ -114,16 +124,24 @@ BRIDGE_OVERLAP_NOTE = (
     "descriptive rates broaden construct-validation evidence beyond the sparse "
     "Item 4.02 severe-tail ranking rows; they do not imply label equivalence."
 )
+BRIDGE_COVERAGE_NOTE = (
+    "These rates describe raw CIK-GVKEY bridge availability. Construct-overlap "
+    "claims use the narrower high-confidence sample reported in the bridge-overlap "
+    "sample-boundaries appendix table."
+)
 BRIDGE_BOUNDARY_NOTE = (
-    "The Benchmark_Rows column reports the bridge-gated overlap sample. Construct-overlap claims are "
-    "bounded to mapped rows, with high-confidence rows used for manuscript-grade "
-    "alignment evidence. Dropped and unmatched rows define the generalizability "
-    "boundary of the bridge exercise."
+    "This table reports the construct-overlap sample boundary after bridge accounting, "
+    "not the raw CIK-GVKEY coverage rate reported in the bridge-coverage table. "
+    "Construct-overlap claims are bounded to high-confidence rows. Dropped rows define "
+    "the generalizability boundary of the overlap exercise."
 )
 SELECTION_PROFILE_NOTE = (
     "Issuer_Years are descriptive strata from the existing public issuer-origin panel. "
     "They show how public-label rates vary with filing visibility, history, and "
-    "issuer profile variables. The table is selection-aware evidence, not a causal "
+    "issuer profile variables. Parenthetical values in group labels are split thresholds, "
+    "not sample sizes; XBRL log-asset strata are limited to observations with available "
+    "XBRL asset values; days since prior filing refers to any prior EDGAR filing, "
+    "not only a prior annual report. The table is selection-aware evidence, not a causal "
     "adjustment model or proof that SEC scrutiny selection has been solved."
 )
 
@@ -408,6 +426,14 @@ def _latest_public_lake_report() -> dict[str, Any]:
 
 
 def _component_status(manifest: dict[str, Any]) -> pd.DataFrame:
+    roles = {
+        "benchmark": "Detected-misstatement timing and model-family diagnostics",
+        "bridge_probe": "CIK-GVKEY coverage and multiplicity checks",
+        "construct_overlap": "Bridge-gated related-construct evidence",
+        "peer_comparison": "Benchmark model-family transfer checks",
+        "public_cascade": "Filing-origin public-label ranking evidence",
+        "public_peer_comparison": "Public-label model-family transfer checks",
+    }
     rows = []
     for component, payload in manifest.get("components", {}).items():
         rows.append(
@@ -415,7 +441,7 @@ def _component_status(manifest: dict[str, Any]) -> pd.DataFrame:
                 "Component": component,
                 "Status": payload.get("status") or payload.get("run_status", ""),
                 "Tier": payload.get("validation_tier", ""),
-                "Output": payload.get("out_dir", ""),
+                "Manuscript role": roles.get(component, payload.get("out_dir", "")),
             }
         )
     return pd.DataFrame(rows)
@@ -424,15 +450,15 @@ def _component_status(manifest: dict[str, Any]) -> pd.DataFrame:
 def _public_lake_scale(report: dict[str, Any]) -> pd.DataFrame:
     row_counts = report.get("row_counts", {})
     rows = [
-        ("Silver", "filing_dim", "Public filing index"),
-        ("Silver", "issuer_dim", "Issuer dimension"),
-        ("Silver", "xbrl_core_fact", "Controlled XBRL core facts"),
-        ("Silver", "xbrl_fact_summary", "Accession-level XBRL coverage"),
-        ("Silver", "note_summary", "Notes summary mode"),
-        ("Silver", "comment_thread", "SEC comment-thread signal"),
-        ("Silver", "correction_event", "Amendment/correction signal"),
-        ("Gold", "issuer_origin_panel", "Annual issuer-year modeling table"),
-        ("Gold", "filing_origin_panel", "Filing-origin provenance table"),
+        ("Normalized", "filing_dim", "Public filing index"),
+        ("Normalized", "issuer_dim", "Issuer dimension"),
+        ("Normalized", "xbrl_core_fact", "Controlled XBRL core facts"),
+        ("Normalized", "xbrl_fact_summary", "Accession-level XBRL coverage"),
+        ("Normalized", "note_summary", "Notes summary mode"),
+        ("Normalized", "comment_thread", "SEC comment-thread signal"),
+        ("Normalized", "correction_event", "Amendment/correction signal"),
+        ("Analytical", "issuer_origin_panel", "Annual issuer-year modeling table"),
+        ("Analytical", "filing_origin_panel", "Filing-origin provenance table"),
     ]
     return pd.DataFrame(
         [
@@ -463,7 +489,7 @@ def _public_task_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.D
     )
     grouped = grouped.merge(uncertainty, on="task", how="left")
     grouped = grouped.sort_values("mean", ascending=False)
-    grouped.insert(1, "Positives", grouped["task"].map(positives))
+    grouped.insert(1, "Panel_Positives", grouped["task"].map(positives))
     grouped = grouped.rename(columns={"task": "Task"})
     grouped["Mean_PR_AUC"] = grouped["mean"]
     grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
@@ -478,7 +504,7 @@ def _public_task_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.D
         grouped[col] = grouped[col].map(_fmt)
     for col in ["metric_rows", "n_folds", "valid_folds", "excluded_sparse_folds"]:
         grouped[col] = grouped[col].map(_fmt)
-    grouped["Positives"] = grouped["Positives"].map(_fmt)
+    grouped["Panel_Positives"] = grouped["Panel_Positives"].map(_fmt)
     return grouped
 
 
@@ -649,19 +675,42 @@ def _bridge_coverage(path: Path) -> pd.DataFrame:
     return coverage.rename(columns={"metric": "Metric", "value": "Value"})
 
 
+def _top_decile_support(n_pos: Any, n_neg: Any, precision: Any) -> dict[str, Any]:
+    positives = pd.to_numeric(pd.Series([n_pos]), errors="coerce").iloc[0]
+    negatives = pd.to_numeric(pd.Series([n_neg]), errors="coerce").iloc[0]
+    top_precision = pd.to_numeric(pd.Series([precision]), errors="coerce").iloc[0]
+    if pd.isna(positives) or pd.isna(negatives):
+        return {"N": "", "Positives": "", "Top_10pct_K": "", "Top_10pct_Hits": ""}
+    total = int(positives + negatives)
+    top_k = min(max(int(math.floor(total * 0.10 + 0.5)), 1), total)
+    hits = int(round(float(top_precision) * top_k)) if pd.notna(top_precision) else ""
+    return {
+        "N": _fmt(total),
+        "Positives": _fmt(int(positives)),
+        "Top_10pct_K": _fmt(top_k),
+        "Top_10pct_Hits": _fmt(hits) if hits != "" else "",
+    }
+
+
 def _construct_alignment(study_dir: Path) -> pd.DataFrame:
     public_to_benchmark = _read_csv(study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv")
     benchmark_to_public = _read_csv(study_dir / "construct_overlap" / "reciprocal_alignment.csv")
     rows: list[dict[str, Any]] = []
     if not public_to_benchmark.empty:
         best = public_to_benchmark.sort_values("top_decile_lift", ascending=False).iloc[0]
+        support = _top_decile_support(
+            best.get("n_benchmark_positives_in_overlap"),
+            best.get("n_benchmark_negatives_in_overlap"),
+            best.get("top_10pct_precision"),
+        )
         rows.append(
             {
                 "Direction": "Public score to benchmark positives",
                 "Model": best["model_id"],
-                "Target": best["task"],
+                "Target": "Item 4.02",
                 "Feature_Set": best["feature_set"],
                 "Window": best["train_window"],
+                **support,
                 "PR_AUC": _fmt(best["pr_auc"]),
                 "ROC_AUC": _fmt(best["roc_auc"]),
                 "Top_Decile_Lift": _fmt(best["top_decile_lift"]),
@@ -677,13 +726,19 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
         )
     if not benchmark_to_public.empty:
         best = benchmark_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
+        support = _top_decile_support(
+            best.get("n_public_positives_in_overlap"),
+            best.get("n_public_negatives_in_overlap"),
+            best.get("top_10pct_precision"),
+        )
         rows.append(
             {
                 "Direction": "Detected-misstatement score to public labels",
                 "Model": best["model_id"],
-                "Target": best["target_public_label"],
+                "Target": "Item 4.02",
                 "Feature_Set": best.get("feature_set", ""),
                 "Window": best["train_window"],
+                **support,
                 "PR_AUC": _fmt(best["pr_auc"]),
                 "ROC_AUC": _fmt(best["roc_auc"]),
                 "Top_Decile_Lift": _fmt(best["top_decile_lift"]),
@@ -768,40 +823,46 @@ def _bridge_sample_boundaries(study_dir: Path) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     if flow_path.exists():
         flow = _read_csv(flow_path)
+        raw = flow.loc[flow["bridge_tier"].eq("full_raw")]
+        total_rows = float(raw["rows"].iloc[0]) if not raw.empty else float(pd.to_numeric(flow["rows"], errors="coerce").max())
+        total_pos = (
+            float(raw["benchmark_positives"].iloc[0])
+            if not raw.empty
+            else float(pd.to_numeric(flow["benchmark_positives"], errors="coerce").max())
+        )
+        interpretations = {
+            "full_raw": "Benchmark rows entering the bridge-overlap accounting screen",
+            "ambiguous": "Mapped rows retained for sensitivity diagnostics, not headline overlap",
+            "dropped": "Rows without a usable high-confidence public-side overlap match",
+            "high_confidence": "Rows used for headline bridge-gated construct-alignment statistics",
+        }
         for _, row in flow.iterrows():
+            bridge_tier = row.get("bridge_tier", "")
+            benchmark_rows = pd.to_numeric(row.get("rows"), errors="coerce")
+            benchmark_pos = pd.to_numeric(row.get("benchmark_positives"), errors="coerce")
             rows.append(
                 {
-                    "Boundary": row.get("bridge_tier", ""),
-                    "Benchmark_Rows": row.get("rows", ""),
-                    "Benchmark_Positives": row.get("benchmark_positives", ""),
-                    "Positive_Rate": "",
-                    "Years": "",
-                    "Interpretation": "Bridge overlap tier",
-                }
-            )
-    if unmatched_path.exists():
-        unmatched = _read_csv(unmatched_path)
-        if not unmatched.empty:
-            rows.append(
-                {
-                    "Boundary": "unmatched_raw",
-                    "Benchmark_Rows": pd.to_numeric(
-                        unmatched["unmatched_rows"], errors="coerce"
-                    ).sum(),
-                    "Benchmark_Positives": "",
-                    "Positive_Rate": pd.to_numeric(
-                        unmatched["unmatched_positive_rate"], errors="coerce"
-                    ).mean(),
-                    "Years": f"{int(unmatched['data_year'].min())}-{int(unmatched['data_year'].max())}",
-                    "Interpretation": "Unmatched benchmark rows outside bridge-overlap claims",
+                    "Boundary": bridge_tier,
+                    "Benchmark_Rows": benchmark_rows,
+                    "Row_Share": benchmark_rows / total_rows if total_rows else "",
+                    "Benchmark_Positives": benchmark_pos,
+                    "Positive_Share": benchmark_pos / total_pos if total_pos else "",
+                    "Interpretation": interpretations.get(str(bridge_tier), "Bridge-overlap tier"),
                 }
             )
     out = pd.DataFrame(rows)
     if out.empty:
         return out
+    if unmatched_path.exists():
+        unmatched = _read_csv(unmatched_path)
+        if not unmatched.empty and "unmatched_rows" in unmatched.columns:
+            out.attrs["unmatched_raw_rows"] = int(
+                pd.to_numeric(unmatched["unmatched_rows"], errors="coerce").fillna(0).sum()
+            )
     for col in ["Benchmark_Rows", "Benchmark_Positives"]:
         out[col] = out[col].map(_fmt)
-    out["Positive_Rate"] = out["Positive_Rate"].map(_fmt)
+    for col in ["Row_Share", "Positive_Share"]:
+        out[col] = out[col].map(_fmt)
     return out
 
 
@@ -1067,11 +1128,25 @@ def _plot_construct_lift(df: pd.DataFrame, *, out_path: Path) -> dict[str, str]:
                 ecolor="#222222",
                 elinewidth=1,
                 capsize=3,
-                zorder=3,
+                    zorder=3,
+                )
+        precision = pd.to_numeric(pd.Series([row.get("Top_10pct_Precision")]), errors="coerce").iloc[0]
+        fdr = pd.to_numeric(pd.Series([row.get("Top_10pct_FDR")]), errors="coerce").iloc[0]
+        if pd.notna(precision) and pd.notna(fdr):
+            ax.text(
+                row["Top_Decile_Lift"] + 0.05,
+                idx,
+                f"P={precision:.3f}; FDR={fdr:.3f}",
+                va="center",
+                fontsize=8,
+                color="#1f2933",
             )
     ax.axvline(1.0, color="#222222", linewidth=1, linestyle="--")
+    finite_x = pd.concat([plot_df["ci_high"], plot_df["Top_Decile_Lift"]], ignore_index=True).dropna()
+    if not finite_x.empty:
+        ax.set_xlim(left=0, right=float(finite_x.max()) * 1.28)
     ax.set_xlabel("Top-decile lift")
-    ax.set_title("Construct-overlap ranking alignment")
+    ax.set_title("Severe-tail diagnostic lift")
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()
     png_path = out_path.with_suffix(".png")
@@ -1103,7 +1178,6 @@ def _result_narrative(
     public_peer_leader = public_peer.iloc[0] if not public_peer.empty else None
     validation_tier = construct_manifest.get("validation_tier", "")
     generated = manifest.get("generated_at_utc", "")
-
     def value(row: pd.DataFrame, col: str) -> str:
         if row.empty:
             return "n/a"
@@ -1125,9 +1199,11 @@ def _result_narrative(
         "",
         "## Main Public-Cascade Result",
         "",
-        f"The highest reported public-cascade summary configuration is `{best_public}`, with "
-        f"reported mean PR-AUC `{best_public_pr}`. The public tasks show a natural "
-        "severity gradient. Comment-thread scrutiny is the broadest public-scrutiny "
+        f"The highest reported public-cascade configuration in the public-cascade summary "
+        f"is `{best_public}`, with mean PR-AUC `{best_public_pr}`. This configuration-level "
+        "number is distinct from feature-family summaries that average over tasks and "
+        "training windows. The public tasks show a natural severity gradient. "
+        "Comment-thread scrutiny is the broadest public-scrutiny "
         f"signal (mean PR-AUC `{value(comment_row, 'Mean_PR_AUC')}`), amendments provide "
         f"a clear correction/friction channel (mean PR-AUC `{value(amendment_row, 'Mean_PR_AUC')}`), "
         f"and 8-K Item 4.02 is rarer but still rankable (mean PR-AUC `{value(severe_row, 'Mean_PR_AUC')}`).",
@@ -1237,14 +1313,14 @@ def main() -> None:
             component_status,
             out_dir=tables_dir,
             stem="table_01_component_status",
-            caption="Study component status",
+            caption="Study component status for manuscript evidence",
             label="tab:component-status",
         ),
         "table_02_public_lake_scale": _write_table_bundle(
             public_lake,
             out_dir=tables_dir,
             stem="table_02_public_lake_scale",
-            caption="Public lake and gold panel scale",
+            caption="Public data architecture and analytical panel scale",
             label="tab:public-lake-scale",
         ),
         "table_03_public_task_metrics": _write_table_bundle(
@@ -1258,7 +1334,7 @@ def main() -> None:
                 public_task,
                 [
                     "Task",
-                    "Positives",
+                    "Panel_Positives",
                     "n_folds",
                     "valid_folds",
                     "Mean_Prevalence",
@@ -1360,6 +1436,7 @@ def main() -> None:
             stem="table_08_bridge_coverage",
             caption="Bridge coverage",
             label="tab:bridge-coverage",
+            note=BRIDGE_COVERAGE_NOTE,
         ),
         "table_09_construct_alignment": _write_table_bundle(
             construct_alignment,
@@ -1376,15 +1453,18 @@ def main() -> None:
                     "Target",
                     "Feature_Set",
                     "Window",
+                    "N",
+                    "Positives",
+                    "Top_10pct_K",
+                    "Top_10pct_Hits",
                     "PR_AUC",
-                    "ROC_AUC",
                     "Top_Decile_Lift",
                     "Top_10pct_Precision",
                     "Top_10pct_FDR",
                     "Lift_Bootstrap_Interval",
                     "Bridge_Tier",
                 ],
-            ),
+            ).rename(columns={"Bridge_Tier": "Confidence_Tier"}),
         ),
     }
     if not public_fold_support.empty:
@@ -1436,7 +1516,16 @@ def main() -> None:
             stem="table_16_bridge_sample_boundaries",
             caption="Bridge-overlap sample boundaries",
             label="tab:bridge-sample-boundaries",
-            note=BRIDGE_BOUNDARY_NOTE,
+            note=(
+                BRIDGE_BOUNDARY_NOTE
+                + (
+                    f" An additional {_fmt(bridge_boundaries.attrs['unmatched_raw_rows'])} "
+                    "raw benchmark rows lack a usable public-side identifier and are "
+                    "outside all overlap statistics."
+                    if bridge_boundaries.attrs.get("unmatched_raw_rows")
+                    else ""
+                )
+            ),
         )
     if not selection_profile.empty:
         table_manifest["table_17_selection_profile"] = _write_table_bundle(

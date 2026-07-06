@@ -6,6 +6,7 @@ from scripts.build_manuscript_package import (
     MIN_VALID_FOLDS_FOR_CI,
     SPARSE_POSITIVE_THRESHOLD,
     _bridge_overlap_matrix,
+    _bridge_sample_boundaries,
     _construct_alignment,
     _dispersion_text,
     _public_fold_support,
@@ -57,6 +58,7 @@ def test_public_task_metrics_include_calibration_diagnostics() -> None:
 
     table = _public_task_metrics(metrics, {"task_positive_counts": {"comment_thread": 100}})
 
+    assert table.loc[0, "Panel_Positives"] == "100"
     assert table.loc[0, "Mean_Brier_Skill"] == "0.0500"
     assert table.loc[0, "Mean_ECE"] == "0.0400"
 
@@ -161,6 +163,39 @@ def test_construct_alignment_reports_absolute_precision_and_fdr(tmp_path) -> Non
 
     assert set(table["Top_10pct_Precision"]) == {"0.0600", "0.0500"}
     assert set(table["Top_10pct_FDR"]) == {"0.9400", "0.9500"}
+    assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "N"].item() == "100"
+    assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "Top_10pct_K"].item() == "10"
+    assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "Top_10pct_Hits"].item() == "1"
+
+
+def test_bridge_sample_boundaries_reports_shares_and_interpretations(tmp_path) -> None:
+    overlap_dir = tmp_path / "construct_overlap"
+    bridge_dir = tmp_path / "bridge_probe"
+    overlap_dir.mkdir()
+    bridge_dir.mkdir()
+    pd.DataFrame(
+        {
+            "bridge_tier": ["full_raw", "ambiguous", "dropped", "high_confidence"],
+            "rows": [100, 10, 40, 50],
+            "benchmark_positives": [20, 2, 8, 10],
+        }
+    ).to_csv(overlap_dir / "overlap_sample_flow.csv", index=False)
+    pd.DataFrame(
+        {
+            "data_year": [2020, 2021],
+            "unmatched_rows": [3, 7],
+            "unmatched_positive_rate": [0.1, 0.2],
+        }
+    ).to_csv(bridge_dir / "unmatched_raw_characteristics.csv", index=False)
+
+    table = _bridge_sample_boundaries(tmp_path)
+
+    high_conf = table.loc[table["Boundary"].eq("high_confidence")].iloc[0]
+    assert high_conf["Row_Share"] == "0.5000"
+    assert high_conf["Positive_Share"] == "0.5000"
+    assert "headline bridge-gated" in high_conf["Interpretation"]
+    assert "unmatched_raw" not in set(table["Boundary"])
+    assert table.attrs["unmatched_raw_rows"] == 10
 
 
 def test_bridge_overlap_matrix_keeps_all_public_labels(tmp_path) -> None:

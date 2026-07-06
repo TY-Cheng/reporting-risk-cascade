@@ -562,6 +562,7 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
         "data_prep.py",
         "linkage.py",
         "peer_comparison.py",
+        "provenance.py",
         "public_cascade.py",
         "public_peer_comparison.py",
         "public_lake.py",

@@ -69,9 +69,11 @@ _test-core:
         tests/test_construct_overlap.py \
         tests/test_data_prep.py \
         tests/test_docs.py \
+        tests/test_manuscript_package.py \
         tests/test_peer_comparison.py \
         tests/test_public_cascade_interfaces.py \
         tests/test_public_peer_comparison.py \
+        tests/test_provenance.py \
         tests/test_linkage.py \
         tests/test_raw_dataset.py \
         tests/test_table_io_sample.py \

@@ -265,6 +265,13 @@ def main() -> None:
     from src.construct_overlap import run_construct_overlap
     from src.linkage import DEFAULT_LINKAGE_OUT_DIR
     from src.peer_comparison import run_peer_comparison
+    from src.provenance import (
+        config_provenance,
+        git_provenance,
+        input_provenance,
+        uv_lock_provenance,
+        wrds_export_metadata,
+    )
     from src.public_cascade import run_public_cascade
     from src.public_peer_comparison import run_public_peer_comparison
 
@@ -325,10 +332,19 @@ def main() -> None:
         outputs.get("opacity_validation_refresh_subdir", "opacity_validation_refresh")
     )
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    provenance = {
+        **git_provenance(REPO_ROOT),
+        **config_provenance([args.config, args.benchmark_config, args.public_cascade_config]),
+        **input_provenance([raw_csv, issuer_dim, issuer_origin_panel, crosswalk]),
+        **uv_lock_provenance(REPO_ROOT),
+        "wrds_export_metadata": wrds_export_metadata(crosswalk),
+    }
 
     manifest: dict[str, Any] = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "config": str(args.config),
+        "repo_commit": provenance["commit_sha"],
+        "git_dirty": provenance["dirty"],
         "components": {
             "benchmark": {"status": "skipped" if args.skip_benchmark else "pending"},
             "public_cascade": {"status": "skipped" if args.skip_public_cascade else "pending"},
@@ -365,6 +381,7 @@ def main() -> None:
             "peer_parallel_jobs": int(peer_cfg.get("parallel_jobs", 1)),
             "peer_model_threads": int(peer_cfg.get("model_threads", 1)),
         },
+        "provenance": provenance,
     }
 
     if not args.skip_benchmark:

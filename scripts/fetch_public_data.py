@@ -351,6 +351,7 @@ def main() -> None:
             notes_batch_size=notes_batch_size,
             fresh_build=args.fresh_build,
             resume=args.resume,
+            config_path=args.config,
         )
         print(json.dumps({k: str(v) for k, v in outputs.items()}, indent=2))
         return

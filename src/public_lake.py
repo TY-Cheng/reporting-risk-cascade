@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 import requests
 
+from .provenance import config_provenance, git_provenance, input_provenance, uv_lock_provenance
 from .table_io import (
     DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
     DEFAULT_DUCKDB_MEMORY_LIMIT,
@@ -283,6 +284,17 @@ def _hash_file(path: Path) -> str:
 
 def _metadata_path(path: Path) -> Path:
     return path.parent / f"{path.name}.meta.json"
+
+
+def _source_metadata_paths(bronze_dir: Path) -> List[Path]:
+    if not bronze_dir.exists():
+        return []
+    return sorted(
+        [
+            *bronze_dir.rglob("manifest.csv"),
+            *bronze_dir.rglob("*.meta.json"),
+        ]
+    )
 
 
 def _write_metadata(
@@ -3635,6 +3647,7 @@ def _build_gold_panels_duckdb(
             empty_columns=(
                 ("issuer_cik", "VARCHAR"),
                 ("fiscal_period_end", "TIMESTAMP"),
+                ("filing_date", "TIMESTAMP"),
                 ("form_filing_id", "VARCHAR"),
                 ("engagement_partner_id", "VARCHAR"),
                 ("number_of_participants", "DOUBLE"),
@@ -3644,14 +3657,22 @@ def _build_gold_panels_duckdb(
             f"""
             CREATE OR REPLACE TEMP VIEW form_ap_summary_gold AS
             SELECT
-                {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
-                try_cast(date_part('year', {_duckdb_timestamp_expr("fiscal_period_end")})
-                    AS INTEGER) AS fiscal_year,
-                count(DISTINCT form_filing_id)::BIGINT AS form_ap_filing_count,
-                count(DISTINCT engagement_partner_id)::BIGINT AS form_ap_unique_partners,
-                avg(try_cast(number_of_participants AS DOUBLE)) AS form_ap_avg_participants
-            FROM form_ap_event_gold
-            GROUP BY 1, 2
+                f.accession,
+                f.issuer_cik,
+                count(DISTINCT form_ap.form_filing_id)::BIGINT AS form_ap_filing_count,
+                count(DISTINCT form_ap.engagement_partner_id)::BIGINT
+                    AS form_ap_unique_partners,
+                avg(try_cast(form_ap.number_of_participants AS DOUBLE))
+                    AS form_ap_avg_participants
+            FROM filing_model_source_gold f
+            JOIN form_ap_event_gold form_ap
+              ON {_duckdb_cik_expr("form_ap.issuer_cik")} = f.issuer_cik
+             AND try_cast(date_part(
+                    'year',
+                    {_duckdb_timestamp_expr("form_ap.fiscal_period_end")}
+                 ) AS INTEGER) = f.fiscal_year
+             AND {_duckdb_timestamp_expr("form_ap.filing_date")} < f.origin_date
+            GROUP BY f.accession, f.issuer_cik
             """
         )
         for view_name, filename, empty_columns in [
@@ -3838,7 +3859,7 @@ def _build_gold_panels_duckdb(
         has_note_summary = _create_duckdb_note_summary_view(con, silver_dir=silver_dir)
         filing_from = "filing_model_source_gold f"
         joins = [
-            "LEFT JOIN form_ap_summary_gold form_ap USING (issuer_cik, fiscal_year)",
+            "LEFT JOIN form_ap_summary_gold form_ap USING (accession, issuer_cik)",
             "LEFT JOIN filing_partner_prior_gold partner_prior USING (accession)",
         ]
         if has_xbrl_summary:
@@ -4529,17 +4550,42 @@ def build_gold_panels(
         filing = filing.merge(note_summary, on="accession", how="left")
 
     if not form_ap_event.empty:
+        form_ap_event = form_ap_event.copy()
+        for col in [
+            "issuer_cik",
+            "fiscal_period_end",
+            "filing_date",
+            "form_filing_id",
+            "engagement_partner_id",
+            "number_of_participants",
+        ]:
+            if col not in form_ap_event.columns:
+                form_ap_event[col] = pd.NA
         form_ap_event["issuer_cik"] = _normalize_cik_series(form_ap_event["issuer_cik"])
+        form_ap_event["fiscal_period_end"] = pd.to_datetime(
+            form_ap_event["fiscal_period_end"], errors="coerce", format="mixed"
+        )
+        form_ap_event["filing_date"] = pd.to_datetime(
+            form_ap_event["filing_date"], errors="coerce", format="mixed"
+        )
+        form_ap_event["number_of_participants"] = pd.to_numeric(
+            form_ap_event["number_of_participants"], errors="coerce"
+        )
         form_ap_event["fiscal_year"] = form_ap_event["fiscal_period_end"].dt.year.astype("Int64")
-        form_ap_summary = form_ap_event.groupby(["issuer_cik", "fiscal_year"], as_index=False).agg(
+        form_ap_base = filing[["accession", "issuer_cik", "fiscal_year", "origin_date"]].merge(
+            form_ap_event,
+            on=["issuer_cik", "fiscal_year"],
+            how="inner",
+        )
+        form_ap_base = form_ap_base.loc[form_ap_base["filing_date"].lt(form_ap_base["origin_date"])]
+        form_ap_summary = form_ap_base.groupby(["accession", "issuer_cik"], as_index=False).agg(
             form_ap_filing_count=("form_filing_id", "nunique"),
             form_ap_unique_partners=("engagement_partner_id", "nunique"),
             form_ap_avg_participants=("number_of_participants", "mean"),
         )
         filing = filing.merge(
             form_ap_summary,
-            left_on=["issuer_cik", "fiscal_year"],
-            right_on=["issuer_cik", "fiscal_year"],
+            on=["accession", "issuer_cik"],
             how="left",
         )
 
@@ -4668,6 +4714,7 @@ def build_public_lake(
     notes_batch_size: int = DEFAULT_NOTES_BATCH_SIZE,
     fresh_build: bool = False,
     resume: bool = False,
+    config_path: Path | None = None,
 ) -> Dict[str, Path]:
     if engine not in {"pandas", "duckdb"}:
         raise ValueError("engine must be 'pandas' or 'duckdb'")
@@ -4844,6 +4891,13 @@ def build_public_lake(
 
     def metadata_task() -> Dict[str, Path]:
         run_metadata = silver_dir / "public_lake_run_metadata.json"
+        config_paths = [config_path] if config_path is not None else []
+        provenance = {
+            **git_provenance(),
+            **config_provenance(config_paths),
+            **input_provenance(_source_metadata_paths(bronze_dir)),
+            **uv_lock_provenance(),
+        }
         run_metadata.write_text(
             json.dumps(
                 {
@@ -4866,6 +4920,7 @@ def build_public_lake(
                     "fresh_build": bool(fresh_build),
                     "resume": bool(resume),
                     "xbrl_core_tag_scope": "controlled_core_tags",
+                    "provenance": provenance,
                 },
                 indent=2,
                 sort_keys=True,
