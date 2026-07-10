@@ -269,7 +269,7 @@ uv run python scripts/run_construct_overlap.py \
 | --- | --- | --- | --- |
 | Detected-misstatement benchmark core | XGBoost classifier over engineered benchmark predictors | `raw_dataset_misstatement.parquet`, excluding ids, labels, `res_an*`, missingness labels, and post-outcome fields | Timing, drift, and missingness diagnostics on the detected-misstatement label. |
 | Detected-misstatement peer benchmark | Dechow fixed and variable logit, Perols logit/tree/bagging/SVM/stacking/MLP, Bao-style or Bao-inspired ensemble, Bertomeu-style XGBoost | Same benchmark folds and repo-native variable mappings | Model-family transfer and metric-language compatibility, not original-paper numeric replication. |
-| Public cascade core | XGBoost classifier over metadata, XBRL, text/notes, auditor, oversight, and all-feature sets | `issuer_origin_panel` rows with pre-origin public features | Main filing-origin public review-and-correction prediction task. |
+| Public cascade core | XGBoost classifier over metadata, XBRL, auditor, oversight, visibility/history, and all feature sets; notes/disclosure-breadth variables enter `all` only | `issuer_origin_panel` rows with pre-origin public features | Main filing-origin public review-and-correction prediction task. |
 | Public-label peer suite | Dechow variable/fixed mapped variants and Bao-inspired tree ensemble when mapping gates permit | Public issuer-origin feature families | Checks whether familiar model-family vocabularies transfer to the public-label task. |
 | Public-label opacity DML | Double / Debiased Machine Learning (DML) partially linear regressions with cross-fitted nuisance models | `missingness_density_score` and pre-origin controls | Adjusted association between opacity/missingness and public labels, not a causal effect. |
 | Construct-overlap layer | Contingency, top-decile lift, reciprocal ranking, and event-time concentration checks | Raw-only WRDS gvkey-CIK-year bridge, benchmark predictions, public predictions | Tests related but non-identical construct evidence. |
@@ -394,7 +394,7 @@ bridge_tier: high_confidence
 
 - **Benchmark expectation.** Detected-misstatement benchmark performance should be sensitive to timing assumptions, label observability, class balance, and retraining window.
 - **Public-cascade expectation.** Public features should predict later public review-and-correction outcomes above each task's prevalence baseline, especially for comment-thread and amendment/friction labels.
-- **Feature-family expectation.** Metadata is a readiness baseline; XBRL, auditor, oversight, note-opacity, and all-feature models test whether non-metadata public information adds empirical value.
+- **Feature-family expectation.** The reported grid contains metadata, XBRL, auditor, oversight, visibility/history, and all; notes/disclosure-breadth variables enter `all` only, with no standalone text-family ablation.
 - **Overlap expectation.** Detected-misstatement benchmark labels and public labels should show enrichment and reciprocal ranking alignment, but not one-to-one equivalence.
 - **Reporting ownership.** The primary analysis maps to Table 3/Figure 1 only; Table 4/Table 14 grid sensitivities retain alternative feature families and windows; Table 18 attrition owns realized sample construction; the canonical manifest gate precedes the reviewer archive.
 

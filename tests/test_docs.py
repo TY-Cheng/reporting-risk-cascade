@@ -1231,6 +1231,38 @@ def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
 def test_paper_plan_stabilizes_revision_frozen_methods_and_reporting_contract() -> None:
     plan = _read("docs/paper_plan.md")
     normalized_plan = " ".join(plan.split())
+    public_config = _read_yaml("config/public_cascade.yaml")
+
+    configured_families = public_config["analysis"]["feature_sets"]
+    assert configured_families == [
+        "metadata",
+        "xbrl",
+        "auditor",
+        "oversight",
+        "visibility_history",
+        "all",
+    ]
+    display_names = {
+        "metadata": "metadata",
+        "xbrl": "XBRL",
+        "auditor": "auditor",
+        "oversight": "oversight",
+        "visibility_history": "visibility/history",
+        "all": "all",
+    }
+    displayed_families = [display_names[family] for family in configured_families]
+    family_contract = ", ".join(displayed_families[:-1]) + ", and " + displayed_families[-1]
+    model_family_block = plan.split("#### Model Families", maxsplit=1)[1].split(
+        "#### Model Selection and Skip Rules", maxsplit=1
+    )[0]
+    expectation_block = plan.split("#### Expected Evidence Pattern", maxsplit=1)[1].split(
+        "#### Connection to Results Snapshot", maxsplit=1
+    )[0]
+    for block in [model_family_block, expectation_block]:
+        assert family_contract in block
+        assert "notes/disclosure-breadth variables enter `all` only" in block
+        for stale_family in ["text/notes", "note-opacity"]:
+            assert stale_family not in block
 
     required_phrases = [
         "as_of_date=2026-07-06",
