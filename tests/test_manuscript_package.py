@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from scripts.build_manuscript_package import (
+    DML_INTERVAL_NOTE,
     MIN_VALID_FOLDS_FOR_CI,
+    PUBLIC_TASK_NOTE,
     SPARSE_POSITIVE_THRESHOLD,
     _bridge_overlap_matrix,
     _bridge_sample_boundaries,
     _construct_alignment,
     _dispersion_text,
+    _package_primary_identity,
     _public_fold_support,
+    _public_opacity_dml_table,
+    _public_sample_attrition_table,
     _public_task_metrics,
+    _select_primary_public_metrics,
     _task_feature_family_metrics,
 )
 
@@ -45,11 +53,11 @@ def test_public_task_metrics_include_calibration_diagnostics() -> None:
     metrics = pd.DataFrame(
         {
             "task": ["comment_thread"] * MIN_VALID_FOLDS_FOR_CI,
-            "test_year": list(range(2020, 2020 + MIN_VALID_FOLDS_FOR_CI)),
+            "test_year": [2020, 2021, 2022, 2023, 2024],
             "positive_rate_test": [0.2] * MIN_VALID_FOLDS_FOR_CI,
             "n_test": [100] * MIN_VALID_FOLDS_FOR_CI,
             "roc_auc": [0.6] * MIN_VALID_FOLDS_FOR_CI,
-            "pr_auc": [0.3] * MIN_VALID_FOLDS_FOR_CI,
+            "pr_auc": [0.10, 0.30, 0.30, 0.30, 0.30],
             "brier": [0.18] * MIN_VALID_FOLDS_FOR_CI,
             "brier_skill_score": [0.05] * MIN_VALID_FOLDS_FOR_CI,
             "ece": [0.04] * MIN_VALID_FOLDS_FOR_CI,
@@ -59,8 +67,51 @@ def test_public_task_metrics_include_calibration_diagnostics() -> None:
     table = _public_task_metrics(metrics, {"task_positive_counts": {"comment_thread": 100}})
 
     assert table.loc[0, "Panel_Positives"] == "100"
+    assert table.loc[0, "Mean_PR_AUC"] == "0.2600"
+    assert table.loc[0, "Excluding_2020_PR_AUC"] == "0.3000"
+    assert table.loc[0, "Excluding_2020_Delta"] == "0.0400"
     assert table.loc[0, "Mean_Brier_Skill"] == "0.0500"
     assert table.loc[0, "Mean_ECE"] == "0.0400"
+
+
+def test_public_task_note_defines_excluding_2020_test_fold_sensitivity() -> None:
+    assert "all + expanding" in PUBLIC_TASK_NOTE
+    assert "2020 test fold" in PUBLIC_TASK_NOTE
+    assert "training specifications are unchanged" in PUBLIC_TASK_NOTE
+
+
+def test_select_primary_public_metrics_excludes_grid_distractors() -> None:
+    metrics = pd.DataFrame(
+        {
+            "feature_set": ["all", "all", "metadata"],
+            "train_window": ["expanding", "rolling_7y", "expanding"],
+            "task": ["comment_thread"] * 3,
+            "test_year": [2021, 2021, 2021],
+            "pr_auc": [0.30, 0.90, 0.80],
+        }
+    )
+    summary = {
+        "primary_specification": {"feature_set": "all", "train_window": "expanding"}
+    }
+
+    selected = _select_primary_public_metrics(metrics, summary)
+
+    assert selected[["feature_set", "train_window", "pr_auc"]].to_dict("records") == [
+        {"feature_set": "all", "train_window": "expanding", "pr_auc": 0.30}
+    ]
+
+
+def test_primary_public_package_identity_records_summary_contract() -> None:
+    identity = _package_primary_identity(
+        {"primary_specification": {"feature_set": "all", "train_window": "expanding"}}
+    )
+
+    assert identity == {
+        "primary_public_specification": {
+            "feature_set": "all",
+            "train_window": "expanding",
+        }
+    }
 
 
 def test_public_fold_support_marks_sparse_folds() -> None:
@@ -133,6 +184,7 @@ def test_construct_alignment_reports_absolute_precision_and_fdr(tmp_path) -> Non
             "top_decile_lift_ci_high": [2.8],
             "metric_status": ["fit"],
             "bridge_source": ["wrds"],
+            "is_primary": [True],
         }
     ).to_csv(overlap_dir / "public_score_benchmark_ranking.csv", index=False)
     pd.DataFrame(
@@ -156,6 +208,7 @@ def test_construct_alignment_reports_absolute_precision_and_fdr(tmp_path) -> Non
             "top_decile_lift_ci_high": [2.5],
             "metric_status": ["fit"],
             "bridge_source": ["wrds"],
+            "is_primary": [True],
         }
     ).to_csv(overlap_dir / "reciprocal_alignment.csv", index=False)
 
@@ -166,6 +219,145 @@ def test_construct_alignment_reports_absolute_precision_and_fdr(tmp_path) -> Non
     assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "N"].item() == "100"
     assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "Top_10pct_K"].item() == "10"
     assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "Top_10pct_Hits"].item() == "1"
+
+
+def test_construct_alignment_uses_is_primary_not_maximum_lift(tmp_path: Path) -> None:
+    overlap_dir = tmp_path / "construct_overlap"
+    overlap_dir.mkdir()
+    common = {
+        "bridge_tier": "high_confidence",
+        "metric_status": "fit",
+        "bridge_source": "wrds",
+        "roc_auc": 0.70,
+        "pr_auc": 0.04,
+        "top_1pct_precision": 0.10,
+        "top_5pct_precision": 0.08,
+        "top_10pct_precision": 0.06,
+        "top_decile_lift_ci_low": 1.20,
+        "top_decile_lift_ci_high": 2.80,
+    }
+    pd.DataFrame(
+        [
+            {
+                **common,
+                "model_id": "public_cascade",
+                "task": "8k_402",
+                "feature_set": "all",
+                "train_window": "expanding",
+                "label_mode": "benchmark_naive",
+                "score_aggregation": "mean",
+                "n_benchmark_positives_in_overlap": 10,
+                "n_benchmark_negatives_in_overlap": 90,
+                "top_decile_lift": 2.0,
+                "is_primary": True,
+            },
+            {
+                **common,
+                "model_id": "public_cascade",
+                "task": "8k_402",
+                "feature_set": "all",
+                "train_window": "rolling_7y",
+                "label_mode": "benchmark_naive",
+                "score_aggregation": "mean",
+                "n_benchmark_positives_in_overlap": 10,
+                "n_benchmark_negatives_in_overlap": 90,
+                "top_decile_lift": 9.0,
+                "is_primary": False,
+            },
+        ]
+    ).to_csv(overlap_dir / "public_score_benchmark_ranking.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                **common,
+                "model_id": "benchmark_xgb",
+                "target_public_label": "label_8k_402_365",
+                "feature_set": "benchmark_all",
+                "train_window": "expanding",
+                "label_mode": "naive",
+                "score_aggregation": "benchmark_score",
+                "n_public_positives_in_overlap": 20,
+                "n_public_negatives_in_overlap": 180,
+                "top_decile_lift": 1.8,
+                "is_primary": True,
+            },
+            {
+                **common,
+                "model_id": "benchmark_xgb",
+                "target_public_label": "label_8k_402_365",
+                "feature_set": "benchmark_all",
+                "train_window": "rolling_7y",
+                "label_mode": "naive",
+                "score_aggregation": "benchmark_score",
+                "n_public_positives_in_overlap": 20,
+                "n_public_negatives_in_overlap": 180,
+                "top_decile_lift": 8.0,
+                "is_primary": False,
+            },
+        ]
+    ).to_csv(overlap_dir / "reciprocal_alignment.csv", index=False)
+
+    table = _construct_alignment(tmp_path)
+
+    assert set(table["Window"]) == {"expanding"}
+    assert set(table["Top_Decile_Lift"]) == {"2.0000", "1.8000"}
+
+
+def test_public_sample_attrition_preserves_sequence_and_task_branches() -> None:
+    summary = {
+        "sample_attrition": [
+            {"stage": "source_issuer_origin", "n_rows": 100, "task": "all"},
+            {"stage": "fiscal_year_2011_2024", "n_rows": 80, "task": "all"},
+            {"stage": "domestic_us_gaap_proxy", "n_rows": 75, "task": "all"},
+            {"stage": "observable_365_day_horizon", "n_rows": 70, "task": "all"},
+            {"stage": "eligible_comment_thread", "n_rows": 68, "task": "comment_thread"},
+            {"stage": "eligible_amendment", "n_rows": 69, "task": "amendment"},
+            {"stage": "eligible_8k_402", "n_rows": 65, "task": "8k_402"},
+        ]
+    }
+
+    table = _public_sample_attrition_table(summary).set_index("Stage")
+
+    assert table.loc["source_issuer_origin", "Dropped_From_Parent"] == 0
+    assert table.loc["fiscal_year_2011_2024", "Dropped_From_Parent"] == 20
+    assert table.loc["observable_365_day_horizon", "Dropped_From_Parent"] == 5
+    assert table.loc["eligible_comment_thread", "Dropped_From_Parent"] == 2
+    assert table.loc["eligible_amendment", "Dropped_From_Parent"] == 1
+    assert table.loc["eligible_8k_402", "Dropped_From_Parent"] == 5
+
+
+def test_public_opacity_dml_displays_explicit_dimensions_and_nan(tmp_path: Path) -> None:
+    cascade_dir = tmp_path / "public_cascade"
+    cascade_dir.mkdir()
+    pd.DataFrame(
+        {
+            "outcome": ["comment_thread", "amendment"],
+            "status": ["fit", "skipped_one_class_or_too_small"],
+            "n_obs": [100, 100],
+            "prevalence": [0.10, 0.00],
+            "coef": [0.02, float("nan")],
+            "std_err": [0.01, float("nan")],
+            "p_value": [0.05, float("nan")],
+            "n_raw_controls": [60, 60],
+            "n_encoded_controls": [64, float("nan")],
+            "n_opacity_components": [17, 17],
+        }
+    ).to_csv(cascade_dir / "public_opacity_dml.csv", index=False)
+
+    table = _public_opacity_dml_table(tmp_path)
+
+    assert table[["Raw_Controls", "Encoded_Controls", "Opacity_Components"]].to_dict(
+        "records"
+    ) == [
+        {"Raw_Controls": "60", "Encoded_Controls": "64", "Opacity_Components": "17"},
+        {"Raw_Controls": "60", "Encoded_Controls": "", "Opacity_Components": "17"},
+    ]
+    assert DML_INTERVAL_NOTE == (
+        "Raw controls are source variables before encoding; encoded controls are nuisance-model "
+        "columns after categorical expansion and imputation; opacity components form the "
+        "missingness-density treatment. Intervals use HC3 residual OLS after cross-fitting. "
+        "The estimates are adjusted associations, not identified structural effects."
+    )
 
 
 def test_bridge_sample_boundaries_reports_shares_and_interpretations(tmp_path) -> None:

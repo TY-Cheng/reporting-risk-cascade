@@ -72,15 +72,16 @@ PEER_TRANSFER_NOTE = (
     "compared across evidence layers."
 )
 DML_INTERVAL_NOTE = (
-    "The current public-opacity artifact reports 17 missingness or source-coverage "
-    "components and 65 post-encoding design columns after categorical expansion; "
-    "the accompanying metadata lists the raw controls used to construct that design. "
-    "Intervals equal coefficient plus or minus 1.96 times the HC3 OLS standard "
-    "error after cross-fitted residualization. The estimates are adjusted "
-    "associations, not identified structural estimates."
+    "Raw controls are source variables before encoding; encoded controls are nuisance-model "
+    "columns after categorical expansion and imputation; opacity components form the "
+    "missingness-density treatment. Intervals use HC3 residual OLS after cross-fitting. "
+    "The estimates are adjusted associations, not identified structural effects."
 )
 PUBLIC_TASK_NOTE = (
     ANNUAL_INTERVAL_NOTE
+    + " Table 3 and Figure 1 report only the revision-frozen all + expanding primary "
+    "specification. The excluding-2020 sensitivity excludes the 2020 test fold; "
+    "training specifications are unchanged."
     + " The evaluation unit is a public-cascade task summarized over annual "
     "out-of-time folds at the issuer-CIK fiscal-year origin grain. "
     + "Panel positives aggregate task positives over evaluation-year support, while mean "
@@ -143,6 +144,11 @@ SELECTION_PROFILE_NOTE = (
     "XBRL asset values; days since prior filing refers to any prior EDGAR filing, "
     "not only a prior annual report. The table is selection-aware evidence, not a causal "
     "adjustment model or proof that SEC scrutiny selection has been solved."
+)
+PUBLIC_ATTRITION_NOTE = (
+    "Sequential rows compare with the preceding sample-construction stage. Task rows "
+    "branch from observable_365_day_horizon and therefore compare with that common "
+    "observable parent rather than with one another."
 )
 
 
@@ -473,9 +479,75 @@ def _public_lake_scale(report: dict[str, Any]) -> pd.DataFrame:
     )
 
 
+def _package_primary_identity(public_summary: dict[str, Any]) -> dict[str, Any]:
+    primary = dict(public_summary.get("primary_specification", {}))
+    if set(primary) != {"feature_set", "train_window"}:
+        raise ValueError("public primary specification is missing or malformed")
+    return {"primary_public_specification": primary}
+
+
+def _select_primary_public_metrics(
+    metrics: pd.DataFrame,
+    summary: dict[str, Any],
+) -> pd.DataFrame:
+    primary = dict(summary.get("primary_specification", {}))
+    required = {"feature_set", "train_window"}
+    if set(primary) != required:
+        raise ValueError("public primary specification is missing or malformed")
+    selected = metrics.loc[
+        metrics["feature_set"].eq(primary["feature_set"])
+        & metrics["train_window"].eq(primary["train_window"])
+    ].copy()
+    if selected.empty:
+        raise ValueError("public primary specification produced no metric rows")
+    if selected.duplicated(["task", "test_year"]).any():
+        raise ValueError("public primary specification duplicated task-year rows")
+    return selected
+
+
+def _public_sample_attrition_table(summary: dict[str, Any]) -> pd.DataFrame:
+    attrition = summary["sample_attrition"]
+    observable_parent = next(
+        int(row["n_rows"])
+        for row in attrition
+        if row["stage"] == "observable_365_day_horizon"
+    )
+    rows: list[dict[str, Any]] = []
+    previous_sequential: int | None = None
+    for row in attrition:
+        count = int(row["n_rows"])
+        task = str(row["task"])
+        if task == "all":
+            dropped = 0 if previous_sequential is None else previous_sequential - count
+            previous_sequential = count
+            scope = "sequential"
+        else:
+            dropped = observable_parent - count
+            scope = "task"
+        rows.append(
+            {
+                "Scope": scope,
+                "Stage": str(row["stage"]),
+                "Task": task,
+                "Rows": count,
+                "Dropped_From_Parent": dropped,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _public_task_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.DataFrame:
     positives = summary.get("task_positive_counts", {})
     uncertainty = _annual_metric_summary(metrics, ["task"])
+    excluding_2020_summary = _annual_metric_summary(
+        metrics.loc[pd.to_numeric(metrics["test_year"], errors="coerce").ne(2020)],
+        ["task"],
+    )
+    excluding_2020 = (
+        excluding_2020_summary.set_index("task")["mean"].to_dict()
+        if "mean" in excluding_2020_summary
+        else {}
+    )
     grouped = (
         metrics.groupby("task", dropna=False)
         .agg(
@@ -489,13 +561,19 @@ def _public_task_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.D
     )
     grouped = grouped.merge(uncertainty, on="task", how="left")
     grouped = grouped.sort_values("mean", ascending=False)
+    grouped["Mean_PR_AUC"] = grouped["mean"]
+    grouped["Excluding_2020_PR_AUC"] = grouped["task"].map(excluding_2020)
+    grouped["Excluding_2020_Delta"] = (
+        grouped["Excluding_2020_PR_AUC"] - grouped["Mean_PR_AUC"]
+    )
     grouped.insert(1, "Panel_Positives", grouped["task"].map(positives))
     grouped = grouped.rename(columns={"task": "Task"})
-    grouped["Mean_PR_AUC"] = grouped["mean"]
     grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
     for col in [
         "Mean_Prevalence",
         "Mean_PR_AUC",
+        "Excluding_2020_PR_AUC",
+        "Excluding_2020_Delta",
         "Mean_ROC_AUC",
         "Mean_Brier",
         "Mean_Brier_Skill",
@@ -692,12 +770,29 @@ def _top_decile_support(n_pos: Any, n_neg: Any, precision: Any) -> dict[str, Any
     }
 
 
+def _primary_alignment_row(frame: pd.DataFrame, *, direction: str) -> pd.Series:
+    if "is_primary" not in frame:
+        raise ValueError(f"{direction} alignment is missing is_primary")
+    selected = frame.loc[frame["is_primary"].astype(bool)]
+    if len(selected) != 1:
+        raise ValueError(f"{direction} alignment requires exactly one primary row")
+    return selected.iloc[0]
+
+
 def _construct_alignment(study_dir: Path) -> pd.DataFrame:
     public_to_benchmark = _read_csv(study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv")
     benchmark_to_public = _read_csv(study_dir / "construct_overlap" / "reciprocal_alignment.csv")
+    public_primary = _primary_alignment_row(
+        public_to_benchmark,
+        direction="public-to-benchmark",
+    )
+    benchmark_primary = _primary_alignment_row(
+        benchmark_to_public,
+        direction="benchmark-to-public",
+    )
     rows: list[dict[str, Any]] = []
     if not public_to_benchmark.empty:
-        best = public_to_benchmark.sort_values("top_decile_lift", ascending=False).iloc[0]
+        best = public_primary
         support = _top_decile_support(
             best.get("n_benchmark_positives_in_overlap"),
             best.get("n_benchmark_negatives_in_overlap"),
@@ -725,7 +820,7 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
             }
         )
     if not benchmark_to_public.empty:
-        best = benchmark_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
+        best = benchmark_primary
         support = _top_decile_support(
             best.get("n_public_positives_in_overlap"),
             best.get("n_public_negatives_in_overlap"),
@@ -987,6 +1082,13 @@ def _public_opacity_dml_table(study_dir: Path) -> pd.DataFrame:
     dml["P_Value"] = pd.to_numeric(dml.get("p_value"), errors="coerce").map(_fmt)
     dml["N_Obs"] = pd.to_numeric(dml.get("n_obs"), errors="coerce").map(_fmt)
     dml["Prevalence"] = pd.to_numeric(dml.get("prevalence"), errors="coerce").map(_fmt)
+    for source, target in [
+        ("n_raw_controls", "Raw_Controls"),
+        ("n_encoded_controls", "Encoded_Controls"),
+        ("n_opacity_components", "Opacity_Components"),
+    ]:
+        values = pd.to_numeric(dml[source], errors="coerce")
+        dml[target] = values.map(lambda value: str(int(value)) if pd.notna(value) else "")
     dml["Outcome"] = dml["outcome"]
     dml["Status"] = dml["status"]
     return dml
@@ -1167,10 +1269,12 @@ def _result_narrative(
     construct_alignment: pd.DataFrame,
     construct_manifest: dict[str, Any],
 ) -> str:
-    best_public = (
-        f"{public_summary.get('best_feature_set')} + {public_summary.get('best_train_window')}"
+    primary_public = _package_primary_identity(public_summary)[
+        "primary_public_specification"
+    ]
+    primary_public_label = (
+        f"{primary_public['feature_set']} + {primary_public['train_window']}"
     )
-    best_public_pr = _fmt(public_summary.get("best_mean_pr_auc"))
     comment_row = public_task[public_task["Task"].eq("comment_thread")].head(1)
     amendment_row = public_task[public_task["Task"].eq("amendment")].head(1)
     severe_row = public_task[public_task["Task"].eq("8k_402")].head(1)
@@ -1199,10 +1303,10 @@ def _result_narrative(
         "",
         "## Main Public-Cascade Result",
         "",
-        f"The highest reported public-cascade configuration in the public-cascade summary "
-        f"is `{best_public}`, with mean PR-AUC `{best_public_pr}`. This configuration-level "
-        "number is distinct from feature-family summaries that average over tasks and "
-        "training windows. The public tasks show a natural severity gradient. "
+        f"The revision-frozen primary specification for public-cascade headlines is "
+        f"`{primary_public_label}`. Its task-level results are distinct from feature-family "
+        "summaries that average over tasks and training windows. The public tasks show a "
+        "natural severity gradient. "
         "Comment-thread scrutiny is the broadest public-scrutiny "
         f"signal (mean PR-AUC `{value(comment_row, 'Mean_PR_AUC')}`), amendments provide "
         f"a clear correction/friction channel (mean PR-AUC `{value(amendment_row, 'Mean_PR_AUC')}`), "
@@ -1223,10 +1327,10 @@ def _result_narrative(
         "## Construct-Overlap Evidence",
         "",
         "The WRDS-validated bridge shows that public-cascade scores and detected-"
-        "misstatement benchmark labels are related but non-identical. The highest-lift "
-        "public-score-to-benchmark-positive row and the highest-lift reciprocal "
-        "detected-misstatement-score-to-public-label row both show top-decile lift "
-        "above one, supporting construct relatedness. "
+        "misstatement benchmark labels are related but non-identical. The revision-frozen "
+        "primary public-score-to-benchmark-positive row and reciprocal detected-"
+        "misstatement-score-to-public-label row are the two directional diagnostics "
+        "reported in Table 9 and Figure 5. "
         f"The validation tier is `{validation_tier}`; this supports manuscript-grade "
         "integrated overlap claims while preserving the related-but-non-identical "
         "construct boundary.",
@@ -1286,9 +1390,11 @@ def main() -> None:
     public_peer_metrics = _read_csv(
         study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
     )
+    public_primary_metrics = _select_primary_public_metrics(public_metrics, public_summary)
 
     public_lake = _public_lake_scale(_latest_public_lake_report())
-    public_task = _public_task_metrics(public_metrics, public_summary)
+    public_task = _public_task_metrics(public_primary_metrics, public_summary)
+    public_sample_attrition = _public_sample_attrition_table(public_summary)
     public_fold_support = _public_fold_support(public_task_status)
     feature_family = _feature_family_metrics(public_metrics, public_summary)
     task_feature_family = _task_feature_family_metrics(public_metrics)
@@ -1303,7 +1409,7 @@ def main() -> None:
     public_opacity_dml = _public_opacity_dml_table(study_dir)
     component_status = _component_status(manifest)
 
-    public_task_folds = _annual_fold_frame(public_metrics, ["task"])
+    public_task_folds = _annual_fold_frame(public_primary_metrics, ["task"])
     feature_family_folds = _annual_fold_frame(public_metrics, ["feature_set"])
     benchmark_peer_folds = _annual_fold_frame(benchmark_peer_metrics, ["peer_model_id"])
     public_peer_folds = _annual_fold_frame(public_peer_metrics, ["peer_model_id"])
@@ -1339,6 +1445,8 @@ def main() -> None:
                     "valid_folds",
                     "Mean_Prevalence",
                     "Mean_PR_AUC",
+                    "Excluding_2020_PR_AUC",
+                    "Excluding_2020_Delta",
                     "PR_AUC_Dispersion",
                     "Mean_ROC_AUC",
                     "Mean_Brier",
@@ -1536,6 +1644,14 @@ def main() -> None:
             label="tab:selection-profile",
             note=SELECTION_PROFILE_NOTE,
         )
+    table_manifest["table_18_public_sample_attrition"] = _write_table_bundle(
+        public_sample_attrition,
+        out_dir=tables_dir,
+        stem="table_18_public_sample_attrition",
+        caption="Public sample attrition and task eligibility",
+        label="tab:public-sample-attrition",
+        note=PUBLIC_ATTRITION_NOTE,
+    )
     if not public_opacity_dml.empty:
         table_manifest["table_12_public_opacity_dml"] = _write_table_bundle(
             public_opacity_dml,
@@ -1546,7 +1662,19 @@ def main() -> None:
             note=DML_INTERVAL_NOTE,
             display_df=_table_view(
                 public_opacity_dml,
-                ["Outcome", "Status", "N_Obs", "Prevalence", "Coef", "Std_Err", "CI_95", "P_Value"],
+                [
+                    "Outcome",
+                    "Status",
+                    "N_Obs",
+                    "Prevalence",
+                    "Raw_Controls",
+                    "Encoded_Controls",
+                    "Opacity_Components",
+                    "Coef",
+                    "Std_Err",
+                    "CI_95",
+                    "P_Value",
+                ],
             ),
         )
 
@@ -1614,6 +1742,7 @@ def main() -> None:
     )
 
     package_manifest = {
+        **_package_primary_identity(public_summary),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "study_dir": _rel(study_dir),
         "out_dir": _rel(out_dir),
