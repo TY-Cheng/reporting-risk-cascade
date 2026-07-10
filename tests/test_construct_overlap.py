@@ -251,7 +251,10 @@ def _write_toy_study(
     write_table(pd.DataFrame(benchmark_predictions), benchmark / "rolling_predictions.parquet")
     write_table(pd.DataFrame(public_rows), public_panel)
     write_table(pd.DataFrame(public_predictions), cascade / "public_cascade_predictions.parquet")
-    write_table(pd.DataFrame(peer_predictions), peer / "detected_misstatement_model_family_predictions.parquet")
+    write_table(
+        pd.DataFrame(peer_predictions),
+        peer / "detected_misstatement_model_family_predictions.parquet",
+    )
     pd.DataFrame(crosswalk_rows).to_csv(crosswalk, index=False)
     if with_opacity:
         pd.DataFrame(
@@ -533,6 +536,136 @@ def test_four_source_semicolon_aggregation_is_wrds_validated(tmp_path: Path) -> 
     )
 
 
+def test_crossed_raw_and_normalized_wrds_sources_are_rejected(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "crossed_sources.csv"
+    row = _valid_raw_bridge_row()
+    row["source"] = "wrds_sec_analytics_cik_gvkey:capital_iq"
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
+@pytest.mark.parametrize(
+    ("normalized_sources", "raw_sources"),
+    [
+        (
+            "wrds_sec_analytics_cik_gvkey:compustat_company;"
+            "wrds_sec_analytics_cik_gvkey:capital_iq",
+            "Compustat Company",
+        ),
+        (
+            "wrds_sec_analytics_cik_gvkey:compustat_company",
+            "Compustat Company;Capital IQ",
+        ),
+        (
+            "wrds_sec_analytics_cik_gvkey:compustat_company;"
+            "wrds_sec_analytics_cik_gvkey:compustat_security",
+            "Compustat Company;Capital IQ",
+        ),
+    ],
+    ids=["missing-raw-pair", "extra-raw-pair", "multi-token-set-mismatch"],
+)
+def test_wrds_source_pair_sets_must_match_exactly(
+    tmp_path: Path,
+    normalized_sources: str,
+    raw_sources: str,
+) -> None:
+    crosswalk = tmp_path / "mismatched_source_sets.csv"
+    row = _valid_raw_bridge_row()
+    row["source"] = normalized_sources
+    row["raw_link_sources"] = raw_sources
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
+def test_drawbridge_external_source_remains_candidate_external(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "drawbridge_external.csv"
+    row = {
+        **_valid_raw_bridge_row(),
+        "source": "drawbridge_external",
+        "source_version": "external 2026-05-01",
+        "match_method": "external_date_range",
+        "match_score": "",
+        "bridge_priority": "external_supplement",
+        "bridge_origin": "external",
+        "raw_link_sources": "",
+        "raw_link_descs": "",
+    }
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    evidence = _bridge_evidence_from_crosswalk(crosswalk)
+
+    assert evidence["bridge_source"] == "drawbridge_external"
+    assert evidence["validation_tier"] == "candidate_external"
+
+
+def test_unknown_provenance_like_column_is_rejected(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "unknown_provenance_column.csv"
+    row = {
+        **_valid_raw_bridge_row(),
+        "provenance_source_extra": "external_unverified_crosswalk",
+    }
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
+def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "business_column.csv"
+    row = {
+        **_valid_raw_bridge_row(),
+        "business_source_extra": "external_unverified_crosswalk",
+    }
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    evidence = _bridge_evidence_from_crosswalk(crosswalk)
+
+    assert evidence["validation_tier"] == "wrds_validated"
+
+
+@pytest.mark.parametrize(
+    ("field", "attempted_value"),
+    [
+        ("source", "  COMPUSTAT_COMPANY  "),
+        ("source_version", "  Generic Compustat  "),
+        ("match_method", "  Capital_IQ  "),
+        ("match_score", "  WRDS  "),
+        ("bridge_priority", "wrds_primary"),
+        ("bridge_priority", "  WRDS_Primary  "),
+        ("bridge_origin", "  RAW_candidate  "),
+        ("bridge_origin", "  WRDS  "),
+        ("raw_link_sources", "  CRSP_COMPUSTAT_MERGED  "),
+        ("raw_link_descs", "  Generic Compustat  "),
+    ],
+)
+def test_attempted_wrds_provenance_in_every_known_field_fails_closed(
+    tmp_path: Path,
+    field: str,
+    attempted_value: str,
+) -> None:
+    crosswalk = tmp_path / "attempted_wrds_provenance.csv"
+    row = {
+        **_valid_raw_bridge_row(),
+        "source": "external_cik_gvkey",
+        "source_version": "external 2026-05-01",
+        "match_method": "external_date_range",
+        "match_score": "",
+        "bridge_priority": "external_supplement",
+        "bridge_origin": "external",
+        "raw_link_sources": "",
+        "raw_link_descs": "",
+    }
+    row[field] = attempted_value
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
 def test_mixed_raw_and_external_crosswalk_is_rejected(tmp_path: Path) -> None:
     crosswalk = tmp_path / "mixed_crosswalk.csv"
     external = {
@@ -640,7 +773,9 @@ def test_partial_or_forged_wrds_provenance_is_rejected(
         _bridge_evidence_from_crosswalk(crosswalk)
 
 
-def test_external_crosswalk_without_wrds_provenance_reports_candidate_source(tmp_path: Path) -> None:
+def test_external_crosswalk_without_wrds_provenance_reports_candidate_source(
+    tmp_path: Path,
+) -> None:
     crosswalk = tmp_path / "external_crosswalk.csv"
     pd.DataFrame(
         [
@@ -828,10 +963,7 @@ def test_bootstrap_union_includes_primary_outside_top_five(
         bootstrap_reps=1000,
     )
 
-    assert all(
-        pd.notna(finalized[idx]["top_decile_lift_ci_low"])
-        for idx in [0, 1, 2, 3, 4, 6]
-    )
+    assert all(pd.notna(finalized[idx]["top_decile_lift_ci_low"]) for idx in [0, 1, 2, 3, 4, 6])
     assert pd.isna(finalized[5].get("top_decile_lift_ci_low", np.nan))
 
 

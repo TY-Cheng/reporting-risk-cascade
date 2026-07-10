@@ -927,37 +927,62 @@ def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifac
     assert results.count("- **ARS claim.**") == len(fixture["tables"]) + len(fixture["figures"])
 
 
+@pytest.mark.parametrize(
+    ("component_tier", "artifact_tier", "expected_tier"),
+    [
+        ("candidate_external", "candidate_external", "candidate_external"),
+        (None, None, "none"),
+        (
+            "wrds_validated",
+            "candidate_external",
+            "component=wrds_validated; manifest=candidate_external",
+        ),
+        (
+            "candidate_external",
+            "wrds_validated",
+            "component=candidate_external; manifest=wrds_validated",
+        ),
+    ],
+    ids=["candidate", "missing", "validated-component-only", "validated-artifact-only"],
+)
 def test_candidate_bridge_snapshot_is_noncanonical_and_nonassertive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    component_tier: str | None,
+    artifact_tier: str | None,
+    expected_tier: str,
 ) -> None:
     fixture = _write_snapshot_fixture(tmp_path)
     study_manifest_path = fixture["study_dir"] / "study_run_manifest.json"
     study_manifest = json.loads(study_manifest_path.read_text(encoding="utf-8"))
-    study_manifest["components"]["construct_overlap"]["validation_tier"] = "candidate_external"
+    study_manifest["components"]["construct_overlap"]["validation_tier"] = component_tier
     study_manifest["claim_maturity"]["construct_alignment"] = "supporting"
     _write_json(study_manifest_path, study_manifest)
     construct_manifest_path = (
         fixture["study_dir"] / "construct_overlap" / "construct_overlap_manifest.json"
     )
     construct_manifest = json.loads(construct_manifest_path.read_text(encoding="utf-8"))
-    construct_manifest["validation_tier"] = "candidate_external"
+    construct_manifest["validation_tier"] = artifact_tier
     _write_json(construct_manifest_path, construct_manifest)
 
     results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
     normalized = " ".join(results.lower().split())
 
     assert "| Canonical status | `NON-CANONICAL` |" in results
-    assert "construct component validation tier is not `wrds_validated`" in results
-    assert "construct manifest validation tier is not `wrds_validated`" in results
-    assert "candidate_external" in results
+    if component_tier != "wrds_validated":
+        assert "construct component validation tier is not `wrds_validated`" in results
+    if artifact_tier != "wrds_validated":
+        assert "construct manifest validation tier is not `wrds_validated`" in results
+    assert expected_tier in results
     assert "diagnostic" in normalized
     assert "deferred" in normalized
     assert "construct-overlap headline claims are deferred" in normalized
+    assert "lift above one is a numeric pattern in the diagnostic rows" in normalized
+    assert "cross-construct claim is deferred" in normalized
+    assert "lift above one shows enrichment" not in normalized
     assert (
         "headline claims should describe filing-origin measurement, prevalence-aware ranking, "
-        "and construct overlap"
-        not in normalized
+        "and construct overlap" not in normalized
     )
     for forbidden in [
         "confirmed wrds",

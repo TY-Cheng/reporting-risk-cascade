@@ -7,6 +7,7 @@ artifacts; it does not rebuild the public lake or refit models.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -19,6 +20,7 @@ from . import DATA_DIR, PROJECT_ROOT
 from .linkage import (
     DEFAULT_LINKAGE_OUT_DIR,
     WRDS_PROVENANCE_TOKEN_ALLOWLISTS,
+    WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE,
     WRDS_VALIDATED_TIER,
 )
 from .ranking_metrics import matlab_round_positive
@@ -56,6 +58,24 @@ BOOTSTRAP_CHUNK_REPS = 100
 MIN_RANKING_POSITIVES = 10
 BOOTSTRAP_POSITIVE_THRESHOLD = 30
 BRIDGE_PROVENANCE_COLUMNS = list(WRDS_PROVENANCE_TOKEN_ALLOWLISTS)
+BRIDGE_PROVENANCE_SCAN_COLUMNS = [*BRIDGE_PROVENANCE_COLUMNS, "extracted_at"]
+
+
+def _is_unknown_provenance_column(column: object) -> bool:
+    name = str(column).strip().lower()
+    if name in BRIDGE_PROVENANCE_SCAN_COLUMNS:
+        return False
+    return name.startswith(("provenance_", "bridge_", "raw_link_", "source_", "match_"))
+
+
+def _attempts_wrds_provenance(column: str, value: object) -> bool:
+    text = str(value).strip()
+    if not text:
+        return False
+    if column in {"raw_link_sources", "raw_link_descs"}:
+        return True
+    words = set(re.findall(r"[a-z0-9]+", text.casefold()))
+    return bool(words & {"wrds", "compustat", "raw"}) or {"capital", "iq"} <= words
 
 
 def _utc_now() -> str:
@@ -172,7 +192,15 @@ def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
         raise ValueError("crosswalk is empty") from None
     if sample.empty:
         raise ValueError("crosswalk is empty")
-    available = [col for col in BRIDGE_PROVENANCE_COLUMNS if col in sample.columns]
+    unknown_provenance_columns = [
+        col for col in sample.columns if _is_unknown_provenance_column(col)
+    ]
+    if unknown_provenance_columns:
+        raise ValueError(
+            "WRDS bridge provenance failed closed at unknown field(s): "
+            + ", ".join(sorted(unknown_provenance_columns))
+        )
+    available = [col for col in BRIDGE_PROVENANCE_SCAN_COLUMNS if col in sample.columns]
     if not available:
         return {
             "bridge_source": "external_crosswalk_unknown_provenance",
@@ -201,23 +229,9 @@ def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
         "raw_link_description_values": values("raw_link_descs"),
     }
     raw_claim = any(
-        (
-            "wrds" in str(row["source"]).lower()
-            or "raw" in str(row["source"]).lower()
-            or "wrds" in str(row["source_version"]).lower()
-            or "raw" in str(row["source_version"]).lower()
-            or "wrds" in str(row["match_method"]).lower()
-            or "raw" in str(row["match_method"]).lower()
-            or "raw" in str(row["bridge_priority"]).lower()
-            or "raw" in str(row["bridge_origin"]).lower()
-            or any(
-                token in WRDS_PROVENANCE_TOKEN_ALLOWLISTS["raw_link_sources"]
-                for token in tokens(row["source"])
-            )
-            or bool(str(row["raw_link_sources"]).strip())
-            or bool(str(row["raw_link_descs"]).strip())
-        )
+        _attempts_wrds_provenance(column, row.get(column, ""))
         for _, row in frame.iterrows()
+        for column in BRIDGE_PROVENANCE_SCAN_COLUMNS
     )
 
     if not raw_claim:
@@ -237,6 +251,17 @@ def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
                     "WRDS bridge provenance failed closed at "
                     f"row {index}, field {column}: {row[column]!r}"
                 )
+        normalized_sources = set(tokens(row["source"]))
+        raw_sources = set(tokens(row["raw_link_sources"]))
+        expected_sources = {
+            WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE[raw_source] for raw_source in raw_sources
+        }
+        if normalized_sources != expected_sources:
+            raise ValueError(
+                "WRDS bridge provenance failed closed at "
+                f"row {index}, fields source/raw_link_sources: "
+                f"{row['source']!r} / {row['raw_link_sources']!r}"
+            )
 
     return {
         "bridge_source": "wrds_sec_analytics_cik_gvkey_link",
@@ -255,7 +280,9 @@ def _update_study_manifest_for_construct_overlap(
     if not path.exists():
         return
     study_manifest = _read_manifest(study_dir)
-    manifest_inputs = manifest.get("inputs", {}) if isinstance(manifest.get("inputs"), dict) else {}
+    manifest_inputs = (
+        manifest.get("inputs", {}) if isinstance(manifest.get("inputs"), dict) else {}
+    )
     if manifest_inputs:
         inputs = study_manifest.setdefault("inputs", {})
         for key in ["crosswalk", "issuer_origin_panel"]:
@@ -428,8 +455,7 @@ def _setup_base_tables(
         """
     )
     label_exprs = ",\n".join(
-        f'COALESCE(MAX(TRY_CAST("{label}" AS INTEGER)), 0) AS "{label}"'
-        for label in PUBLIC_LABELS
+        f'COALESCE(MAX(TRY_CAST("{label}" AS INTEGER)), 0) AS "{label}"' for label in PUBLIC_LABELS
     )
     con.execute(
         f"""
@@ -549,7 +575,11 @@ def _write_overlap_core(con: Any, out_dir: Path) -> pd.DataFrame:
     )
     extra = pd.DataFrame(
         [
-            {"bridge_tier": "full_raw", "rows": len(panel), "benchmark_positives": panel["benchmark_label"].sum()},
+            {
+                "bridge_tier": "full_raw",
+                "rows": len(panel),
+                "benchmark_positives": panel["benchmark_label"].sum(),
+            },
         ]
     )
     _write_csv(pd.concat([extra, flow], ignore_index=True), out_dir / "overlap_sample_flow.csv")
@@ -599,16 +629,26 @@ def _write_overlap_core(con: Any, out_dir: Path) -> pd.DataFrame:
 def _label_contingency(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for bridge_tier in ["high_confidence", "ambiguous", "all_matched"]:
-        sample = panel if bridge_tier == "all_matched" else panel.loc[panel["bridge_tier"].eq(bridge_tier)]
+        sample = (
+            panel
+            if bridge_tier == "all_matched"
+            else panel.loc[panel["bridge_tier"].eq(bridge_tier)]
+        )
         sample = sample.loc[sample["bridge_tier"].ne("dropped")]
         for label in PUBLIC_LABELS:
             benchmark = sample["benchmark_label"].eq(1)
             public = sample[label].eq(1)
             n = len(sample)
-            public_rate_benchmark_pos = float(public[benchmark].mean()) if benchmark.any() else np.nan
-            public_rate_benchmark_neg = float(public[~benchmark].mean()) if (~benchmark).any() else np.nan
+            public_rate_benchmark_pos = (
+                float(public[benchmark].mean()) if benchmark.any() else np.nan
+            )
+            public_rate_benchmark_neg = (
+                float(public[~benchmark].mean()) if (~benchmark).any() else np.nan
+            )
             benchmark_rate_public_pos = float(benchmark[public].mean()) if public.any() else np.nan
-            benchmark_rate_public_neg = float(benchmark[~public].mean()) if (~public).any() else np.nan
+            benchmark_rate_public_neg = (
+                float(benchmark[~public].mean()) if (~public).any() else np.nan
+            )
             rows.append(
                 {
                     "public_label": label,
@@ -641,7 +681,9 @@ def _label_contingency(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
 
 
 def _cooccurrence(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
-    sample = panel.loc[panel["bridge_tier"].eq("high_confidence") & panel["benchmark_label"].eq(1)].copy()
+    sample = panel.loc[
+        panel["bridge_tier"].eq("high_confidence") & panel["benchmark_label"].eq(1)
+    ].copy()
     if sample.empty:
         out = pd.DataFrame(
             columns=[
@@ -656,10 +698,16 @@ def _cooccurrence(panel: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
         return out
     for label in PUBLIC_LABELS:
         sample[label] = sample[label].fillna(0).astype(int)
-    grouped = sample.groupby(PUBLIC_LABELS, as_index=False).size().rename(columns={"size": "n_benchmark_positives"})
+    grouped = (
+        sample.groupby(PUBLIC_LABELS, as_index=False)
+        .size()
+        .rename(columns={"size": "n_benchmark_positives"})
+    )
     total = int(len(sample))
     grouped["pct_of_benchmark_positives"] = grouped["n_benchmark_positives"] / total
-    grouped["display_count"] = grouped["n_benchmark_positives"].map(lambda value: "<5" if int(value) < 5 else str(int(value)))
+    grouped["display_count"] = grouped["n_benchmark_positives"].map(
+        lambda value: "<5" if int(value) < 5 else str(int(value))
+    )
 
     def _pattern(row: pd.Series) -> str:
         active = [label.replace("label_", "") for label in PUBLIC_LABELS if int(row[label]) == 1]
@@ -1105,10 +1153,14 @@ def _event_time(con: Any, out_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "n_benchmark_negative": int((~benchmark_pos).sum()),
                     "covered_rows": int(len(balanced)),
                     "public_label_rate_benchmark_positive": (
-                        float(balanced.loc[benchmark_pos, label].mean()) if benchmark_pos.any() else np.nan
+                        float(balanced.loc[benchmark_pos, label].mean())
+                        if benchmark_pos.any()
+                        else np.nan
                     ),
                     "public_label_rate_benchmark_negative": (
-                        float(balanced.loc[~benchmark_pos, label].mean()) if (~benchmark_pos).any() else np.nan
+                        float(balanced.loc[~benchmark_pos, label].mean())
+                        if (~benchmark_pos).any()
+                        else np.nan
                     ),
                     "raw_difference": (
                         float(balanced.loc[benchmark_pos, label].mean())
@@ -1290,9 +1342,13 @@ def _write_summary(
         ]
     )
     if validation_tier == "wrds_validated":
-        lines.append("- Bridge tier is inferred from WRDS/Compustat provenance in the normalized crosswalk.")
+        lines.append(
+            "- Bridge tier is inferred from WRDS/Compustat provenance in the normalized crosswalk."
+        )
     else:
-        lines.append("- Non-WRDS bridge rows remain diagnostic, and the construct claim is deferred.")
+        lines.append(
+            "- Non-WRDS bridge rows remain diagnostic, and the construct claim is deferred."
+        )
     (out_dir / "construct_overlap_summary.md").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
@@ -1423,7 +1479,9 @@ def run_construct_overlap(
         reciprocal = _reciprocal_alignment(
             con,
             benchmark_predictions_path=required["benchmark_predictions"],
-            peer_predictions_path=study_dir / "peer_comparison" / "detected_misstatement_model_family_predictions.parquet",
+            peer_predictions_path=study_dir
+            / "peer_comparison"
+            / "detected_misstatement_model_family_predictions.parquet",
             out_dir=out_dir,
             bridge_source=bridge_source,
             alignment_config=alignment_config,

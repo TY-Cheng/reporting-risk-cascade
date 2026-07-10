@@ -193,9 +193,7 @@ def test_select_primary_public_metrics_excludes_grid_distractors() -> None:
             "pr_auc": [0.30, 0.90, 0.80],
         }
     )
-    summary = {
-        "primary_specification": {"feature_set": "all", "train_window": "expanding"}
-    }
+    summary = {"primary_specification": {"feature_set": "all", "train_window": "expanding"}}
 
     selected = _select_primary_public_metrics(metrics, summary)
 
@@ -299,6 +297,50 @@ def test_candidate_bridge_package_notes_and_narrative_are_nonassertive() -> None
         "support the integrated",
     ]:
         assert forbidden not in normalized
+
+
+@pytest.mark.parametrize(
+    ("component_tier", "artifact_tier", "paired_tier"),
+    [
+        ("candidate_external", "candidate_external", "candidate_external"),
+        (None, None, "none"),
+        (
+            "wrds_validated",
+            "candidate_external",
+            "component=wrds_validated; manifest=candidate_external",
+        ),
+        (
+            "candidate_external",
+            "wrds_validated",
+            "component=candidate_external; manifest=wrds_validated",
+        ),
+    ],
+    ids=["candidate", "missing", "validated-component-only", "validated-artifact-only"],
+)
+def test_package_claim_boundary_uses_paired_bridge_tier_and_status(
+    component_tier: str | None,
+    artifact_tier: str | None,
+    paired_tier: str,
+) -> None:
+    language = manuscript_module._bridge_language(
+        {
+            "components": {
+                "construct_overlap": {"validation_tier": component_tier},
+            }
+        },
+        {"validation_tier": artifact_tier},
+    )
+    boundary_builder = getattr(manuscript_module, "_bridge_claim_boundary", None)
+    assert callable(boundary_builder), "package claim boundary must use paired bridge language"
+
+    boundary = boundary_builder(language)
+
+    assert boundary["construct_overlap_tier"] == paired_tier
+    assert boundary["construct_overlap_status"] == "diagnostic"
+    assert boundary["construct_overlap_component_tier"] == (component_tier or "none")
+    assert boundary["construct_overlap_artifact_tier"] == (artifact_tier or "none")
+    assert boundary["causal_claims_supported"] is False
+    assert boundary["unobserved_true_fraud_claims_supported"] is False
 
 
 def test_validated_bridge_package_retains_wrds_claim_language() -> None:
@@ -451,9 +493,22 @@ def test_construct_alignment_reports_absolute_precision_and_fdr(tmp_path) -> Non
 
     assert set(table["Top_10pct_Precision"]) == {"0.0600", "0.0500"}
     assert set(table["Top_10pct_FDR"]) == {"0.9400", "0.9500"}
-    assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "N"].item() == "100"
-    assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "Top_10pct_K"].item() == "10"
-    assert table.loc[table["Direction"].eq("Public score to benchmark positives"), "Top_10pct_Hits"].item() == "1"
+    assert (
+        table.loc[table["Direction"].eq("Public score to benchmark positives"), "N"].item()
+        == "100"
+    )
+    assert (
+        table.loc[
+            table["Direction"].eq("Public score to benchmark positives"), "Top_10pct_K"
+        ].item()
+        == "10"
+    )
+    assert (
+        table.loc[
+            table["Direction"].eq("Public score to benchmark positives"), "Top_10pct_Hits"
+        ].item()
+        == "1"
+    )
 
 
 def test_construct_alignment_uses_is_primary_not_maximum_lift(tmp_path: Path) -> None:

@@ -54,8 +54,7 @@ ANNUAL_INTERVAL_NOTE = (
     "superpopulation confidence intervals, or causal inference uncertainty."
 )
 PEER_TRANSFER_NOTE = (
-    ANNUAL_INTERVAL_NOTE
-    + " Peer-compatible families are ranking checks under transferred model "
+    ANNUAL_INTERVAL_NOTE + " Peer-compatible families are ranking checks under transferred model "
     "vocabularies, not calibrated probability comparisons or original-paper "
     "replications. Peer-model folds and public-cascade folds can cover "
     "different historical sequences, so dispersion widths should not be "
@@ -85,8 +84,7 @@ PUBLIC_TASK_NOTE = (
     "the scores as calibrated decision rules, not against the paper's ranking estimand."
 )
 FEATURE_FAMILY_NOTE = (
-    ANNUAL_INTERVAL_NOTE
-    + " Entries are feature-family summaries over public-cascade task-window "
+    ANNUAL_INTERVAL_NOTE + " Entries are feature-family summaries over public-cascade task-window "
     "evaluations, not issuer-year sample sizes. Task-specific base-rate context "
     "is reported in the task tables. Note/disclosure-breadth variables enter "
     "the all-feature information set but are not reported as a standalone family row. "
@@ -135,14 +133,20 @@ def _bridge_language(
     component_tier = component.get("validation_tier") if isinstance(component, dict) else None
     artifact_tier = construct_manifest.get("validation_tier")
     tiers_match = component_tier == artifact_tier
-    tier = str(artifact_tier or component_tier or "none")
-    if not tiers_match:
-        tier = f"component={component_tier or 'none'}; manifest={artifact_tier or 'none'}"
+    component_tier_label = str(component_tier or "none")
+    artifact_tier_label = str(artifact_tier or "none")
+    tier = (
+        artifact_tier_label
+        if tiers_match
+        else f"component={component_tier_label}; manifest={artifact_tier_label}"
+    )
     validated = tiers_match and artifact_tier == WRDS_VALIDATED_TIER
     if validated:
         return {
             "tier": tier,
             "status": "validated",
+            "component_tier": component_tier_label,
+            "artifact_tier": artifact_tier_label,
             "component_role": "Bridge-gated related-construct evidence",
             "boundary_interpretation": (
                 "Rows used for headline bridge-gated construct-alignment statistics"
@@ -186,6 +190,8 @@ def _bridge_language(
     return {
         "tier": tier,
         "status": "diagnostic",
+        "component_tier": component_tier_label,
+        "artifact_tier": artifact_tier_label,
         "component_role": "Diagnostic bridge-overlap evidence; construct claim deferred",
         "boundary_interpretation": (
             "Rows retained for diagnostic alignment only; construct claim deferred"
@@ -211,6 +217,17 @@ def _bridge_language(
             f"The bridge tier is {tier}. The overlap rows remain diagnostic, and cross-construct "
             "manuscript claims are deferred pending exact raw bridge validation."
         ),
+    }
+
+
+def _bridge_claim_boundary(bridge_language: dict[str, str]) -> dict[str, str | bool]:
+    return {
+        "construct_overlap_tier": bridge_language["tier"],
+        "construct_overlap_status": bridge_language["status"],
+        "construct_overlap_component_tier": bridge_language["component_tier"],
+        "construct_overlap_artifact_tier": bridge_language["artifact_tier"],
+        "causal_claims_supported": False,
+        "unobserved_true_fraud_claims_supported": False,
     }
 
 
@@ -337,8 +354,12 @@ def _write_table_bundle(
     rendered = display_df if display_df is not None else df
     df.to_csv(csv_path, index=False)
     note_text = f"\n\nNote: {note}\n" if note else ""
-    md_path.write_text(f"Table: {caption}\n\n{_markdown_table(rendered)}{note_text}", encoding="utf-8")
-    tex_path.write_text(_latex_table(rendered, caption=caption, label=label, note=note), encoding="utf-8")
+    md_path.write_text(
+        f"Table: {caption}\n\n{_markdown_table(rendered)}{note_text}", encoding="utf-8"
+    )
+    tex_path.write_text(
+        _latex_table(rendered, caption=caption, label=label, note=note), encoding="utf-8"
+    )
     return {"csv": _rel(csv_path), "md": _rel(md_path), "tex": _rel(tex_path)}
 
 
@@ -389,8 +410,8 @@ def _annual_fold_frame(
         .reset_index()
     )
     folds["valid_metric"] = np.isfinite(pd.to_numeric(folds["fold_value"], errors="coerce"))
-    folds["sparse_excluded"] = (
-        folds["n_pos"].notna() & (pd.to_numeric(folds["n_pos"], errors="coerce") < SPARSE_POSITIVE_THRESHOLD)
+    folds["sparse_excluded"] = folds["n_pos"].notna() & (
+        pd.to_numeric(folds["n_pos"], errors="coerce") < SPARSE_POSITIVE_THRESHOLD
     )
     folds["valid_for_interval"] = folds["valid_metric"] & ~folds["sparse_excluded"]
     return folds
@@ -440,9 +461,7 @@ def _annual_metric_summary(
             ci_high = np.nan
             method = "annual_fold_dispersion_insufficient_folds"
         sparse = group.loc[group["sparse_excluded"]]
-        row = {
-            col: value for col, value in zip(group_cols, key_values, strict=False)
-        }
+        row = {col: value for col, value in zip(group_cols, key_values, strict=False)}
         row.update(
             {
                 "metric_rows": int(group["metric_rows"].sum()),
@@ -582,9 +601,7 @@ def _select_primary_public_metrics(
 def _public_sample_attrition_table(summary: dict[str, Any]) -> pd.DataFrame:
     attrition = summary["sample_attrition"]
     observable_parent = next(
-        int(row["n_rows"])
-        for row in attrition
-        if row["stage"] == "observable_365_day_horizon"
+        int(row["n_rows"]) for row in attrition if row["stage"] == "observable_365_day_horizon"
     )
     rows: list[dict[str, Any]] = []
     previous_sequential: int | None = None
@@ -649,9 +666,9 @@ def _public_task_metrics(
         or not owned_positives.mod(1).eq(0).all()
     ):
         raise ValueError("Table 3 fit owners require exact nonnegative integer positive_test")
-    positives = ownership.assign(positive_test=owned_positives).groupby("task")[
-        "positive_test"
-    ].sum()
+    positives = (
+        ownership.assign(positive_test=owned_positives).groupby("task")["positive_test"].sum()
+    )
     uncertainty = _annual_metric_summary(metrics, ["task"])
     excluding_2020_summary = _annual_metric_summary(
         metrics.loc[pd.to_numeric(metrics["test_year"], errors="coerce").ne(2020)],
@@ -677,9 +694,7 @@ def _public_task_metrics(
     grouped = grouped.sort_values("mean", ascending=False)
     grouped["Mean_PR_AUC"] = grouped["mean"]
     grouped["Excluding_2020_PR_AUC"] = grouped["task"].map(excluding_2020)
-    grouped["Excluding_2020_Delta"] = (
-        grouped["Excluding_2020_PR_AUC"] - grouped["Mean_PR_AUC"]
-    )
+    grouped["Excluding_2020_Delta"] = grouped["Excluding_2020_PR_AUC"] - grouped["Mean_PR_AUC"]
     grouped.insert(1, "Panel_Positives", grouped["task"].map(positives.to_dict()))
     grouped = grouped.rename(columns={"task": "Task"})
     grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
@@ -728,7 +743,9 @@ def _public_fold_support(task_status: pd.DataFrame) -> pd.DataFrame:
         lambda value: str(int(float(value))) if pd.notna(value) else ""
     )
     grouped["Prevalence"] = grouped["Prevalence"].map(_fmt)
-    grouped["Sparse_Excluded"] = grouped["Sparse_Excluded"].map(lambda value: "Yes" if value else "No")
+    grouped["Sparse_Excluded"] = grouped["Sparse_Excluded"].map(
+        lambda value: "Yes" if value else "No"
+    )
     return grouped
 
 
@@ -894,7 +911,9 @@ def _primary_alignment_row(frame: pd.DataFrame, *, direction: str) -> pd.Series:
 
 
 def _construct_alignment(study_dir: Path) -> pd.DataFrame:
-    public_to_benchmark = _read_csv(study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv")
+    public_to_benchmark = _read_csv(
+        study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv"
+    )
     benchmark_to_public = _read_csv(study_dir / "construct_overlap" / "reciprocal_alignment.csv")
     public_primary = _primary_alignment_row(
         public_to_benchmark,
@@ -994,7 +1013,9 @@ def _bridge_overlap_matrix(study_dir: Path) -> pd.DataFrame:
     tier_order = {"high_confidence": 0, "ambiguous": 1, "all_matched": 2}
     out["_label_order"] = out["public_label"].map({key: idx for idx, key in enumerate(labels)})
     out["_tier_order"] = out["bridge_tier"].map(tier_order).fillna(99)
-    out = out.sort_values(["_label_order", "_tier_order"]).drop(columns=["_label_order", "_tier_order"])
+    out = out.sort_values(["_label_order", "_tier_order"]).drop(
+        columns=["_label_order", "_tier_order"]
+    )
     out = out.rename(
         columns={
             "public_label": "Public_Label",
@@ -1036,7 +1057,11 @@ def _bridge_sample_boundaries(
     if flow_path.exists():
         flow = _read_csv(flow_path)
         raw = flow.loc[flow["bridge_tier"].eq("full_raw")]
-        total_rows = float(raw["rows"].iloc[0]) if not raw.empty else float(pd.to_numeric(flow["rows"], errors="coerce").max())
+        total_rows = (
+            float(raw["rows"].iloc[0])
+            if not raw.empty
+            else float(pd.to_numeric(flow["rows"], errors="coerce").max())
+        )
         total_pos = (
             float(raw["benchmark_positives"].iloc[0])
             if not raw.empty
@@ -1167,8 +1192,14 @@ def _selection_profile_table(panel_path: Path | None = None) -> pd.DataFrame:
     )
     add_profile("Annual form", "10-K", panel["form"].astype("string").eq("10-K"))
     add_profile("Annual form", "10-K/A", panel["form"].astype("string").eq("10-K/A"))
-    add_profile("Foreign issuer proxy", "No FPI-year flag", panel["issuer_has_fpi_form_year"].fillna(0).eq(0))
-    add_profile("Foreign issuer proxy", "FPI-year flag", panel["issuer_has_fpi_form_year"].fillna(0).eq(1))
+    add_profile(
+        "Foreign issuer proxy",
+        "No FPI-year flag",
+        panel["issuer_has_fpi_form_year"].fillna(0).eq(0),
+    )
+    add_profile(
+        "Foreign issuer proxy", "FPI-year flag", panel["issuer_has_fpi_form_year"].fillna(0).eq(1)
+    )
 
     out = pd.DataFrame(rows)
     if out.empty:
@@ -1195,9 +1226,11 @@ def _public_opacity_dml_table(study_dir: Path) -> pd.DataFrame:
     dml["Coef"] = dml["coef_num"].map(_fmt)
     dml["Std_Err"] = dml["std_err_num"].map(_fmt)
     dml["CI_95"] = dml.apply(
-        lambda row: f"[{_fmt(row['ci_low'])}, {_fmt(row['ci_high'])}]"
-        if pd.notna(row["ci_low"]) and pd.notna(row["ci_high"])
-        else "",
+        lambda row: (
+            f"[{_fmt(row['ci_low'])}, {_fmt(row['ci_high'])}]"
+            if pd.notna(row["ci_low"]) and pd.notna(row["ci_high"])
+            else ""
+        ),
         axis=1,
     )
     dml["P_Value"] = pd.to_numeric(dml.get("p_value"), errors="coerce").map(_fmt)
@@ -1262,7 +1295,10 @@ def _plot_metric_with_uncertainty(
                 ax.errorbar(
                     row["mean_num"],
                     idx,
-                    xerr=[[row["mean_num"] - row["ci_low_num"]], [row["ci_high_num"] - row["mean_num"]]],
+                    xerr=[
+                        [row["mean_num"] - row["ci_low_num"]],
+                        [row["ci_high_num"] - row["mean_num"]],
+                    ],
                     fmt="none",
                     ecolor="#222222",
                     elinewidth=1,
@@ -1274,7 +1310,9 @@ def _plot_metric_with_uncertainty(
                 & fold_df["valid_metric"]
             ]
             jitter = rng.uniform(-0.08, 0.08, size=len(dots))
-            ax.scatter(dots["fold_value"], idx + jitter, s=15, color="#555555", alpha=0.55, zorder=4)
+            ax.scatter(
+                dots["fold_value"], idx + jitter, s=15, color="#555555", alpha=0.55, zorder=4
+            )
         ax.set_xlabel(ylabel)
         ax.set_ylabel("")
     else:
@@ -1298,7 +1336,10 @@ def _plot_metric_with_uncertainty(
                 ax.errorbar(
                     idx,
                     row["mean_num"],
-                    yerr=[[row["mean_num"] - row["ci_low_num"]], [row["ci_high_num"] - row["mean_num"]]],
+                    yerr=[
+                        [row["mean_num"] - row["ci_low_num"]],
+                        [row["ci_high_num"] - row["mean_num"]],
+                    ],
                     fmt="none",
                     ecolor="#222222",
                     elinewidth=1,
@@ -1310,7 +1351,9 @@ def _plot_metric_with_uncertainty(
                 & fold_df["valid_metric"]
             ]
             jitter = rng.uniform(-0.08, 0.08, size=len(dots))
-            ax.scatter(idx + jitter, dots["fold_value"], s=15, color="#555555", alpha=0.55, zorder=4)
+            ax.scatter(
+                idx + jitter, dots["fold_value"], s=15, color="#555555", alpha=0.55, zorder=4
+            )
         ax.set_ylabel(ylabel)
         ax.set_xlabel("")
         ax.tick_params(axis="x", rotation=30)
@@ -1346,14 +1389,19 @@ def _plot_construct_lift(df: pd.DataFrame, *, out_path: Path) -> dict[str, str]:
             ax.errorbar(
                 row["Top_Decile_Lift"],
                 idx,
-                xerr=[[row["Top_Decile_Lift"] - row["ci_low"]], [row["ci_high"] - row["Top_Decile_Lift"]]],
+                xerr=[
+                    [row["Top_Decile_Lift"] - row["ci_low"]],
+                    [row["ci_high"] - row["Top_Decile_Lift"]],
+                ],
                 fmt="none",
                 ecolor="#222222",
                 elinewidth=1,
                 capsize=3,
-                    zorder=3,
-                )
-        precision = pd.to_numeric(pd.Series([row.get("Top_10pct_Precision")]), errors="coerce").iloc[0]
+                zorder=3,
+            )
+        precision = pd.to_numeric(
+            pd.Series([row.get("Top_10pct_Precision")]), errors="coerce"
+        ).iloc[0]
         fdr = pd.to_numeric(pd.Series([row.get("Top_10pct_FDR")]), errors="coerce").iloc[0]
         if pd.notna(precision) and pd.notna(fdr):
             ax.text(
@@ -1365,7 +1413,9 @@ def _plot_construct_lift(df: pd.DataFrame, *, out_path: Path) -> dict[str, str]:
                 color="#1f2933",
             )
     ax.axvline(1.0, color="#222222", linewidth=1, linestyle="--")
-    finite_x = pd.concat([plot_df["ci_high"], plot_df["Top_Decile_Lift"]], ignore_index=True).dropna()
+    finite_x = pd.concat(
+        [plot_df["ci_high"], plot_df["Top_Decile_Lift"]], ignore_index=True
+    ).dropna()
     if not finite_x.empty:
         ax.set_xlim(left=0, right=float(finite_x.max()) * 1.28)
     ax.set_xlabel("Top-decile lift")
@@ -1390,12 +1440,8 @@ def _result_narrative(
     construct_alignment: pd.DataFrame,
     construct_manifest: dict[str, Any],
 ) -> str:
-    primary_public = _package_primary_identity(public_summary)[
-        "primary_public_specification"
-    ]
-    primary_public_label = (
-        f"{primary_public['feature_set']} + {primary_public['train_window']}"
-    )
+    primary_public = _package_primary_identity(public_summary)["primary_public_specification"]
+    primary_public_label = f"{primary_public['feature_set']} + {primary_public['train_window']}"
     comment_row = public_task[public_task["Task"].eq("comment_thread")].head(1)
     amendment_row = public_task[public_task["Task"].eq("amendment")].head(1)
     severe_row = public_task[public_task["Task"].eq("8k_402")].head(1)
@@ -1505,12 +1551,16 @@ def main() -> None:
 
     manifest = _read_json(study_dir / "study_run_manifest.json")
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
-    construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
+    construct_manifest = _read_json(
+        study_dir / "construct_overlap" / "construct_overlap_manifest.json"
+    )
     bridge_language = _bridge_language(manifest, construct_manifest)
     public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
     public_task_status = _read_csv(study_dir / "public_cascade" / "public_cascade_task_status.csv")
     benchmark_metrics = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
-    benchmark_peer_metrics = _read_csv(study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv")
+    benchmark_peer_metrics = _read_csv(
+        study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv"
+    )
     public_peer_metrics = _read_csv(
         study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
     )
@@ -1888,11 +1938,7 @@ def main() -> None:
             "construct_overlap_interval_scope": construct_manifest.get("interval_scope"),
             "dml_interval": "coef +/- 1.96 * HC3 OLS SE after cross-fitted residualization",
         },
-        "claim_boundary": {
-            "construct_overlap_tier": construct_manifest.get("validation_tier"),
-            "causal_claims_supported": False,
-            "unobserved_true_fraud_claims_supported": False,
-        },
+        "claim_boundary": _bridge_claim_boundary(bridge_language),
     }
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(package_manifest, indent=2), encoding="utf-8")
