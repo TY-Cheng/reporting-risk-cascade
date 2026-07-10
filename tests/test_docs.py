@@ -449,6 +449,24 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _table_03_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Task": "comment_thread",
+                "Panel_Positives": "321",
+                "Mean_Prevalence": "0.1234",
+                "Mean_PR_AUC": "0.3000",
+                "Mean_ROC_AUC": "0.7000",
+                "Mean_Brier_Skill": "0.0500",
+                "Mean_ECE": "0.0400",
+                "n_folds": "1",
+                "metric_rows": "1",
+            }
+        ]
+    )
+
+
 def _table_09_frame() -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -589,6 +607,37 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
             "feature_family_summary": {},
         },
     )
+    pd.DataFrame(
+        [
+            {
+                "task": "comment_thread",
+                "feature_set": "all",
+                "train_window": "expanding",
+                "test_year": 2023,
+                "n_test": 1000,
+                "positive_rate_test": 0.10,
+                "pr_auc": 0.30,
+                "roc_auc": 0.70,
+                "brier_skill_score": 0.05,
+                "ece": 0.04,
+            },
+            {
+                "task": "comment_thread",
+                "feature_set": "all",
+                "train_window": "rolling_7y",
+                "test_year": 2024,
+                "n_test": 1000,
+                "positive_rate_test": 0.20,
+                "pr_auc": 0.90,
+                "roc_auc": 0.99,
+                "brier_skill_score": 0.80,
+                "ece": 0.90,
+            },
+        ]
+    ).to_csv(
+        study_dir / "public_cascade" / "public_cascade_metrics.csv",
+        index=False,
+    )
     _write_json(
         study_dir / "bridge_probe" / "bridge_probe_summary.json",
         {"status": "crosswalk_available"},
@@ -667,6 +716,10 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
             "| Fixture | Value |\n| --- | --- |\n| row | 1 |\n",
             encoding="utf-8",
         )
+    _table_03_frame().to_csv(
+        tables_dir / "table_03_public_task_metrics.csv",
+        index=False,
+    )
     _table_09_frame().to_csv(
         tables_dir / "table_09_construct_alignment.csv",
         index=False,
@@ -840,6 +893,61 @@ def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifac
     for figure in fixture["figures"]:
         assert f"{figure}.png" in results
     assert results.count("- **ARS claim.**") == len(fixture["tables"]) + len(fixture["figures"])
+
+
+def test_generated_snapshot_sanitizes_external_fixture_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+
+    results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+    assert "`<external>/study`" in results
+    for local_path_marker in [str(tmp_path), "/Users/", "/Volumes/", "OneDrive"]:
+        assert local_path_marker not in results
+
+
+def test_generated_snapshot_uses_generated_table_3_for_main_ranking_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+
+    results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+    main_ranking = results.split("### Public Task Metrics", maxsplit=1)[1].split(
+        "These task rows are the main ranking evidence", maxsplit=1
+    )[0]
+    assert "| `comment_thread` | 321 | 0.1234 | 0.3000 | 0.7000 | 0.0500 | 0.0400 | 1 | 1 |" in main_ranking
+    assert "0.6000" not in main_ranking
+    assert "0.9000" not in main_ranking
+
+
+@pytest.mark.parametrize("invalid_case", ["empty", "duplicate_task", "missing_column"])
+def test_generated_snapshot_requires_valid_generated_table_3(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_case: str,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    table_3 = _table_03_frame()
+    if invalid_case == "empty":
+        table_3 = table_3.iloc[0:0]
+    elif invalid_case == "duplicate_task":
+        table_3 = pd.concat([table_3, table_3], ignore_index=True)
+    else:
+        table_3 = table_3.drop(columns="Mean_ECE")
+    table_3.to_csv(
+        fixture["package_dir"] / "tables" / "table_03_public_task_metrics.csv",
+        index=False,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="generated Table 3 must contain nonempty unique task rows with display columns",
+    ):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
 
 
 def test_generated_snapshot_keeps_raw_maxima_exploratory_and_post_hoc(

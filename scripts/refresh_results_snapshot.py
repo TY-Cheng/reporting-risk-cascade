@@ -251,10 +251,11 @@ def _code(value: Any) -> str:
 
 
 def _rel(path: Path) -> str:
+    resolved = path.resolve()
     try:
-        return path.resolve().relative_to(PROJECT_ROOT).as_posix()
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
     except ValueError:
-        return str(path)
+        return f"<external>/{resolved.name or 'root'}"
 
 
 def _table(headers: list[str], rows: list[list[Any]]) -> str:
@@ -409,43 +410,44 @@ def _best_equal_task_config(metrics: pd.DataFrame) -> pd.Series | None:
     return equal_task.iloc[0]
 
 
-def _public_task_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list[list[str]]:
-    if metrics.empty or "task" not in metrics.columns:
-        return []
-    agg_spec = {
-        "metric_rows": ("pr_auc", "size"),
-        "n_folds": ("test_year", "nunique") if "test_year" in metrics.columns else ("pr_auc", "size"),
-        "mean_prevalence": ("positive_rate_test", "mean"),
-        "mean_pr_auc": ("pr_auc", "mean"),
-        "mean_roc_auc": ("roc_auc", "mean"),
+def _public_task_frame(manuscript_package: Path) -> pd.DataFrame:
+    frame = _read_csv(manuscript_package / "tables" / "table_03_public_task_metrics.csv")
+    required = {
+        "Task",
+        "Panel_Positives",
+        "Mean_Prevalence",
+        "Mean_PR_AUC",
+        "Mean_ROC_AUC",
+        "Mean_Brier_Skill",
+        "Mean_ECE",
+        "n_folds",
+        "metric_rows",
     }
-    if "brier_skill_score" in metrics.columns:
-        agg_spec["mean_brier_skill"] = ("brier_skill_score", "mean")
-    if "ece" in metrics.columns:
-        agg_spec["mean_ece"] = ("ece", "mean")
-    grouped = (
-        metrics.groupby("task", dropna=False)
-        .agg(**agg_spec)
-        .reset_index()
-    )
-    positives = summary.get("task_positive_counts", {})
-    rows = []
-    for _, row in grouped.sort_values("mean_pr_auc", ascending=False).iterrows():
-        task = str(row["task"])
-        rows.append(
-            [
-                _code(task),
-                _fmt(positives.get(task)),
-                _fmt(row["mean_prevalence"]),
-                _fmt(row["mean_pr_auc"]),
-                _fmt(row["mean_roc_auc"]),
-                _fmt(row.get("mean_brier_skill")),
-                _fmt(row.get("mean_ece")),
-                _fmt(row["n_folds"], digits=0),
-                _fmt(row["metric_rows"], digits=0),
-            ]
-        )
-    return rows
+    error = "generated Table 3 must contain nonempty unique task rows with display columns"
+    if frame.empty or not required.issubset(frame.columns):
+        raise ValueError(error)
+    tasks = frame["Task"].astype("string").str.strip()
+    if tasks.isna().any() or tasks.eq("").any() or tasks.duplicated().any():
+        raise ValueError(error)
+    return frame
+
+
+def _public_task_rows(manuscript_package: Path) -> list[list[str]]:
+    frame = _public_task_frame(manuscript_package)
+    return [
+        [
+            _code(row["Task"]),
+            _fmt(row["Panel_Positives"]),
+            _fmt(row["Mean_Prevalence"]),
+            _fmt(row["Mean_PR_AUC"]),
+            _fmt(row["Mean_ROC_AUC"]),
+            _fmt(row["Mean_Brier_Skill"]),
+            _fmt(row["Mean_ECE"]),
+            _fmt(row["n_folds"], digits=0),
+            _fmt(row["metric_rows"], digits=0),
+        ]
+        for _, row in frame.iterrows()
+    ]
 
 
 def _public_feature_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list[list[str]]:
@@ -1538,7 +1540,7 @@ def build_snapshot(
                 "Folds",
                 "Metric rows",
             ],
-            _public_task_rows(public_metrics, public_summary),
+            _public_task_rows(manuscript_package),
         ),
         "",
         "These task rows are the main ranking evidence. Brier Skill Score and ECE "
