@@ -114,7 +114,9 @@ def _load_config(path: Path) -> Dict[str, object]:
 
 
 def _as_object_array(values: object) -> object:
-    return values.astype(object)
+    array = np.asarray(values, dtype=object).copy()
+    array[pd.isna(array)] = np.nan
+    return array
 
 
 def _as_string_array(values: object) -> object:
@@ -475,19 +477,19 @@ def _public_dml_matrix(
         )
     train_frame = train[list(controls)].copy()
     held_out_frame = held_out[list(controls)].copy()
-    categorical = [
+    categorical_candidates = [
         col
         for col in train_frame.columns
         if col in {"form", "entity_type"}
         or train_frame[col].dtype == object
-        or str(train_frame[col].dtype).startswith("category")
+        or isinstance(train_frame[col].dtype, (pd.CategoricalDtype, pd.StringDtype))
     ]
     categorical = [
         col
-        for col in categorical
+        for col in categorical_candidates
         if train_frame[col].nunique(dropna=True) <= int(max_categories)
     ]
-    numeric = [col for col in train_frame.columns if col not in categorical]
+    numeric = [col for col in train_frame.columns if col not in categorical_candidates]
     train_parts: List[np.ndarray] = []
     held_out_parts: List[np.ndarray] = []
     used: List[str] = []
@@ -541,6 +543,7 @@ def fit_public_opacity_dml(
     rows: List[Dict[str, object]] = []
     encoded_counts: Dict[str, int] = {}
     fold_encoded_counts: Dict[str, List[Dict[str, int]]] = {}
+    effective_fold_counts: Dict[str, int] = {}
     for outcome in outcomes:
         if outcome not in TASKS:
             rows.append(
@@ -559,6 +562,7 @@ def fit_public_opacity_dml(
                     "n_raw_controls": int(len(controls)),
                     "n_encoded_controls": np.nan,
                     "n_controls": np.nan,
+                    "n_effective_nuisance_folds": np.nan,
                     "n_controls_definition": DML_CONTROLS_DEFINITION,
                     "n_opacity_components": int(len(opacity_components)),
                 }
@@ -583,6 +587,7 @@ def fit_public_opacity_dml(
                     "n_raw_controls": int(len(controls)),
                     "n_encoded_controls": np.nan,
                     "n_controls": np.nan,
+                    "n_effective_nuisance_folds": np.nan,
                     "n_controls_definition": DML_CONTROLS_DEFINITION,
                     "n_opacity_components": int(len(opacity_components)),
                 }
@@ -604,6 +609,7 @@ def fit_public_opacity_dml(
             "n_raw_controls": int(len(controls)),
             "n_encoded_controls": np.nan,
             "n_controls": np.nan,
+            "n_effective_nuisance_folds": np.nan,
             "n_controls_definition": DML_CONTROLS_DEFINITION,
             "n_opacity_components": int(len(opacity_components)),
         }
@@ -650,10 +656,12 @@ def fit_public_opacity_dml(
         n_encoded_controls = max(record["n_encoded_controls"] for record in fold_widths)
         encoded_counts[outcome] = n_encoded_controls
         fold_encoded_counts[outcome] = fold_widths
+        effective_fold_counts[outcome] = len(fold_widths)
         post_matrix_row = {
             **base_row,
             "n_encoded_controls": n_encoded_controls,
             "n_controls": n_encoded_controls,
+            "n_effective_nuisance_folds": len(fold_widths),
         }
         y_res = y - y_hat
         t_res = t - t_hat
@@ -682,6 +690,7 @@ def fit_public_opacity_dml(
         "n_raw_controls": int(len(controls)),
         "n_encoded_controls_by_outcome": encoded_counts,
         "n_encoded_controls_by_fold": fold_encoded_counts,
+        "n_effective_nuisance_folds_by_outcome": effective_fold_counts,
         "n_controls": max(encoded_counts.values(), default=0),
         "n_controls_definition": DML_CONTROLS_DEFINITION,
         "control_columns_definition": "raw_controls_before_encoding",
@@ -1218,6 +1227,7 @@ def run_public_cascade(
             "n_raw_controls": 0,
             "n_encoded_controls_by_outcome": {},
             "n_encoded_controls_by_fold": {},
+            "n_effective_nuisance_folds_by_outcome": {},
             "n_controls": 0,
             "n_controls_definition": DML_CONTROLS_DEFINITION,
             "control_columns_definition": "raw_controls_before_encoding",

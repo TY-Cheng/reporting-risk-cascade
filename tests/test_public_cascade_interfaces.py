@@ -370,6 +370,8 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
     assert meta["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
     for row in dml.itertuples(index=False):
         assert meta["n_encoded_controls_by_outcome"][row.outcome] == row.n_encoded_controls
+        assert row.n_effective_nuisance_folds == 3
+        assert meta["n_effective_nuisance_folds_by_outcome"][row.outcome] == 3
         fold_widths = meta["n_encoded_controls_by_fold"][row.outcome]
         assert [record["fold_id"] for record in fold_widths] == [1, 2, 3]
         assert row.n_encoded_controls == max(
@@ -398,6 +400,8 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
     assert skipped_row["n_raw_controls"] == len(skipped_meta["control_columns"])
     assert pd.isna(skipped_row["n_encoded_controls"])
     assert pd.isna(skipped_row["n_controls"])
+    assert pd.isna(skipped_row["n_effective_nuisance_folds"])
+    assert "amendment" not in skipped_meta["n_effective_nuisance_folds_by_outcome"]
     assert skipped_row["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
 
 
@@ -416,6 +420,52 @@ def test_public_dml_matrix_fits_imputation_and_categories_on_training_fold_only(
     np.testing.assert_allclose(train, [[0.0, 1.0], [0.0, 1.0]])
     np.testing.assert_allclose(held_out, [[100.0, 0.0]])
     assert len(used_controls) == 2
+
+
+@pytest.mark.parametrize(
+    ("dtype", "missing"),
+    [
+        ("object", None),
+        ("object", pd.NA),
+        ("object", float("nan")),
+        ("category", None),
+        ("category", pd.NA),
+        ("category", float("nan")),
+        ("string", None),
+        ("string", pd.NA),
+        ("string", float("nan")),
+    ],
+    ids=[
+        "object-none",
+        "object-pd-na",
+        "object-nan",
+        "category-none",
+        "category-pd-na",
+        "category-nan",
+        "string-none",
+        "string-pd-na",
+        "string-nan",
+    ],
+)
+def test_public_dml_matrix_normalizes_categorical_missingness_within_training_fold(
+    dtype: str,
+    missing: object,
+) -> None:
+    train = pd.DataFrame({"core_type": pd.Series(["known", missing], dtype=dtype)})
+    held_out = pd.DataFrame({"core_type": pd.Series(["held_out_only"], dtype=dtype)})
+
+    transformed_train, transformed_held_out, used_controls = _public_dml_matrix(
+        train,
+        held_out,
+        ["core_type"],
+    )
+
+    assert transformed_train.shape == (2, 2)
+    np.testing.assert_allclose(transformed_train.sum(axis=1), [1.0, 1.0])
+    assert not np.array_equal(transformed_train[0], transformed_train[1])
+    np.testing.assert_allclose(transformed_held_out, [[0.0, 0.0]])
+    assert len(used_controls) == 2
+    assert sum("__MISSING__" in name for name in used_controls) == 1
 
 
 def test_public_cascade_omitted_sample_end_year_includes_2024(
@@ -499,6 +549,7 @@ model:
     assert opacity_meta["n_raw_controls"] == 0
     assert opacity_meta["n_encoded_controls_by_outcome"] == {}
     assert opacity_meta["n_encoded_controls_by_fold"] == {}
+    assert opacity_meta["n_effective_nuisance_folds_by_outcome"] == {}
     assert opacity_meta["n_controls"] == 0
     assert opacity_meta["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
     assert opacity_meta["control_columns_definition"] == "raw_controls_before_encoding"

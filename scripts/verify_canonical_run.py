@@ -263,6 +263,7 @@ def _dml_matches(
         "n_raw_controls",
         "n_encoded_controls",
         "n_controls",
+        "n_effective_nuisance_folds",
         "n_controls_definition",
         "n_opacity_components",
         "status",
@@ -300,7 +301,11 @@ def _dml_matches(
 
     raw_encoded_meta = dml_meta.get("n_encoded_controls_by_outcome", {})
     raw_fold_meta = dml_meta.get("n_encoded_controls_by_fold", {})
-    if not isinstance(raw_encoded_meta, dict) or not isinstance(raw_fold_meta, dict):
+    raw_effective_fold_meta = dml_meta.get("n_effective_nuisance_folds_by_outcome", {})
+    if not all(
+        isinstance(value, dict)
+        for value in (raw_encoded_meta, raw_fold_meta, raw_effective_fold_meta)
+    ):
         return False
     encoded_meta: dict[str, int] = {}
     for outcome, value in raw_encoded_meta.items():
@@ -308,21 +313,34 @@ def _dml_matches(
         if count is None:
             return False
         encoded_meta[str(outcome)] = count
+    effective_fold_meta: dict[str, int] = {}
+    for outcome, value in raw_effective_fold_meta.items():
+        count = _nonnegative_integer(value)
+        if count is None or count < 1:
+            return False
+        effective_fold_meta[str(outcome)] = count
 
     expected_encoded_outcomes: set[str] = set()
     encoded_counts: list[int | None] = []
-    for outcome, status, encoded_value, alias_value in zip(
+    for outcome, status, encoded_value, alias_value, effective_fold_value in zip(
         dml["outcome"].astype(str),
         dml["status"].astype(str),
         dml["n_encoded_controls"],
         dml["n_controls"],
+        dml["n_effective_nuisance_folds"],
     ):
         if status in PRE_ENCODING_DML_SKIP_STATUSES:
-            if not _is_missing(encoded_value) or not _is_missing(alias_value):
+            if (
+                not _is_missing(encoded_value)
+                or not _is_missing(alias_value)
+                or not _is_missing(effective_fold_value)
+            ):
                 return False
             if outcome in encoded_meta:
                 return False
             if outcome in raw_fold_meta:
+                return False
+            if outcome in effective_fold_meta:
                 return False
             encoded_counts.append(None)
             continue
@@ -330,14 +348,22 @@ def _dml_matches(
             return False
         encoded_count = _nonnegative_integer(encoded_value)
         alias_count = _nonnegative_integer(alias_value)
-        if encoded_count is None or alias_count != encoded_count:
+        effective_fold_count = _nonnegative_integer(effective_fold_value)
+        if (
+            encoded_count is None
+            or alias_count != encoded_count
+            or effective_fold_count is None
+            or effective_fold_count < 1
+        ):
             return False
         encoded_counts.append(encoded_count)
         expected_encoded_outcomes.add(outcome)
         if encoded_meta.get(outcome) != encoded_count:
             return False
+        if effective_fold_meta.get(outcome) != effective_fold_count:
+            return False
         fold_records = raw_fold_meta.get(outcome)
-        if not isinstance(fold_records, list) or not fold_records:
+        if not isinstance(fold_records, list) or len(fold_records) != effective_fold_count:
             return False
         fold_widths: list[int] = []
         for expected_fold_id, record in enumerate(fold_records, start=1):
@@ -353,6 +379,8 @@ def _dml_matches(
     if set(encoded_meta) != expected_encoded_outcomes:
         return False
     if set(raw_fold_meta) != expected_encoded_outcomes:
+        return False
+    if set(effective_fold_meta) != expected_encoded_outcomes:
         return False
 
     table_by_outcome = table_12.assign(Outcome=table_12["Outcome"].astype(str)).set_index(

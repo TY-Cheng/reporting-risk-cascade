@@ -232,6 +232,7 @@ def _write_toy_study(
                 "n_raw_controls": [60, 60],
                 "n_encoded_controls": [64, 63],
                 "n_controls": [64, 63],
+                "n_effective_nuisance_folds": [2, 2],
                 "n_controls_definition": [
                     "maximum_fold_local_encoded_nuisance_columns",
                     "maximum_fold_local_encoded_nuisance_columns",
@@ -260,6 +261,10 @@ def _write_toy_study(
                             {"fold_id": 1, "n_encoded_controls": 63},
                             {"fold_id": 2, "n_encoded_controls": 63},
                         ],
+                    },
+                    "n_effective_nuisance_folds_by_outcome": {
+                        "comment_thread": 2,
+                        "amendment": 2,
                     },
                     "n_opacity_components": 17,
                     "n_controls_definition": "maximum_fold_local_encoded_nuisance_columns",

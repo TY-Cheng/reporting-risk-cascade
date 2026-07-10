@@ -163,6 +163,7 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
             "n_raw_controls": [60, 60],
             "n_encoded_controls": [64, float("nan")],
             "n_controls": [64, float("nan")],
+            "n_effective_nuisance_folds": [3, float("nan")],
             "n_controls_definition": [
                 "maximum_fold_local_encoded_nuisance_columns",
                 "maximum_fold_local_encoded_nuisance_columns",
@@ -183,6 +184,7 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
                     {"fold_id": 3, "n_encoded_controls": 64},
                 ]
             },
+            "n_effective_nuisance_folds_by_outcome": {"comment_thread": 3},
             "n_opacity_components": 17,
             "n_controls_definition": "maximum_fold_local_encoded_nuisance_columns",
         },
@@ -456,12 +458,14 @@ def test_verify_canonical_run_accepts_fold_local_dml_width_contract(tmp_path: Pa
     "fold_widths",
     [
         [
-            {"fold_id": 1, "n_encoded_controls": 63},
             {"fold_id": 1, "n_encoded_controls": 64},
+            {"fold_id": 1, "n_encoded_controls": 64},
+            {"fold_id": 3, "n_encoded_controls": 64},
         ],
         [
             {"fold_id": 1, "n_encoded_controls": 63},
             {"fold_id": 2, "n_encoded_controls": 65},
+            {"fold_id": 3, "n_encoded_controls": 63},
         ],
     ],
     ids=["nonsequential-fold-ids", "wrong-maximum"],
@@ -488,6 +492,67 @@ def test_verify_canonical_run_rejects_invalid_fold_local_dml_widths(
     )
 
     assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
+
+
+def test_verify_canonical_run_rejects_truncated_fold_width_tail(tmp_path: Path) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["n_encoded_controls_by_fold"]["comment_thread"] = meta["n_encoded_controls_by_fold"][
+        "comment_thread"
+    ][:-1]
+    _write_json(meta_path, meta)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
+
+
+@pytest.mark.parametrize("with_effective_count", [True, False], ids=["complete", "missing"])
+def test_verify_canonical_run_enforces_effective_fold_count_for_post_encoding_skip(
+    tmp_path: Path,
+    with_effective_count: bool,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
+    dml = pd.read_csv(dml_path)
+    dml.loc[1, ["status", "n_encoded_controls", "n_controls"]] = [
+        "skipped_constant_residual_treatment",
+        63,
+        63,
+    ]
+    if with_effective_count:
+        dml.loc[1, "n_effective_nuisance_folds"] = 2
+    dml.to_csv(dml_path, index=False)
+    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["n_encoded_controls_by_outcome"]["amendment"] = 63
+    meta["n_encoded_controls_by_fold"]["amendment"] = [
+        {"fold_id": 1, "n_encoded_controls": 63},
+        {"fold_id": 2, "n_encoded_controls": 63},
+    ]
+    if with_effective_count:
+        meta["n_effective_nuisance_folds_by_outcome"]["amendment"] = 2
+    _write_json(meta_path, meta)
+    table_path = fixture["package_dir"] / "tables" / "table_12_public_opacity_dml.csv"
+    table = pd.read_csv(table_path)
+    table.loc[1, "Encoded_Controls"] = 63
+    table.to_csv(table_path, index=False)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    if with_effective_count:
+        assert errors == []
+    else:
+        assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
 
 
 def test_verify_canonical_run_rejects_wrong_attrition_drop(tmp_path: Path) -> None:
