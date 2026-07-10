@@ -73,9 +73,10 @@ PEER_TRANSFER_NOTE = (
 )
 DML_INTERVAL_NOTE = (
     "Raw controls are source variables before encoding; encoded controls are nuisance-model "
-    "columns after categorical expansion and imputation; opacity components form the "
-    "missingness-density treatment. Intervals use HC3 residual OLS after cross-fitting. "
-    "The estimates are adjusted associations, not identified structural effects."
+    "columns reported at the maximum fold-local width after training-fold categorical "
+    "expansion and imputation; opacity components form the missingness-density treatment. "
+    "Intervals use HC3 residual OLS after cross-fitting. The estimates are adjusted "
+    "associations, not identified structural effects."
 )
 PUBLIC_TASK_NOTE = (
     ANNUAL_INTERVAL_NOTE
@@ -84,7 +85,8 @@ PUBLIC_TASK_NOTE = (
     "training specifications are unchanged."
     + " The evaluation unit is a public-cascade task summarized over annual "
     "out-of-time folds at the issuer-CIK fiscal-year origin grain. "
-    + "Panel positives aggregate task positives over evaluation-year support, while mean "
+    + "Panel positives sum exact positive_test support over the one-to-one fit-owner rows, while "
+    "mean "
     "prevalence is averaged over the reported task-window-feature evaluations; "
     "it should not be read as positives divided by a single manuscript-wide denominator. "
     + " Brier Skill Score is measured relative to the corresponding prevalence-only "
@@ -540,8 +542,48 @@ def _public_sample_attrition_table(summary: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _public_task_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.DataFrame:
-    positives = summary.get("task_positive_counts", {})
+def _public_task_metrics(
+    metrics: pd.DataFrame,
+    task_status: pd.DataFrame,
+    summary: dict[str, Any],
+) -> pd.DataFrame:
+    keys = ["feature_set", "train_window", "test_year", "task"]
+    required_status = {*keys, "status", "positive_test"}
+    primary = dict(summary.get("primary_specification", {}))
+    ownership_error = "Table 3 requires one-to-one fit ownership for primary metric rows"
+    if (
+        set(primary) != {"feature_set", "train_window"}
+        or not set(keys) <= set(metrics)
+        or not required_status <= set(task_status)
+    ):
+        raise ValueError(ownership_error)
+    owners = task_status.loc[
+        task_status["feature_set"].eq(primary["feature_set"])
+        & task_status["train_window"].eq(primary["train_window"])
+        & task_status["status"].eq("fit"),
+        [*keys, "positive_test"],
+    ]
+    if metrics.duplicated(keys).any() or owners.duplicated(keys).any():
+        raise ValueError(ownership_error)
+    ownership = metrics[keys].merge(
+        owners,
+        on=keys,
+        how="outer",
+        validate="one_to_one",
+        indicator=True,
+    )
+    if not ownership["_merge"].eq("both").all():
+        raise ValueError(ownership_error)
+    owned_positives = pd.to_numeric(ownership["positive_test"], errors="coerce")
+    if (
+        owned_positives.isna().any()
+        or (owned_positives < 0).any()
+        or not owned_positives.mod(1).eq(0).all()
+    ):
+        raise ValueError("Table 3 fit owners require exact nonnegative integer positive_test")
+    positives = ownership.assign(positive_test=owned_positives).groupby("task")[
+        "positive_test"
+    ].sum()
     uncertainty = _annual_metric_summary(metrics, ["task"])
     excluding_2020_summary = _annual_metric_summary(
         metrics.loc[pd.to_numeric(metrics["test_year"], errors="coerce").ne(2020)],
@@ -570,7 +612,7 @@ def _public_task_metrics(metrics: pd.DataFrame, summary: dict[str, Any]) -> pd.D
     grouped["Excluding_2020_Delta"] = (
         grouped["Excluding_2020_PR_AUC"] - grouped["Mean_PR_AUC"]
     )
-    grouped.insert(1, "Panel_Positives", grouped["task"].map(positives))
+    grouped.insert(1, "Panel_Positives", grouped["task"].map(positives.to_dict()))
     grouped = grouped.rename(columns={"task": "Task"})
     grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
     for col in [
@@ -1400,7 +1442,11 @@ def main() -> None:
     public_primary_metrics = _select_primary_public_metrics(public_metrics, public_summary)
 
     public_lake = _public_lake_scale(_latest_public_lake_report())
-    public_task = _public_task_metrics(public_primary_metrics, public_summary)
+    public_task = _public_task_metrics(
+        public_primary_metrics,
+        public_task_status,
+        public_summary,
+    )
     public_sample_attrition = _public_sample_attrition_table(public_summary)
     public_fold_support = _public_fold_support(public_task_status)
     feature_family = _feature_family_metrics(public_metrics, public_summary)

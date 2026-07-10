@@ -99,6 +99,7 @@ VISIBILITY_HISTORY_FEATURES = (
     "public_history_8k_502_1y_count",
     "public_history_8k_502_3y_count",
 )
+DML_CONTROLS_DEFINITION = "maximum_fold_local_encoded_nuisance_columns"
 
 
 def stable_task_seed(base_seed: int, *parts: object) -> int:
@@ -460,46 +461,68 @@ def _public_dml_control_columns(
 
 
 def _public_dml_matrix(
-    work: pd.DataFrame,
+    train: pd.DataFrame,
+    held_out: pd.DataFrame,
     controls: Sequence[str],
     *,
     max_categories: int = 50,
-) -> Tuple[np.ndarray, List[str]]:
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     if not controls:
-        return np.zeros((len(work), 1), dtype=float), ["constant_control"]
-    frame = work[list(controls)].copy()
+        return (
+            np.zeros((len(train), 1), dtype=float),
+            np.zeros((len(held_out), 1), dtype=float),
+            ["constant_control"],
+        )
+    train_frame = train[list(controls)].copy()
+    held_out_frame = held_out[list(controls)].copy()
     categorical = [
         col
-        for col in frame.columns
+        for col in train_frame.columns
         if col in {"form", "entity_type"}
-        or frame[col].dtype == object
-        or str(frame[col].dtype).startswith("category")
+        or train_frame[col].dtype == object
+        or str(train_frame[col].dtype).startswith("category")
     ]
     categorical = [
         col
         for col in categorical
-        if frame[col].nunique(dropna=True) <= int(max_categories)
+        if train_frame[col].nunique(dropna=True) <= int(max_categories)
     ]
-    numeric = [col for col in frame.columns if col not in categorical]
-    parts: List[pd.DataFrame] = []
+    numeric = [col for col in train_frame.columns if col not in categorical]
+    train_parts: List[np.ndarray] = []
+    held_out_parts: List[np.ndarray] = []
     used: List[str] = []
     if numeric:
-        numeric_frame = frame[numeric].apply(pd.to_numeric, errors="coerce")
-        numeric_frame = numeric_frame.replace([np.inf, -np.inf], np.nan).clip(
+        numeric_train = train_frame[numeric].apply(pd.to_numeric, errors="coerce")
+        numeric_train = numeric_train.replace([np.inf, -np.inf], np.nan).clip(
             lower=-1e12, upper=1e12
         )
-        parts.append(numeric_frame)
+        numeric_held_out = held_out_frame[numeric].apply(pd.to_numeric, errors="coerce")
+        numeric_held_out = numeric_held_out.replace([np.inf, -np.inf], np.nan).clip(
+            lower=-1e12, upper=1e12
+        )
+        imputer = SimpleImputer(strategy="median", keep_empty_features=True)
+        train_parts.append(imputer.fit_transform(numeric_train))
+        held_out_parts.append(imputer.transform(numeric_held_out))
         used.extend(numeric)
     if categorical:
-        cat_frame = frame[categorical].astype("object").fillna("__MISSING__")
-        dummies = pd.get_dummies(cat_frame, columns=categorical, dummy_na=False, dtype=float)
-        parts.append(dummies)
-        used.extend(list(dummies.columns))
-    if not parts:
-        return np.zeros((len(work), 1), dtype=float), ["constant_control"]
-    X = pd.concat(parts, axis=1)
-    imputer = SimpleImputer(strategy="median", keep_empty_features=True)
-    return imputer.fit_transform(X), used
+        encoder = Pipeline(
+            steps=[
+                ("as_object", FunctionTransformer(_as_object_array)),
+                ("impute", SimpleImputer(strategy="constant", fill_value="__MISSING__")),
+                ("as_string", FunctionTransformer(_as_string_array)),
+                ("encode", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+            ]
+        )
+        train_parts.append(encoder.fit_transform(train_frame[categorical]))
+        held_out_parts.append(encoder.transform(held_out_frame[categorical]))
+        used.extend(encoder.named_steps["encode"].get_feature_names_out(categorical).tolist())
+    if not train_parts:
+        return (
+            np.zeros((len(train), 1), dtype=float),
+            np.zeros((len(held_out), 1), dtype=float),
+            ["constant_control"],
+        )
+    return np.hstack(train_parts), np.hstack(held_out_parts), used
 
 
 def fit_public_opacity_dml(
@@ -517,6 +540,7 @@ def fit_public_opacity_dml(
     )
     rows: List[Dict[str, object]] = []
     encoded_counts: Dict[str, int] = {}
+    fold_encoded_counts: Dict[str, List[Dict[str, int]]] = {}
     for outcome in outcomes:
         if outcome not in TASKS:
             rows.append(
@@ -535,7 +559,7 @@ def fit_public_opacity_dml(
                     "n_raw_controls": int(len(controls)),
                     "n_encoded_controls": np.nan,
                     "n_controls": np.nan,
-                    "n_controls_definition": "encoded_nuisance_columns",
+                    "n_controls_definition": DML_CONTROLS_DEFINITION,
                     "n_opacity_components": int(len(opacity_components)),
                 }
             )
@@ -559,7 +583,7 @@ def fit_public_opacity_dml(
                     "n_raw_controls": int(len(controls)),
                     "n_encoded_controls": np.nan,
                     "n_controls": np.nan,
-                    "n_controls_definition": "encoded_nuisance_columns",
+                    "n_controls_definition": DML_CONTROLS_DEFINITION,
                     "n_opacity_components": int(len(opacity_components)),
                 }
             )
@@ -580,7 +604,7 @@ def fit_public_opacity_dml(
             "n_raw_controls": int(len(controls)),
             "n_encoded_controls": np.nan,
             "n_controls": np.nan,
-            "n_controls_definition": "encoded_nuisance_columns",
+            "n_controls_definition": DML_CONTROLS_DEFINITION,
             "n_opacity_components": int(len(opacity_components)),
         }
         if len(opacity_components) == 0:
@@ -592,22 +616,19 @@ def fit_public_opacity_dml(
         if float(np.nanstd(t)) == 0:
             rows.append({**base_row, "status": "skipped_constant_treatment", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
             continue
-        X, used_controls = _public_dml_matrix(work, controls)
-        n_encoded_controls = int(len(used_controls))
-        encoded_counts[outcome] = n_encoded_controls
-        post_matrix_row = {
-            **base_row,
-            "n_encoded_controls": n_encoded_controls,
-            "n_controls": n_encoded_controls,
-        }
         splits = min(int(n_splits), len(work))
         if splits < 2:
-            rows.append({**post_matrix_row, "status": "skipped_insufficient_folds", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            rows.append({**base_row, "status": "skipped_insufficient_folds", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
             continue
         y_hat = np.zeros(len(work), dtype=float)
         t_hat = np.zeros(len(work), dtype=float)
         splitter = KFold(n_splits=splits, shuffle=True, random_state=int(seed))
-        for fold, (train_idx, test_idx) in enumerate(splitter.split(X), start=1):
+        fold_widths: List[Dict[str, int]] = []
+        for fold, (train_idx, test_idx) in enumerate(splitter.split(work), start=1):
+            X_train, X_test, used_controls = _public_dml_matrix(
+                work.iloc[train_idx], work.iloc[test_idx], controls
+            )
+            fold_widths.append({"fold_id": fold, "n_encoded_controls": int(len(used_controls))})
             if len(np.unique(y[train_idx])) < 2:
                 y_hat[test_idx] = float(np.mean(y[train_idx]))
             else:
@@ -615,8 +636,8 @@ def fit_public_opacity_dml(
                     random_state=int(seed) + fold,
                     max_iter=int(max_iter),
                 )
-                y_model.fit(X[train_idx], y[train_idx])
-                y_hat[test_idx] = y_model.predict_proba(X[test_idx])[:, 1]
+                y_model.fit(X_train, y[train_idx])
+                y_hat[test_idx] = y_model.predict_proba(X_test)[:, 1]
             if float(np.nanstd(t[train_idx])) == 0:
                 t_hat[test_idx] = float(np.mean(t[train_idx]))
             else:
@@ -624,8 +645,16 @@ def fit_public_opacity_dml(
                     random_state=int(seed) + 100 + fold,
                     max_iter=int(max_iter),
                 )
-                t_model.fit(X[train_idx], t[train_idx])
-                t_hat[test_idx] = t_model.predict(X[test_idx])
+                t_model.fit(X_train, t[train_idx])
+                t_hat[test_idx] = t_model.predict(X_test)
+        n_encoded_controls = max(record["n_encoded_controls"] for record in fold_widths)
+        encoded_counts[outcome] = n_encoded_controls
+        fold_encoded_counts[outcome] = fold_widths
+        post_matrix_row = {
+            **base_row,
+            "n_encoded_controls": n_encoded_controls,
+            "n_controls": n_encoded_controls,
+        }
         y_res = y - y_hat
         t_res = t - t_hat
         if float(np.nanstd(t_res)) == 0:
@@ -642,7 +671,7 @@ def fit_public_opacity_dml(
                 "n_raw_controls": int(len(controls)),
                 "n_encoded_controls": n_encoded_controls,
                 "n_controls": n_encoded_controls,
-                "n_controls_definition": "encoded_nuisance_columns",
+                "n_controls_definition": DML_CONTROLS_DEFINITION,
             }
         )
     meta = {
@@ -652,8 +681,9 @@ def fit_public_opacity_dml(
         "n_opacity_components": int(len(opacity_components)),
         "n_raw_controls": int(len(controls)),
         "n_encoded_controls_by_outcome": encoded_counts,
+        "n_encoded_controls_by_fold": fold_encoded_counts,
         "n_controls": max(encoded_counts.values(), default=0),
-        "n_controls_definition": "encoded_nuisance_columns",
+        "n_controls_definition": DML_CONTROLS_DEFINITION,
         "control_columns_definition": "raw_controls_before_encoding",
     }
     return pd.DataFrame(rows), meta
@@ -1187,8 +1217,9 @@ def run_public_cascade(
             "n_opacity_components": 0,
             "n_raw_controls": 0,
             "n_encoded_controls_by_outcome": {},
+            "n_encoded_controls_by_fold": {},
             "n_controls": 0,
-            "n_controls_definition": "encoded_nuisance_columns",
+            "n_controls_definition": DML_CONTROLS_DEFINITION,
             "control_columns_definition": "raw_controls_before_encoding",
             "status": "disabled",
         }

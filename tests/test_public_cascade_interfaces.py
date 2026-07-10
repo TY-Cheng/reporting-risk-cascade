@@ -18,6 +18,7 @@ from src.public_cascade import (
     _evaluate_binary,
     _infer_feature_families,
     _prepare_xy,
+    _public_dml_matrix,
     _resolve_primary_specification,
     _run_public_cascade_unit,
     _validate_primary_metric_rows,
@@ -349,6 +350,7 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
         }
     )
     panel = pd.DataFrame(rows)
+    panel.loc[0, "form"] = "20-F"
     scored, components = build_public_missingness_density_score(panel)
     dml, meta = fit_public_opacity_dml(
         scored,
@@ -363,11 +365,25 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
     assert (dml["n_obs"] == len(rows) - 1).all()
     assert (dml["n_raw_controls"] == len(meta["control_columns"])).all()
     assert (dml["n_encoded_controls"] == dml["n_controls"]).all()
-    assert set(dml["n_controls_definition"]) == {"encoded_nuisance_columns"}
+    assert set(dml["n_controls_definition"]) == {"maximum_fold_local_encoded_nuisance_columns"}
     assert meta["n_raw_controls"] == len(meta["control_columns"])
-    assert meta["n_controls_definition"] == "encoded_nuisance_columns"
+    assert meta["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
     for row in dml.itertuples(index=False):
         assert meta["n_encoded_controls_by_outcome"][row.outcome] == row.n_encoded_controls
+        fold_widths = meta["n_encoded_controls_by_fold"][row.outcome]
+        assert [record["fold_id"] for record in fold_widths] == [1, 2, 3]
+        assert row.n_encoded_controls == max(
+            record["n_encoded_controls"] for record in fold_widths
+        )
+    assert (
+        len(
+            {
+                record["n_encoded_controls"]
+                for record in meta["n_encoded_controls_by_fold"]["comment_thread"]
+            }
+        )
+        == 2
+    )
 
     degenerate = scored.assign(label_amendment_365=0)
     skipped, skipped_meta = fit_public_opacity_dml(
@@ -382,7 +398,24 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
     assert skipped_row["n_raw_controls"] == len(skipped_meta["control_columns"])
     assert pd.isna(skipped_row["n_encoded_controls"])
     assert pd.isna(skipped_row["n_controls"])
-    assert skipped_row["n_controls_definition"] == "encoded_nuisance_columns"
+    assert skipped_row["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
+
+
+def test_public_dml_matrix_fits_imputation_and_categories_on_training_fold_only() -> None:
+    work = pd.DataFrame(
+        {
+            "numeric_control": [0.0, float("nan"), 100.0],
+            "form": ["10-K", "10-K", "20-F"],
+        }
+    )
+
+    train, held_out, used_controls = _public_dml_matrix(
+        work.iloc[:2], work.iloc[2:], ["numeric_control", "form"]
+    )
+
+    np.testing.assert_allclose(train, [[0.0, 1.0], [0.0, 1.0]])
+    np.testing.assert_allclose(held_out, [[100.0, 0.0]])
+    assert len(used_controls) == 2
 
 
 def test_public_cascade_omitted_sample_end_year_includes_2024(
@@ -465,8 +498,9 @@ model:
     assert indexed_attrition.loc["observable_365_day_horizon", "n_rows"] == 5
     assert opacity_meta["n_raw_controls"] == 0
     assert opacity_meta["n_encoded_controls_by_outcome"] == {}
+    assert opacity_meta["n_encoded_controls_by_fold"] == {}
     assert opacity_meta["n_controls"] == 0
-    assert opacity_meta["n_controls_definition"] == "encoded_nuisance_columns"
+    assert opacity_meta["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
     assert opacity_meta["control_columns_definition"] == "raw_controls_before_encoding"
     assert metrics.empty
     assert set(task_status["status"]) == {"skipped_one_class_train"}

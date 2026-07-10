@@ -233,8 +233,8 @@ def _write_toy_study(
                 "n_encoded_controls": [64, 63],
                 "n_controls": [64, 63],
                 "n_controls_definition": [
-                    "encoded_nuisance_columns",
-                    "encoded_nuisance_columns",
+                    "maximum_fold_local_encoded_nuisance_columns",
+                    "maximum_fold_local_encoded_nuisance_columns",
                 ],
                 "n_opacity_components": [17, 17],
                 "status": ["fit", "fit"],
@@ -251,8 +251,18 @@ def _write_toy_study(
                         "comment_thread": 64,
                         "amendment": 63,
                     },
+                    "n_encoded_controls_by_fold": {
+                        "comment_thread": [
+                            {"fold_id": 1, "n_encoded_controls": 63},
+                            {"fold_id": 2, "n_encoded_controls": 64},
+                        ],
+                        "amendment": [
+                            {"fold_id": 1, "n_encoded_controls": 63},
+                            {"fold_id": 2, "n_encoded_controls": 63},
+                        ],
+                    },
                     "n_opacity_components": 17,
-                    "n_controls_definition": "encoded_nuisance_columns",
+                    "n_controls_definition": "maximum_fold_local_encoded_nuisance_columns",
                 }
             ),
             encoding="utf-8",
@@ -421,7 +431,7 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
     }
     assert set(refreshed["n_opacity_components_meta"]) == {17}
     assert set(refreshed["n_controls_definition_meta"]) == {
-        "encoded_nuisance_columns"
+        "maximum_fold_local_encoded_nuisance_columns"
     }
 
 
@@ -636,6 +646,51 @@ def test_bootstrap_union_includes_primary_outside_top_five(
         for idx in [0, 1, 2, 3, 4, 6]
     )
     assert pd.isna(finalized[5].get("top_decile_lift_ci_low", np.nan))
+
+
+def test_bootstrap_union_excludes_top_ranked_primary_before_selecting_five(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {
+            "model_id": "m",
+            "task": f"task_{idx}",
+            "metric_status": "fit",
+            "top_decile_lift": float(10 - idx),
+        }
+        for idx in range(7)
+    ]
+    frame = pd.DataFrame(
+        {
+            "model_id": ["m"] * 14,
+            "task": [f"task_{idx}" for idx in range(7) for _ in range(2)],
+            "target": [0, 1] * 7,
+            "score": [0.1, 0.9] * 7,
+        }
+    )
+    monkeypatch.setattr(
+        construct_overlap,
+        "_bootstrap_lift_ci",
+        lambda y, score, *, reps, seed: (1.0, 2.0),
+    )
+
+    finalized = _finalize_alignment_rows(
+        rows,
+        frame=frame,
+        group_cols=["model_id", "task"],
+        target_col="target",
+        score_col="score",
+        primary_keys={"model_id": "m", "task": "task_0"},
+        exploratory_top_n=5,
+        direction="public_to_benchmark",
+        bootstrap_seed=42,
+        bootstrap_reps=1000,
+    )
+
+    assert finalized[0]["is_primary"]
+    assert not finalized[0]["is_exploratory_top5"]
+    assert sum(row["is_exploratory_top5"] for row in finalized) == 5
+    assert sum(pd.notna(row.get("top_decile_lift_ci_low")) for row in finalized) == 6
 
 
 def test_select_unique_row_rejects_missing_primary() -> None:

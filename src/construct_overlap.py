@@ -713,6 +713,7 @@ def _mark_alignment_rows(
     fitted = out.loc[
         out["metric_status"].eq("fit")
         & pd.to_numeric(out["top_decile_lift"], errors="coerce").notna()
+        & ~out["is_primary"]
     ]
     top_index = fitted.nlargest(exploratory_top_n, "top_decile_lift").index
     out["is_exploratory_top5"] = out.index.isin(top_index)

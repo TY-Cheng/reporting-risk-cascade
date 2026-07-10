@@ -80,10 +80,10 @@ PRE_ENCODING_DML_SKIP_STATUSES = {
     "skipped_no_opacity_components",
     "skipped_one_class_or_too_small",
     "skipped_constant_treatment",
+    "skipped_insufficient_folds",
 }
 POST_ENCODING_DML_STATUSES = {
     "fit",
-    "skipped_insufficient_folds",
     "skipped_constant_residual_treatment",
 }
 SOURCE_INVENTORY_BASE_FIELDS = {"metadata_file", "metadata_sha256"}
@@ -281,9 +281,10 @@ def _dml_matches(
         or table_12["Outcome"].astype(str).duplicated().any()
     ):
         return False
-    if set(dml["n_controls_definition"].astype(str)) != {"encoded_nuisance_columns"}:
+    definition = "maximum_fold_local_encoded_nuisance_columns"
+    if set(dml["n_controls_definition"].astype(str)) != {definition}:
         return False
-    if dml_meta.get("n_controls_definition") != "encoded_nuisance_columns":
+    if dml_meta.get("n_controls_definition") != definition:
         return False
 
     raw = [_nonnegative_integer(value) for value in dml["n_raw_controls"]]
@@ -298,7 +299,8 @@ def _dml_matches(
         return False
 
     raw_encoded_meta = dml_meta.get("n_encoded_controls_by_outcome", {})
-    if not isinstance(raw_encoded_meta, dict):
+    raw_fold_meta = dml_meta.get("n_encoded_controls_by_fold", {})
+    if not isinstance(raw_encoded_meta, dict) or not isinstance(raw_fold_meta, dict):
         return False
     encoded_meta: dict[str, int] = {}
     for outcome, value in raw_encoded_meta.items():
@@ -320,6 +322,8 @@ def _dml_matches(
                 return False
             if outcome in encoded_meta:
                 return False
+            if outcome in raw_fold_meta:
+                return False
             encoded_counts.append(None)
             continue
         if status not in POST_ENCODING_DML_STATUSES:
@@ -332,7 +336,23 @@ def _dml_matches(
         expected_encoded_outcomes.add(outcome)
         if encoded_meta.get(outcome) != encoded_count:
             return False
+        fold_records = raw_fold_meta.get(outcome)
+        if not isinstance(fold_records, list) or not fold_records:
+            return False
+        fold_widths: list[int] = []
+        for expected_fold_id, record in enumerate(fold_records, start=1):
+            if not isinstance(record, dict):
+                return False
+            fold_id = _nonnegative_integer(record.get("fold_id"))
+            fold_width = _nonnegative_integer(record.get("n_encoded_controls"))
+            if fold_id != expected_fold_id or fold_width is None:
+                return False
+            fold_widths.append(fold_width)
+        if max(fold_widths) != encoded_count:
+            return False
     if set(encoded_meta) != expected_encoded_outcomes:
+        return False
+    if set(raw_fold_meta) != expected_encoded_outcomes:
         return False
 
     table_by_outcome = table_12.assign(Outcome=table_12["Outcome"].astype(str)).set_index(

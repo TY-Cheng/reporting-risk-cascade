@@ -164,8 +164,8 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
             "n_encoded_controls": [64, float("nan")],
             "n_controls": [64, float("nan")],
             "n_controls_definition": [
-                "encoded_nuisance_columns",
-                "encoded_nuisance_columns",
+                "maximum_fold_local_encoded_nuisance_columns",
+                "maximum_fold_local_encoded_nuisance_columns",
             ],
             "n_opacity_components": [17, 17],
             "status": ["fit", "skipped_one_class_or_too_small"],
@@ -176,8 +176,15 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
         {
             "n_raw_controls": 60,
             "n_encoded_controls_by_outcome": {"comment_thread": 64},
+            "n_encoded_controls_by_fold": {
+                "comment_thread": [
+                    {"fold_id": 1, "n_encoded_controls": 64},
+                    {"fold_id": 2, "n_encoded_controls": 64},
+                    {"fold_id": 3, "n_encoded_controls": 64},
+                ]
+            },
             "n_opacity_components": 17,
-            "n_controls_definition": "encoded_nuisance_columns",
+            "n_controls_definition": "maximum_fold_local_encoded_nuisance_columns",
         },
     )
     tables = package_dir / "tables"
@@ -402,12 +409,77 @@ def test_verify_canonical_run_rejects_wrong_dml_dimensions(tmp_path: Path) -> No
             "n_raw_controls": [60],
             "n_encoded_controls": [65],
             "n_controls": [65],
-            "n_controls_definition": ["encoded_nuisance_columns"],
+            "n_controls_definition": ["maximum_fold_local_encoded_nuisance_columns"],
         }
     ).to_csv(
         fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv",
         index=False,
     )
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
+
+
+def test_verify_canonical_run_accepts_fold_local_dml_width_contract(tmp_path: Path) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
+    dml = pd.read_csv(dml_path)
+    dml["n_controls_definition"] = "maximum_fold_local_encoded_nuisance_columns"
+    dml.to_csv(dml_path, index=False)
+    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["n_controls_definition"] = "maximum_fold_local_encoded_nuisance_columns"
+    meta["n_encoded_controls_by_fold"] = {
+        "comment_thread": [
+            {"fold_id": 1, "n_encoded_controls": 63},
+            {"fold_id": 2, "n_encoded_controls": 64},
+            {"fold_id": 3, "n_encoded_controls": 64},
+        ]
+    }
+    _write_json(meta_path, meta)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    "fold_widths",
+    [
+        [
+            {"fold_id": 1, "n_encoded_controls": 63},
+            {"fold_id": 1, "n_encoded_controls": 64},
+        ],
+        [
+            {"fold_id": 1, "n_encoded_controls": 63},
+            {"fold_id": 2, "n_encoded_controls": 65},
+        ],
+    ],
+    ids=["nonsequential-fold-ids", "wrong-maximum"],
+)
+def test_verify_canonical_run_rejects_invalid_fold_local_dml_widths(
+    tmp_path: Path,
+    fold_widths: list[dict[str, int]],
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
+    dml = pd.read_csv(dml_path)
+    dml["n_controls_definition"] = "maximum_fold_local_encoded_nuisance_columns"
+    dml.to_csv(dml_path, index=False)
+    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["n_controls_definition"] = "maximum_fold_local_encoded_nuisance_columns"
+    meta["n_encoded_controls_by_fold"] = {"comment_thread": fold_widths}
+    _write_json(meta_path, meta)
 
     errors = verify_canonical_run(
         fixture["study_dir"],
@@ -597,26 +669,14 @@ def test_verify_canonical_run_rejects_fit_dml_row_with_nan_encoded_controls(
     assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
 
 
-def test_verify_canonical_run_accepts_post_encoding_dml_skip_with_dimensions(
+def test_verify_canonical_run_accepts_insufficient_folds_without_dimensions(
     tmp_path: Path,
 ) -> None:
     fixture = _write_canonical_fixture(tmp_path)
     dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
     dml = pd.read_csv(dml_path)
-    dml.loc[1, ["status", "n_encoded_controls", "n_controls"]] = [
-        "skipped_insufficient_folds",
-        63,
-        63,
-    ]
+    dml.loc[1, "status"] = "skipped_insufficient_folds"
     dml.to_csv(dml_path, index=False)
-    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["n_encoded_controls_by_outcome"]["amendment"] = 63
-    _write_json(meta_path, meta)
-    table_path = fixture["package_dir"] / "tables" / "table_12_public_opacity_dml.csv"
-    table = pd.read_csv(table_path)
-    table.loc[1, "Encoded_Controls"] = 63
-    table.to_csv(table_path, index=False)
 
     errors = verify_canonical_run(
         fixture["study_dir"],

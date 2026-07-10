@@ -57,6 +57,8 @@ def test_dispersion_display_uses_interval_when_available() -> None:
 def test_public_task_metrics_include_calibration_diagnostics() -> None:
     metrics = pd.DataFrame(
         {
+            "feature_set": ["all"] * MIN_VALID_FOLDS_FOR_CI,
+            "train_window": ["expanding"] * MIN_VALID_FOLDS_FOR_CI,
             "task": ["comment_thread"] * MIN_VALID_FOLDS_FOR_CI,
             "test_year": [2020, 2021, 2022, 2023, 2024],
             "positive_rate_test": [0.2] * MIN_VALID_FOLDS_FOR_CI,
@@ -68,10 +70,30 @@ def test_public_task_metrics_include_calibration_diagnostics() -> None:
             "ece": [0.04] * MIN_VALID_FOLDS_FOR_CI,
         }
     )
+    task_status = pd.DataFrame(
+        {
+            "feature_set": ["all"] * MIN_VALID_FOLDS_FOR_CI + ["metadata"],
+            "train_window": ["expanding"] * (MIN_VALID_FOLDS_FOR_CI + 1),
+            "task": ["comment_thread"] * (MIN_VALID_FOLDS_FOR_CI + 1),
+            "test_year": [2020, 2021, 2022, 2023, 2024, 2024],
+            "status": ["fit"] * (MIN_VALID_FOLDS_FOR_CI + 1),
+            "positive_test": [1, 2, 3, 4, 5, 999],
+        }
+    )
 
-    table = _public_task_metrics(metrics, {"task_positive_counts": {"comment_thread": 100}})
+    table = _public_task_metrics(
+        metrics,
+        task_status,
+        {
+            "primary_specification": {
+                "feature_set": "all",
+                "train_window": "expanding",
+            },
+            "task_positive_counts": {"comment_thread": 100},
+        },
+    )
 
-    assert table.loc[0, "Panel_Positives"] == "100"
+    assert table.loc[0, "Panel_Positives"] == "15"
     assert table.loc[0, "Mean_PR_AUC"] == "0.2600"
     assert table.loc[0, "Excluding_2020_PR_AUC"] == "0.3000"
     assert table.loc[0, "Excluding_2020_Delta"] == "0.0400"
@@ -79,10 +101,86 @@ def test_public_task_metrics_include_calibration_diagnostics() -> None:
     assert table.loc[0, "Mean_ECE"] == "0.0400"
 
 
+@pytest.mark.parametrize(
+    "status_rows",
+    [
+        [
+            {
+                "feature_set": "all",
+                "train_window": "expanding",
+                "task": "comment_thread",
+                "test_year": 2024,
+                "status": "fit",
+                "positive_test": 2,
+            },
+            {
+                "feature_set": "all",
+                "train_window": "expanding",
+                "task": "comment_thread",
+                "test_year": 2024,
+                "status": "fit",
+                "positive_test": 2,
+            },
+        ],
+        [],
+        [
+            {
+                "feature_set": "all",
+                "train_window": "expanding",
+                "task": "comment_thread",
+                "test_year": 2024,
+                "status": "fit",
+                "positive_test": 2,
+            },
+            {
+                "feature_set": "all",
+                "train_window": "expanding",
+                "task": "comment_thread",
+                "test_year": 2023,
+                "status": "fit",
+                "positive_test": 1,
+            },
+        ],
+    ],
+    ids=["duplicate", "missing", "extra"],
+)
+def test_public_task_metrics_rejects_non_bijective_fit_ownership(
+    status_rows: list[dict[str, object]],
+) -> None:
+    metrics = pd.DataFrame(
+        {
+            "feature_set": ["all"],
+            "train_window": ["expanding"],
+            "task": ["comment_thread"],
+            "test_year": [2024],
+            "positive_rate_test": [0.02],
+            "n_test": [100],
+            "roc_auc": [0.6],
+            "pr_auc": [0.2],
+            "brier": [0.02],
+            "brier_skill_score": [0.05],
+            "ece": [0.01],
+        }
+    )
+
+    with pytest.raises(ValueError, match="one-to-one fit ownership"):
+        _public_task_metrics(
+            metrics,
+            pd.DataFrame(status_rows),
+            {
+                "primary_specification": {
+                    "feature_set": "all",
+                    "train_window": "expanding",
+                }
+            },
+        )
+
+
 def test_public_task_note_defines_excluding_2020_test_fold_sensitivity() -> None:
     assert "all + expanding" in PUBLIC_TASK_NOTE
     assert "2020 test fold" in PUBLIC_TASK_NOTE
     assert "training specifications are unchanged" in PUBLIC_TASK_NOTE
+    assert "one-to-one fit-owner rows" in PUBLIC_TASK_NOTE
 
 
 def test_select_primary_public_metrics_excludes_grid_distractors() -> None:
@@ -422,9 +520,10 @@ def test_public_opacity_dml_displays_explicit_dimensions_and_nan(tmp_path: Path)
     ]
     assert DML_INTERVAL_NOTE == (
         "Raw controls are source variables before encoding; encoded controls are nuisance-model "
-        "columns after categorical expansion and imputation; opacity components form the "
-        "missingness-density treatment. Intervals use HC3 residual OLS after cross-fitting. "
-        "The estimates are adjusted associations, not identified structural effects."
+        "columns reported at the maximum fold-local width after training-fold categorical "
+        "expansion and imputation; opacity components form the missingness-density treatment. "
+        "Intervals use HC3 residual OLS after cross-fitting. The estimates are adjusted "
+        "associations, not identified structural effects."
     )
 
 
