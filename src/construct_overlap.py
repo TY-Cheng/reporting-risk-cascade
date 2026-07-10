@@ -26,12 +26,29 @@ PUBLIC_LABELS = [
     "label_amendment_365",
     "label_8k_402_365",
 ]
+PUBLIC_ALIGNMENT_KEY_COLUMNS = [
+    "model_id",
+    "task",
+    "feature_set",
+    "train_window",
+    "label_mode",
+    "score_aggregation",
+    "bridge_tier",
+]
+RECIPROCAL_ALIGNMENT_KEY_COLUMNS = [
+    "model_id",
+    "target_public_label",
+    "feature_set",
+    "train_window",
+    "label_mode",
+    "score_aggregation",
+    "bridge_tier",
+]
 RES_AN_COLS = ["res_an0", "res_an1", "res_an2", "res_an3"]
 BOOTSTRAP_REPS = 1000
 BOOTSTRAP_SEED = 42
 BOOTSTRAP_INTERVAL_METHOD = "row_level_percentile_bootstrap"
 BOOTSTRAP_CHUNK_REPS = 100
-BOOTSTRAP_INTERVAL_TOP_ROWS = 5
 MIN_RANKING_POSITIVES = 10
 BOOTSTRAP_POSITIVE_THRESHOLD = 30
 BRIDGE_PROVENANCE_COLUMNS = ["source", "source_version", "match_method"]
@@ -631,7 +648,6 @@ def _score_metric_rows(
     score_col: str,
     count_prefix: str,
     bridge_source: str,
-    bootstrap_top_rows: int = BOOTSTRAP_INTERVAL_TOP_ROWS,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if frame.empty:
@@ -657,50 +673,107 @@ def _score_metric_rows(
             }
         )
         rows.append(row)
-    _add_bootstrap_intervals_to_top_rows(
-        rows,
-        frame=frame,
-        group_cols=group_cols,
-        target_col=target_col,
-        score_col=score_col,
-        top_n=bootstrap_top_rows,
-    )
     return rows
 
 
-def _add_bootstrap_intervals_to_top_rows(
+def _row_mask(frame: pd.DataFrame, keys: dict[str, object]) -> pd.Series:
+    mask = pd.Series(True, index=frame.index)
+    for column, value in keys.items():
+        if column not in frame.columns:
+            raise ValueError(f"alignment key column is missing: {column}")
+        mask &= frame[column].isna() if pd.isna(value) else frame[column].eq(value)
+    return mask
+
+
+def _select_unique_row(
+    frame: pd.DataFrame,
+    *,
+    keys: dict[str, object],
+    direction: str,
+) -> pd.Series:
+    selected = frame.loc[_row_mask(frame, keys)]
+    if len(selected) != 1:
+        raise ValueError(
+            f"{direction} primary alignment must match exactly one row; matched {len(selected)}"
+        )
+    return selected.iloc[0]
+
+
+def _mark_alignment_rows(
+    frame: pd.DataFrame,
+    *,
+    primary_keys: dict[str, object],
+    exploratory_top_n: int,
+    direction: str,
+) -> pd.DataFrame:
+    out = frame.copy()
+    primary = _select_unique_row(out, keys=primary_keys, direction=direction)
+    out["is_primary"] = False
+    out.loc[primary.name, "is_primary"] = True
+    fitted = out.loc[
+        out["metric_status"].eq("fit")
+        & pd.to_numeric(out["top_decile_lift"], errors="coerce").notna()
+    ]
+    top_index = fitted.nlargest(exploratory_top_n, "top_decile_lift").index
+    out["is_exploratory_top5"] = out.index.isin(top_index)
+    return out
+
+
+def _add_bootstrap_intervals_to_selected_rows(
     rows: list[dict[str, Any]],
     *,
     frame: pd.DataFrame,
     group_cols: Sequence[str],
     target_col: str,
     score_col: str,
-    top_n: int,
+    bootstrap_seed: int,
+    bootstrap_reps: int,
 ) -> None:
-    if not rows or top_n <= 0:
-        return
-    ranked = sorted(
-        (
-            (idx, row)
-            for idx, row in enumerate(rows)
-            if row.get("metric_status") == "fit"
-            and np.isfinite(row.get("top_decile_lift", np.nan))
-        ),
-        key=lambda item: float(item[1]["top_decile_lift"]),
-        reverse=True,
-    )[:top_n]
-    for idx, row in ranked:
-        mask = pd.Series(True, index=frame.index)
-        for col in group_cols:
-            value = row.get(col)
-            if pd.isna(value):
-                mask &= frame[col].isna()
-            else:
-                mask &= frame[col].eq(value)
+    for idx, row in enumerate(rows):
+        if not (row.get("is_primary") or row.get("is_exploratory_top5")):
+            continue
+        mask = _row_mask(frame, {column: row.get(column) for column in group_cols})
         sample = frame.loc[mask]
-        ci_low, ci_high = _bootstrap_lift_ci(sample[target_col].to_numpy(), sample[score_col].to_numpy())
+        ci_low, ci_high = _bootstrap_lift_ci(
+            sample[target_col].to_numpy(),
+            sample[score_col].to_numpy(),
+            reps=bootstrap_reps,
+            seed=bootstrap_seed,
+        )
         rows[idx]["top_decile_lift_ci_low"] = ci_low
         rows[idx]["top_decile_lift_ci_high"] = ci_high
+
+
+def _finalize_alignment_rows(
+    rows: list[dict[str, Any]],
+    *,
+    frame: pd.DataFrame,
+    group_cols: Sequence[str],
+    target_col: str,
+    score_col: str,
+    primary_keys: dict[str, object],
+    exploratory_top_n: int,
+    direction: str,
+    bootstrap_seed: int,
+    bootstrap_reps: int,
+) -> list[dict[str, Any]]:
+    marked = _mark_alignment_rows(
+        pd.DataFrame(rows),
+        primary_keys=primary_keys,
+        exploratory_top_n=exploratory_top_n,
+        direction=direction,
+    )
+    finalized = marked.to_dict("records")
+    _add_bootstrap_intervals_to_selected_rows(
+        finalized,
+        frame=frame,
+        group_cols=group_cols,
+        target_col=target_col,
+        score_col=score_col,
+        bootstrap_seed=bootstrap_seed,
+        bootstrap_reps=bootstrap_reps,
+    )
+    return finalized
 
 
 def _public_score_frames(con: Any, public_predictions_path: Path) -> dict[str, pd.DataFrame]:
@@ -768,26 +841,33 @@ def _public_ranking(
     public_predictions_path: Path,
     out_dir: Path,
     bridge_source: str,
+    *,
+    alignment_config: dict[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     frames = _public_score_frames(con, public_predictions_path)
     main = frames["mean"].loc[frames["mean"]["bridge_tier"].eq("high_confidence")].copy()
     main["model_id"] = "public_cascade"
     main["label_mode"] = "benchmark_naive"
+    public_group_cols = PUBLIC_ALIGNMENT_KEY_COLUMNS
     main_rows = _score_metric_rows(
         main,
-        group_cols=[
-            "model_id",
-            "task",
-            "feature_set",
-            "train_window",
-            "label_mode",
-            "score_aggregation",
-            "bridge_tier",
-        ],
+        group_cols=public_group_cols,
         target_col="benchmark_label",
         score_col="score",
         count_prefix="benchmark",
         bridge_source=bridge_source,
+    )
+    main_rows = _finalize_alignment_rows(
+        main_rows,
+        frame=main,
+        group_cols=public_group_cols,
+        target_col="benchmark_label",
+        score_col="score",
+        primary_keys=alignment_config["public_to_benchmark_primary"],
+        exploratory_top_n=int(alignment_config["exploratory_top_n"]),
+        direction="public_to_benchmark",
+        bootstrap_seed=int(alignment_config["bootstrap_seed"]),
+        bootstrap_reps=int(alignment_config["bootstrap_reps"]),
     )
     main_out = pd.DataFrame(main_rows)
     _write_csv(main_out, out_dir / "public_score_benchmark_ranking.csv")
@@ -797,15 +877,7 @@ def _public_ranking(
     sens["label_mode"] = "benchmark_naive"
     sens_rows = _score_metric_rows(
         sens,
-        group_cols=[
-            "model_id",
-            "task",
-            "feature_set",
-            "train_window",
-            "label_mode",
-            "score_aggregation",
-            "bridge_tier",
-        ],
+        group_cols=public_group_cols,
         target_col="benchmark_label",
         score_col="score",
         count_prefix="benchmark",
@@ -839,6 +911,7 @@ def _reciprocal_alignment(
     peer_predictions_path: Path | None,
     out_dir: Path,
     bridge_source: str,
+    alignment_config: dict[str, Any],
 ) -> pd.DataFrame:
     con.execute(
         f"""
@@ -915,21 +988,26 @@ def _reciprocal_alignment(
         ).fetchdf()
         frames.append(df)
     base = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    reciprocal_group_cols = RECIPROCAL_ALIGNMENT_KEY_COLUMNS
     rows = _score_metric_rows(
         base,
-        group_cols=[
-            "model_id",
-            "target_public_label",
-            "feature_set",
-            "train_window",
-            "label_mode",
-            "score_aggregation",
-            "bridge_tier",
-        ],
+        group_cols=reciprocal_group_cols,
         target_col="target_label",
         score_col="score",
         count_prefix="public",
         bridge_source=bridge_source,
+    )
+    rows = _finalize_alignment_rows(
+        rows,
+        frame=base,
+        group_cols=reciprocal_group_cols,
+        target_col="target_label",
+        score_col="score",
+        primary_keys=alignment_config["benchmark_to_public_primary"],
+        exploratory_top_n=int(alignment_config["exploratory_top_n"]),
+        direction="benchmark_to_public",
+        bootstrap_seed=int(alignment_config["bootstrap_seed"]),
+        bootstrap_reps=int(alignment_config["bootstrap_reps"]),
     )
     out = pd.DataFrame(rows)
     _write_csv(out, out_dir / "reciprocal_alignment.csv")
@@ -1184,9 +1262,49 @@ def _missing_required(paths: dict[str, Path]) -> list[dict[str, str]]:
     ]
 
 
+def _primary_evidence(row: pd.Series, *, direction: str) -> dict[str, object]:
+    if row.get("metric_status") != "fit":
+        raise ValueError(f"{direction} primary alignment is not fitted")
+    values = {
+        "top_decile_lift": float(row.get("top_decile_lift", np.nan)),
+        "ci_low": float(row.get("top_decile_lift_ci_low", np.nan)),
+        "ci_high": float(row.get("top_decile_lift_ci_high", np.nan)),
+    }
+    if not all(np.isfinite(value) for value in values.values()):
+        raise ValueError(f"{direction} primary alignment lacks a finite interval")
+    if values["ci_low"] > values["ci_high"]:
+        raise ValueError(f"{direction} primary alignment interval is reversed")
+    return {"metric_status": "fit", **values}
+
+
+def _exploratory_maximum(
+    frame: pd.DataFrame,
+    *,
+    primary_row: pd.Series,
+    key_columns: Sequence[str],
+    direction: str,
+) -> dict[str, object]:
+    fitted = frame.loc[
+        frame["metric_status"].eq("fit")
+        & pd.to_numeric(frame["top_decile_lift"], errors="coerce").notna()
+    ]
+    if fitted.empty:
+        raise ValueError(f"{direction} has no fitted exploratory rows")
+    maximum = fitted.nlargest(1, "top_decile_lift").iloc[0]
+    maximum_lift = float(maximum["top_decile_lift"])
+    primary_lift = float(primary_row["top_decile_lift"])
+    return {
+        "keys": {column: str(maximum[column]) for column in key_columns},
+        "top_decile_lift": maximum_lift,
+        "primary_lift": primary_lift,
+        "lift_minus_primary": maximum_lift - primary_lift,
+    }
+
+
 def run_construct_overlap(
     *,
     study_dir: Path,
+    alignment_config: dict[str, Any],
     out_dir: Path | None = None,
     opacity_out_dir: Path | None = None,
     crosswalk_path: Path | None = None,
@@ -1256,6 +1374,7 @@ def run_construct_overlap(
             required["public_predictions"],
             out_dir,
             bridge_source,
+            alignment_config=alignment_config,
         )
         reciprocal = _reciprocal_alignment(
             con,
@@ -1263,6 +1382,7 @@ def run_construct_overlap(
             peer_predictions_path=study_dir / "peer_comparison" / "detected_misstatement_model_family_predictions.parquet",
             out_dir=out_dir,
             bridge_source=bridge_source,
+            alignment_config=alignment_config,
         )
         _event_time(con, out_dir)
         _res_an_proxy_coverage(panel, out_dir)
@@ -1270,6 +1390,38 @@ def run_construct_overlap(
     finally:
         con.close()
 
+    public_primary_keys = dict(alignment_config["public_to_benchmark_primary"])
+    reciprocal_primary_keys = dict(alignment_config["benchmark_to_public_primary"])
+    public_primary_row = _select_unique_row(
+        public_ranking,
+        keys=public_primary_keys,
+        direction="public_to_benchmark",
+    )
+    reciprocal_primary_row = _select_unique_row(
+        reciprocal,
+        keys=reciprocal_primary_keys,
+        direction="benchmark_to_public",
+    )
+    public_primary_evidence = _primary_evidence(
+        public_primary_row,
+        direction="public_to_benchmark",
+    )
+    reciprocal_primary_evidence = _primary_evidence(
+        reciprocal_primary_row,
+        direction="benchmark_to_public",
+    )
+    public_exploratory_maximum = _exploratory_maximum(
+        public_ranking,
+        primary_row=public_primary_row,
+        key_columns=PUBLIC_ALIGNMENT_KEY_COLUMNS,
+        direction="public_to_benchmark",
+    )
+    reciprocal_exploratory_maximum = _exploratory_maximum(
+        reciprocal,
+        primary_row=reciprocal_primary_row,
+        key_columns=RECIPROCAL_ALIGNMENT_KEY_COLUMNS,
+        direction="benchmark_to_public",
+    )
     opacity_status = _opacity_refresh(study_dir, opacity_out_dir)
     blockers: list[dict[str, str]] = []
     sparse_files: list[str] = []
@@ -1280,10 +1432,27 @@ def run_construct_overlap(
         "bridge_source": bridge_source,
         "bridge_provenance": bridge_evidence["bridge_provenance"],
         "interval_method": BOOTSTRAP_INTERVAL_METHOD,
-        "interval_seed": BOOTSTRAP_SEED,
-        "interval_reps": BOOTSTRAP_REPS,
-        "interval_scope": "top_lift_rows_per_construct_overlap_artifact",
-        "interval_top_rows_per_artifact": BOOTSTRAP_INTERVAL_TOP_ROWS,
+        "primary_alignment": {
+            "public_to_benchmark": public_primary_keys,
+            "benchmark_to_public": reciprocal_primary_keys,
+            "public_to_benchmark_count": int(public_ranking["is_primary"].sum()),
+            "benchmark_to_public_count": int(reciprocal["is_primary"].sum()),
+        },
+        "primary_alignment_evidence": {
+            "public_to_benchmark": public_primary_evidence,
+            "benchmark_to_public": reciprocal_primary_evidence,
+        },
+        "exploratory_maxima": {
+            "public_to_benchmark": public_exploratory_maximum,
+            "benchmark_to_public": reciprocal_exploratory_maximum,
+        },
+        "search_universe_rows": {
+            "public_to_benchmark": int(len(public_ranking)),
+            "benchmark_to_public": int(len(reciprocal)),
+        },
+        "interval_scope": "primary_plus_top_5_per_direction",
+        "interval_seed": int(alignment_config["bootstrap_seed"]),
+        "interval_reps": int(alignment_config["bootstrap_reps"]),
         "study_dir": str(study_dir),
         "out_dir": str(out_dir),
         "opacity_refresh": opacity_status,

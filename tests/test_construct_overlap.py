@@ -5,17 +5,47 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+
+import src.construct_overlap as construct_overlap
 
 from src.construct_overlap import (
     BOOTSTRAP_INTERVAL_METHOD,
-    BOOTSTRAP_INTERVAL_TOP_ROWS,
     BOOTSTRAP_REPS,
     BOOTSTRAP_SEED,
     _bridge_evidence_from_crosswalk,
+    _finalize_alignment_rows,
+    _primary_evidence,
     _ranking_metrics,
+    _select_unique_row,
     run_construct_overlap,
 )
 from src.table_io import read_table, write_table
+
+
+TEST_ALIGNMENT_CONFIG = {
+    "bootstrap_seed": 42,
+    "bootstrap_reps": 1000,
+    "exploratory_top_n": 5,
+    "public_to_benchmark_primary": {
+        "model_id": "public_cascade",
+        "task": "8k_402",
+        "feature_set": "all",
+        "train_window": "expanding",
+        "label_mode": "benchmark_naive",
+        "score_aggregation": "mean",
+        "bridge_tier": "high_confidence",
+    },
+    "benchmark_to_public_primary": {
+        "model_id": "benchmark_xgb",
+        "target_public_label": "label_8k_402_365",
+        "feature_set": "benchmark_all",
+        "train_window": "expanding",
+        "label_mode": "naive",
+        "score_aggregation": "benchmark_score",
+        "bridge_tier": "high_confidence",
+    },
+}
 
 
 def _write_toy_study(
@@ -44,11 +74,11 @@ def _write_toy_study(
     benchmark_predictions = []
     peer_predictions = []
 
-    for idx in range(40):
+    for idx in range(80):
         gvkey = str(1000 + idx)
         cik = str(320000 + idx).zfill(10)
-        benchmark_label_value = int(idx < 16)
-        public_label = int(idx < 20)
+        benchmark_label_value = int(idx < 32)
+        public_label = int(idx < 40)
         raw_rows.append(
             {
                 "gvkey": gvkey,
@@ -76,8 +106,8 @@ def _write_toy_study(
                 "fiscal_year": 2018,
                 "origin_date": "2019-05-15",
                 "label_comment_thread_365": public_label,
-                "label_amendment_365": int(idx < 12),
-                "label_8k_402_365": int(idx < 5),
+                "label_amendment_365": int(idx < 36),
+                "label_8k_402_365": int(idx < 30),
             }
         )
         public_predictions.append(
@@ -85,8 +115,8 @@ def _write_toy_study(
                 "issuer_cik": cik,
                 "fiscal_year": 2018,
                 "feature_set": "all",
-                "train_window": "rolling_5y",
-                "task": "comment_thread",
+                "train_window": "expanding",
+                "task": "8k_402",
                 "probability": 0.9 - idx * 0.01,
                 "label": public_label,
             }
@@ -97,7 +127,7 @@ def _write_toy_study(
                 "data_year": 2018,
                 "misstatement firm-year": benchmark_label_value,
                 "detection_year_proxy": 2020 if benchmark_label_value else pd.NA,
-                "window": "rolling_5y",
+                "window": "expanding",
                 "label_mode": "naive",
                 "pred_prob": 0.85 - idx * 0.01,
             }
@@ -108,7 +138,7 @@ def _write_toy_study(
                 "data_year": 2018,
                 "label_mode": "naive",
                 "test_year": 2018,
-                "train_window": "rolling_5y",
+                "train_window": "expanding",
                 "peer_model_id": "bertomeu_style_xgb",
                 "predicted_prob": 0.8 - idx * 0.01,
                 "observed_label": benchmark_label_value,
@@ -153,8 +183,8 @@ def _write_toy_study(
                 "issuer_cik": cik,
                 "fiscal_year": 2018,
                 "feature_set": "all",
-                "train_window": "rolling_5y",
-                "task": "comment_thread",
+                "train_window": "expanding",
+                "task": "8k_402",
                 "probability": prob,
                 "label": label,
             }
@@ -249,6 +279,7 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
         study_dir=study,
         crosswalk_path=crosswalk,
         issuer_origin_panel_path=public_panel,
+        alignment_config=TEST_ALIGNMENT_CONFIG,
     )
     out = study / "construct_overlap"
 
@@ -267,7 +298,23 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
     assert construct_manifest["interval_method"] == BOOTSTRAP_INTERVAL_METHOD
     assert construct_manifest["interval_seed"] == BOOTSTRAP_SEED
     assert construct_manifest["interval_reps"] == BOOTSTRAP_REPS
-    assert construct_manifest["interval_top_rows_per_artifact"] == BOOTSTRAP_INTERVAL_TOP_ROWS
+    assert construct_manifest["interval_scope"] == "primary_plus_top_5_per_direction"
+    primary = construct_manifest["primary_alignment"]
+    assert primary["public_to_benchmark_count"] == 1
+    assert primary["benchmark_to_public_count"] == 1
+    assert primary["public_to_benchmark"]["train_window"] == "expanding"
+    assert primary["benchmark_to_public"]["model_id"] == "benchmark_xgb"
+    for direction in ["public_to_benchmark", "benchmark_to_public"]:
+        evidence = construct_manifest["primary_alignment_evidence"][direction]
+        assert evidence["metric_status"] == "fit"
+        assert np.isfinite(evidence["top_decile_lift"])
+        assert np.isfinite(evidence["ci_low"])
+        assert np.isfinite(evidence["ci_high"])
+        assert evidence["ci_low"] <= evidence["ci_high"]
+        maximum = construct_manifest["exploratory_maxima"][direction]
+        assert maximum["lift_minus_primary"] == pytest.approx(
+            maximum["top_decile_lift"] - maximum["primary_lift"]
+        )
     expected = [
         "construct_overlap_manifest.json",
         "construct_overlap_summary.md",
@@ -324,16 +371,25 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
         "pr_auc",
         "top_decile_lift_ci_low",
         "top_decile_lift_ci_high",
+        "is_primary",
+        "is_exploratory_top5",
         "bridge_source",
     }.issubset(ranking.columns)
     assert set(ranking["bridge_source"]) == {"wrds_sec_analytics_cik_gvkey_link"}
+    assert ranking["is_primary"].sum() == 1
+    sensitivity = pd.read_csv(out / "public_score_benchmark_ranking_sensitivity.csv")
+    assert sensitivity["top_decile_lift_ci_low"].isna().all()
+    assert sensitivity["top_decile_lift_ci_high"].isna().all()
 
     reciprocal = pd.read_csv(out / "reciprocal_alignment.csv")
     assert {
         "target_public_label",
         "n_public_positives_in_overlap",
         "n_public_negatives_in_overlap",
+        "is_primary",
+        "is_exploratory_top5",
     }.issubset(reciprocal.columns)
+    assert reciprocal["is_primary"].sum() == 1
 
     event_time = pd.read_csv(out / "event_time_concentration.csv")
     assert "p_value" not in event_time.columns
@@ -381,6 +437,7 @@ def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance
         study_dir=study,
         crosswalk_path=crosswalk,
         issuer_origin_panel_path=public_panel,
+        alignment_config=TEST_ALIGNMENT_CONFIG,
     )
     out = study / "construct_overlap"
 
@@ -444,6 +501,7 @@ def test_construct_overlap_missing_opacity_writes_blocker_without_failing(tmp_pa
         study_dir=study,
         crosswalk_path=crosswalk,
         issuer_origin_panel_path=public_panel,
+        alignment_config=TEST_ALIGNMENT_CONFIG,
     )
     blockers = json.loads(
         (study / "opacity_validation_refresh" / "opacity_validation_blockers.json").read_text(
@@ -460,6 +518,7 @@ def test_construct_overlap_blocks_cleanly_when_crosswalk_is_missing(tmp_path: Pa
         study_dir=study,
         crosswalk_path=missing,
         issuer_origin_panel_path=public_panel,
+        alignment_config=TEST_ALIGNMENT_CONFIG,
     )
     assert result["run_status"] == "blocked_missing_crosswalk"
     assert result["validation_tier"] == "none"
@@ -490,3 +549,158 @@ def test_ranking_metric_sparse_and_bootstrap_thresholds() -> None:
     assert np.isfinite(large["top_decile_lift_ci_high"])
     assert large["top_decile_lift_ci_low"] == repeat["top_decile_lift_ci_low"]
     assert large["top_decile_lift_ci_high"] == repeat["top_decile_lift_ci_high"]
+
+
+def test_select_unique_row_ignores_higher_lift_distractor() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "model_id": "public_cascade",
+                "task": "8k_402",
+                "feature_set": "all",
+                "train_window": "expanding",
+                "label_mode": "benchmark_naive",
+                "score_aggregation": "mean",
+                "bridge_tier": "high_confidence",
+                "top_decile_lift": 2.0,
+            },
+            {
+                "model_id": "public_cascade",
+                "task": "8k_402",
+                "feature_set": "all",
+                "train_window": "rolling_7y",
+                "label_mode": "benchmark_naive",
+                "score_aggregation": "mean",
+                "bridge_tier": "high_confidence",
+                "top_decile_lift": 9.0,
+            },
+        ]
+    )
+    keys = {
+        "model_id": "public_cascade",
+        "task": "8k_402",
+        "feature_set": "all",
+        "train_window": "expanding",
+        "label_mode": "benchmark_naive",
+        "score_aggregation": "mean",
+        "bridge_tier": "high_confidence",
+    }
+
+    selected = _select_unique_row(frame, keys=keys, direction="public_to_benchmark")
+
+    assert selected["train_window"] == "expanding"
+    assert selected["top_decile_lift"] == 2.0
+
+
+def test_bootstrap_union_includes_primary_outside_top_five(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {
+            "model_id": "m",
+            "task": f"task_{idx}",
+            "metric_status": "fit",
+            "top_decile_lift": float(10 - idx),
+        }
+        for idx in range(7)
+    ]
+    frame = pd.DataFrame(
+        {
+            "model_id": ["m"] * 14,
+            "task": [f"task_{idx}" for idx in range(7) for _ in range(2)],
+            "target": [0, 1] * 7,
+            "score": [0.1, 0.9] * 7,
+        }
+    )
+    monkeypatch.setattr(
+        construct_overlap,
+        "_bootstrap_lift_ci",
+        lambda y, score, *, reps, seed: (1.0, 2.0),
+    )
+
+    finalized = _finalize_alignment_rows(
+        rows,
+        frame=frame,
+        group_cols=["model_id", "task"],
+        target_col="target",
+        score_col="score",
+        primary_keys={"model_id": "m", "task": "task_6"},
+        exploratory_top_n=5,
+        direction="public_to_benchmark",
+        bootstrap_seed=42,
+        bootstrap_reps=1000,
+    )
+
+    assert all(
+        pd.notna(finalized[idx]["top_decile_lift_ci_low"])
+        for idx in [0, 1, 2, 3, 4, 6]
+    )
+    assert pd.isna(finalized[5].get("top_decile_lift_ci_low", np.nan))
+
+
+def test_select_unique_row_rejects_missing_primary() -> None:
+    frame = pd.DataFrame({"model_id": ["other"], "task": ["8k_402"]})
+    with pytest.raises(ValueError, match="matched 0"):
+        _select_unique_row(
+            frame,
+            keys={"model_id": "public_cascade", "task": "8k_402"},
+            direction="public_to_benchmark",
+        )
+
+
+def test_select_unique_row_rejects_duplicate_primary() -> None:
+    frame = pd.DataFrame(
+        {"model_id": ["public_cascade", "public_cascade"], "task": ["8k_402"] * 2}
+    )
+    with pytest.raises(ValueError, match="matched 2"):
+        _select_unique_row(
+            frame,
+            keys={"model_id": "public_cascade", "task": "8k_402"},
+            direction="public_to_benchmark",
+        )
+
+
+def test_select_unique_row_matches_nan_key() -> None:
+    frame = pd.DataFrame(
+        {"model_id": ["public_cascade", "public_cascade"], "bridge_tier": [np.nan, "high"]}
+    )
+
+    selected = _select_unique_row(
+        frame,
+        keys={"model_id": "public_cascade", "bridge_tier": np.nan},
+        direction="public_to_benchmark",
+    )
+
+    assert pd.isna(selected["bridge_tier"])
+
+
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        ({"metric_status": "blocked_sparse"}, "not fitted"),
+        (
+            {
+                "metric_status": "fit",
+                "top_decile_lift": 1.0,
+                "top_decile_lift_ci_low": np.nan,
+                "top_decile_lift_ci_high": 2.0,
+            },
+            "lacks a finite interval",
+        ),
+        (
+            {
+                "metric_status": "fit",
+                "top_decile_lift": 1.0,
+                "top_decile_lift_ci_low": 3.0,
+                "top_decile_lift_ci_high": 2.0,
+            },
+            "interval is reversed",
+        ),
+    ],
+)
+def test_primary_alignment_evidence_rejects_invalid_rows(
+    row: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _primary_evidence(pd.Series(row), direction="public_to_benchmark")

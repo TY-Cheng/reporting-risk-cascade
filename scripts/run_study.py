@@ -530,6 +530,7 @@ def main() -> None:
             opacity_out_dir=opacity_refresh_out,
             crosswalk_path=crosswalk,
             issuer_origin_panel_path=issuer_origin_panel,
+            alignment_config=cfg["construct_alignment"],
         )
         manifest["components"]["construct_overlap"] = {
             "run_status": overlap_summary.get("run_status", "unknown"),

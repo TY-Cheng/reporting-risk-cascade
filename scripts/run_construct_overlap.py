@@ -13,6 +13,8 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,6 +31,12 @@ def parse_args() -> argparse.Namespace:
     from src.linkage import DEFAULT_LINKAGE_OUT_DIR
 
     parser = argparse.ArgumentParser(description="Run construct-overlap validation")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=REPO_ROOT / "config" / "study.yaml",
+        help="Path to the study YAML config",
+    )
     parser.add_argument(
         "--study-dir",
         type=Path,
@@ -68,12 +76,14 @@ def main() -> None:
     from src.construct_overlap import run_construct_overlap
 
     args = parse_args()
+    cfg = yaml.safe_load(args.config.read_text(encoding="utf-8")) or {}
     summary = run_construct_overlap(
         study_dir=args.study_dir,
         out_dir=args.out_dir,
         opacity_out_dir=args.opacity_out_dir,
         crosswalk_path=args.crosswalk,
         issuer_origin_panel_path=args.issuer_origin_panel,
+        alignment_config=cfg["construct_alignment"],
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
 

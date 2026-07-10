@@ -31,6 +31,27 @@ peer_comparison:
   memory_profile: "local_mac_conservative"
   light_timeout_seconds: 90
 
+construct_alignment:
+  bootstrap_seed: 42
+  bootstrap_reps: 1000
+  exploratory_top_n: 5
+  public_to_benchmark_primary:
+    model_id: "public_cascade"
+    task: "8k_402"
+    feature_set: "all"
+    train_window: "expanding"
+    label_mode: "benchmark_naive"
+    score_aggregation: "mean"
+    bridge_tier: "high_confidence"
+  benchmark_to_public_primary:
+    model_id: "benchmark_xgb"
+    target_public_label: "label_8k_402_365"
+    feature_set: "benchmark_all"
+    train_window: "expanding"
+    label_mode: "naive"
+    score_aggregation: "benchmark_score"
+    bridge_tier: "high_confidence"
+
 notes:
   estimand: "pre-disclosure public reporting-risk state"
   active_scope: "benchmark + public cascade study workflow only"
