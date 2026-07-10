@@ -159,11 +159,15 @@ def _resolve_repo_path(path: str | Path) -> Path:
     return candidate.resolve()
 
 
-def _rel(path: Path) -> str:
+def _rel(path: str | Path) -> str:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    resolved = candidate.resolve()
     try:
-        return path.resolve().relative_to(PROJECT_ROOT).as_posix()
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
     except ValueError:
-        return str(path)
+        return f"<external>/{resolved.name}"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -1282,6 +1286,9 @@ def _result_narrative(
     public_peer_leader = public_peer.iloc[0] if not public_peer.empty else None
     validation_tier = construct_manifest.get("validation_tier", "")
     generated = manifest.get("generated_at_utc", "")
+    public_out_dir = manifest.get("components", {}).get("public_cascade", {}).get("out_dir", "")
+    public_out_dir_display = _rel(public_out_dir) if public_out_dir else ""
+
     def value(row: pd.DataFrame, col: str) -> str:
         if row.empty:
             return "n/a"
@@ -1290,7 +1297,7 @@ def _result_narrative(
     lines = [
         "# Manuscript Results Narrative",
         "",
-        f"_Generated from `{manifest.get('components', {}).get('public_cascade', {}).get('out_dir', '')}` "
+        f"_Generated from `{public_out_dir_display}` "
         f"and peer-enabled study manifest `{generated}`._",
         "",
         "## Research Object",

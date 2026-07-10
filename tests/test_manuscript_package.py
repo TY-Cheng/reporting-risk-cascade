@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+import scripts.build_manuscript_package as manuscript_module
+from scripts.build_reviewer_package import _declared_package_files
 from scripts.build_manuscript_package import (
     DML_INTERVAL_NOTE,
     MIN_VALID_FOLDS_FOR_CI,
@@ -18,6 +21,8 @@ from scripts.build_manuscript_package import (
     _public_opacity_dml_table,
     _public_sample_attrition_table,
     _public_task_metrics,
+    _rel,
+    _result_narrative,
     _select_primary_public_metrics,
     _task_feature_family_metrics,
 )
@@ -112,6 +117,69 @@ def test_primary_public_package_identity_records_summary_contract() -> None:
             "train_window": "expanding",
         }
     }
+
+
+def test_results_narrative_renders_external_component_path_privately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    external_root = tmp_path / "private-fixture-root"
+    external_output = external_root / "public_cascade"
+    monkeypatch.setattr(manuscript_module, "PROJECT_ROOT", repo_root)
+    public_task = pd.DataFrame(
+        {
+            "Task": ["comment_thread", "amendment", "8k_402"],
+            "Mean_PR_AUC": ["0.3000", "0.2000", "0.1000"],
+        }
+    )
+
+    narrative = _result_narrative(
+        manifest={
+            "generated_at_utc": "2026-07-10T00:00:00Z",
+            "components": {"public_cascade": {"out_dir": str(external_output)}},
+        },
+        public_summary={
+            "primary_specification": {"feature_set": "all", "train_window": "expanding"}
+        },
+        public_task=public_task,
+        benchmark_peer=pd.DataFrame(),
+        public_peer=pd.DataFrame(),
+        construct_alignment=pd.DataFrame(),
+        construct_manifest={"validation_tier": "fixture"},
+    )
+
+    assert str(external_output) not in narrative
+    assert str(external_root) not in narrative
+    assert str(tmp_path) not in narrative
+    assert "`<external>/public_cascade`" in narrative
+
+
+def test_external_manifest_paths_are_private_and_basename_resolvable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    external_root = tmp_path / "private-fixture-root"
+    monkeypatch.setattr(manuscript_module, "PROJECT_ROOT", repo_root)
+    package_manifest = {
+        "study_dir": _rel(external_root / "study"),
+        "out_dir": _rel(external_root / "manuscript_package"),
+        "tables": {"table_03": {"csv": _rel(external_root / "tables" / "table_03.csv")}},
+        "figures": {"figure_01": {"png": _rel(external_root / "figures" / "figure_01.png")}},
+    }
+
+    assert package_manifest["study_dir"] == "<external>/study"
+    assert package_manifest["out_dir"] == "<external>/manuscript_package"
+    assert package_manifest["tables"]["table_03"]["csv"] == "<external>/table_03.csv"
+    assert package_manifest["figures"]["figure_01"]["png"] == "<external>/figure_01.png"
+    assert str(tmp_path) not in str(package_manifest)
+    assert _declared_package_files(package_manifest) == {
+        "results_narrative.md",
+        "tables/table_03.csv",
+        "figures/figure_01.png",
+    }
+    assert _rel(repo_root / "artifacts" / "table.csv") == "artifacts/table.csv"
 
 
 def test_public_fold_support_marks_sparse_folds() -> None:
