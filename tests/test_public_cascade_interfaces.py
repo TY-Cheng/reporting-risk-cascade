@@ -868,6 +868,7 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
         "run_public_cascade.py",
         "run_public_lake_full.sh",
         "run_study.py",
+        "verify_canonical_run.py",
     }
     assert config_files == {
         "benchmark.yaml",
