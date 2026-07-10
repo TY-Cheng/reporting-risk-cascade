@@ -86,6 +86,16 @@ POST_ENCODING_DML_STATUSES = {
     "skipped_insufficient_folds",
     "skipped_constant_residual_treatment",
 }
+SOURCE_INVENTORY_BASE_FIELDS = {"metadata_file", "metadata_sha256"}
+SOURCE_INVENTORY_SIDECAR_FIELDS = SOURCE_INVENTORY_BASE_FIELDS | {
+    "source_name",
+    "source_url",
+    "downloaded_at_utc",
+    "payload_sha256",
+    "payload_size_bytes",
+    "parser_version",
+    "schema_version",
+}
 
 
 def _as_object(value: object, error: str, errors: list[str]) -> dict[str, Any]:
@@ -134,9 +144,11 @@ def _source_inventory_is_valid(value: object) -> bool:
         if not _is_hex(record.get("metadata_sha256"), 64):
             return False
         if not metadata_file.endswith(".meta.json"):
-            if set(record) != {"metadata_file", "metadata_sha256"}:
+            if set(record) != SOURCE_INVENTORY_BASE_FIELDS:
                 return False
             continue
+        if set(record) != SOURCE_INVENTORY_SIDECAR_FIELDS:
+            return False
         if any(
             not isinstance(record.get(field), str) or not record[field].strip()
             for field in (

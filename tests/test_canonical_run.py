@@ -892,6 +892,21 @@ def test_verify_canonical_run_rejects_sidecar_wrong_field_type_or_value(
     assert "public source inventory" in errors
 
 
+def test_verify_canonical_run_rejects_sidecar_extra_field(tmp_path: Path) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    payload["public_lake_provenance"]["source_metadata_inventory"][0]["unexpected"] = "extra"
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert "public source inventory" in errors
+
+
 def test_verify_canonical_run_accepts_minimal_non_sidecar_inventory_record(
     tmp_path: Path,
 ) -> None:
@@ -988,6 +1003,7 @@ def test_verify_canonical_run_rejects_non_integer_bootstrap_contract(
         "dirty",
         "hash",
         "sidecar_missing_payload_hash",
+        "sidecar_extra_field",
         "interval_seed_float",
         "interval_reps_float",
     ],
@@ -997,7 +1013,13 @@ def test_cli_never_verifies_invalid_canonical_fixture(
     invalid_case: str,
 ) -> None:
     fixture = _write_canonical_fixture(tmp_path)
-    if invalid_case in {"nested", "dirty", "hash", "sidecar_missing_payload_hash"}:
+    if invalid_case in {
+        "nested",
+        "dirty",
+        "hash",
+        "sidecar_missing_payload_hash",
+        "sidecar_extra_field",
+    }:
         payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
         if invalid_case == "nested":
             payload["public_lake_provenance"] = None
@@ -1005,6 +1027,10 @@ def test_cli_never_verifies_invalid_canonical_fixture(
             payload["provenance"]["dirty"] = True
         elif invalid_case == "sidecar_missing_payload_hash":
             payload["public_lake_provenance"]["source_metadata_inventory"][0].pop("payload_sha256")
+        elif invalid_case == "sidecar_extra_field":
+            payload["public_lake_provenance"]["source_metadata_inventory"][0]["unexpected"] = (
+                "extra"
+            )
         else:
             payload["provenance"]["config_hash"] = "not-a-sha256"
         _write_json(fixture["manifest"], payload)
