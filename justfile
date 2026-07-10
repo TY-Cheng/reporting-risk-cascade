@@ -486,7 +486,11 @@ snapshot study_dir="artifacts/full_with_peer" allow_partial="0": _check-data-env
         1) partial_flag="--allow-partial" ;; \
         *) echo "allow_partial must be 0 or 1"; exit 1 ;; \
     esac; \
-    uv run python scripts/refresh_results_snapshot.py --study-dir "$study_dir_arg" $partial_flag
+    just manuscript study_dir="$study_dir_arg" out_dir="artifacts/manuscript_package"; \
+    uv run python scripts/refresh_results_snapshot.py \
+        --study-dir "$study_dir_arg" \
+        --manuscript-package "artifacts/manuscript_package" \
+        $partial_flag
     just check
 
 manuscript study_dir="artifacts/full_with_peer" out_dir="artifacts/manuscript_package": _check-data-env

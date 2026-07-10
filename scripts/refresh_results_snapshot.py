@@ -20,6 +20,17 @@ if str(REPO_ROOT) not in sys.path:
 from src import ARTIFACTS_DIR, DOCS_DIR, PROJECT_ROOT  # noqa: E402
 
 
+CANONICAL_PUBLIC_DATA_AS_OF_DATE = "2026-07-06"
+INPUT_SOURCE_ROLES = [
+    "Detected-misstatement benchmark input",
+    "Public issuer dimension input",
+    "Public issuer-origin panel input",
+    "CIK-GVKEY bridge input",
+    "Public-lake run metadata input",
+    "Form AP source metadata input",
+]
+
+
 FULL_REQUIRED_ARTIFACTS = [
     "study_run_manifest.json",
     "benchmark/benchmark_summary.md",
@@ -66,14 +77,14 @@ PARTIAL_REQUIRED_ARTIFACTS = [
 FIGURE_EXPLANATIONS = {
     "figure_01_public_task_pr_auc": {
         "title": "Public task PR-AUC",
-        "claim": "Public filing-origin features rank later public review-and-correction states above task prevalence.",
-        "evidence": "The three public-label tasks are shown with annual out-of-time PR-AUC dispersion, so the reader can compare ranking performance against label base rates.",
+        "claim": "The revision-frozen primary public specification ranks later public review-and-correction states above task prevalence.",
+        "evidence": "Figure 1 receives only the declared `all + expanding` rows also owned by generated Table 3.",
         "boundary": "This is ranking evidence, not calibrated deployment evidence; Brier Skill Score and ECE remain the calibration gate.",
     },
     "figure_02_feature_family_pr_auc": {
         "title": "Feature-family PR-AUC",
-        "claim": "Feature fusion improves the public-cascade signal, while metadata remains a strong baseline.",
-        "evidence": "The figure compares all-feature, metadata, XBRL, auditor, and oversight families under the same public-label evaluation frame.",
+        "claim": "Feature-family comparisons provide sensitivity evidence around the frozen public specification.",
+        "evidence": "The figure compares all-feature, metadata, XBRL, auditor, oversight, and visibility/history information sets under the same public-label evaluation frame.",
         "boundary": "Interpret as information-set evidence rather than a structural source-importance or mechanism claim.",
     },
     "figure_03_detected_misstatement_peer_pr_auc": {
@@ -91,7 +102,7 @@ FIGURE_EXPLANATIONS = {
     "figure_05_construct_overlap_lift": {
         "title": "Construct-overlap lift",
         "claim": "The WRDS-validated bridge supports related-but-non-identical overlap between public labels and detected-misstatement labels.",
-        "evidence": "The figure shows lift for bridge-gated reciprocal severe-tail alignment rows, alongside precision/FDR context in the tables.",
+        "evidence": "Figure 5 receives exactly the two declared primary alignment rows owned by generated Table 9, alongside precision/FDR context in the table.",
         "boundary": "Item 4.02 lift is a severe-tail diagnostic, not the sole construct-validity basis or event-identification proof.",
     },
 }
@@ -109,13 +120,13 @@ TABLE_EXPLANATIONS = {
         "boundary": "Scale and coverage establish feasibility, not causal interpretation or complete regulatory review coverage.",
     },
     "table_03_public_task_metrics": {
-        "claim": "The public cascade produces above-prevalence ranking evidence for the three public labels.",
-        "evidence": "Mean PR-AUC, ROC-AUC, fold support, calibration diagnostics, and prevalence are reported by task.",
+        "claim": "The revision-frozen primary public specification produces above-prevalence ranking evidence for the three public labels.",
+        "evidence": "Generated Table 3 owns the `all + expanding` primary rows and reports PR-AUC, ROC-AUC, fold support, calibration diagnostics, and prevalence by task.",
         "boundary": "Weak Brier Skill Score and ECE keep the claim to ranking/prioritization rather than calibrated probability rules.",
     },
     "table_04_feature_family_metrics": {
-        "claim": "All-feature models and metadata summarize the main feature-family ranking pattern.",
-        "evidence": "Feature counts and PR-AUC dispersion are shown by public feature family.",
+        "claim": "Feature-family comparisons provide sensitivity evidence around the frozen primary public specification.",
+        "evidence": "Feature counts and PR-AUC dispersion are shown across the configured public feature-family grid.",
         "boundary": "Feature-family summaries are aggregation evidence and should not be read as causal source dominance.",
     },
     "table_05_benchmark_timing_metrics": {
@@ -140,7 +151,7 @@ TABLE_EXPLANATIONS = {
     },
     "table_09_construct_alignment": {
         "claim": "Public scores and detected-misstatement scores show reciprocal severe-tail enrichment under the bridge gate.",
-        "evidence": "Top-decile lift, precision, FDR, and bootstrap intervals are shown for the strongest reciprocal rows.",
+        "evidence": "Generated Table 9 is the sole owner of the two declared primary alignment rows and their top-decile lift, precision, FDR, and bootstrap intervals.",
         "boundary": "Lift above one supports enrichment, while low absolute precision and high FDR rule out event-identification claims.",
     },
     "table_12_public_opacity_dml": {
@@ -154,8 +165,8 @@ TABLE_EXPLANATIONS = {
         "boundary": "Fold support makes dispersion auditable; it does not remove class-imbalance or calibration concerns.",
     },
     "table_14_task_feature_family_metrics": {
-        "claim": "Feature-family rankings vary by label, which supports a qualified feature-fusion claim.",
-        "evidence": "Task-by-feature-family PR-AUC, ROC-AUC, calibration diagnostics, and fold support are reported.",
+        "claim": "Task-level feature-family rankings provide sensitivity evidence around the frozen primary rows.",
+        "evidence": "Task-by-feature-family PR-AUC, ROC-AUC, calibration diagnostics, and fold support are reported across the configured grid.",
         "boundary": "Use this table for label-specific prose rather than a single global feature-family ranking.",
     },
     "table_15_bridge_overlap_matrix": {
@@ -172,6 +183,11 @@ TABLE_EXPLANATIONS = {
         "claim": "Public labels partly reflect selected public scrutiny and issuer visibility states.",
         "evidence": "Public-label rates are profiled across filing size, XBRL assets, filing history, prior comments, form type, and FPI proxy strata.",
         "boundary": "This descriptive profile is not a causal SEC-selection correction.",
+    },
+    "table_18_public_sample_attrition": {
+        "claim": "The public sample has an explicit sequential construction path and task-specific eligibility branches.",
+        "evidence": "Generated Table 18 reports source, year, domestic-status, observability, and task-eligibility row counts with parent-relative attrition.",
+        "boundary": "Task rows branch from the shared observable horizon and must not be read as sequential losses from one another.",
     },
 }
 
@@ -289,13 +305,64 @@ def _component_rows(manifest: dict[str, Any]) -> list[list[str]]:
     rows: list[list[str]] = []
     for name, payload in manifest.get("components", {}).items():
         if not isinstance(payload, dict):
-            rows.append([name, str(payload), ""])
+            rows.append([name, str(payload), "", "`False`"])
             continue
         status = payload.get("status") or payload.get("run_status") or ""
         tier = payload.get("validation_tier") or ""
-        out_dir = payload.get("out_dir") or ""
-        rows.append([name, _code(status), _code(tier), str(out_dir)])
+        artifact_declared = any(
+            payload.get(field)
+            for field in ("out_dir", "summary_json", "manifest", "sample_attrition_csv")
+        )
+        rows.append([name, _code(status), _code(tier), _code(str(artifact_declared))])
     return rows
+
+
+def _source_role_rows(provenance: dict[str, Any]) -> list[list[str]]:
+    records = provenance.get("input_files", [])
+    if not isinstance(records, list):
+        records = []
+    rows = []
+    for index, role in enumerate(INPUT_SOURCE_ROLES):
+        record = (
+            records[index] if index < len(records) and isinstance(records[index], dict) else {}
+        )
+        rows.append(
+            [
+                role,
+                _code(str(record.get("exists") is True)),
+                _code(record.get("sha256")),
+            ]
+        )
+    return rows
+
+
+def _claim_maturity_rows(manifest: dict[str, Any]) -> list[list[str]]:
+    maturity = manifest.get("claim_maturity", {})
+    if not isinstance(maturity, dict):
+        return []
+    return [[str(claim), _code(status)] for claim, status in maturity.items()]
+
+
+def _canonical_status(manifest: dict[str, Any]) -> tuple[str, list[str]]:
+    provenance = dict(manifest.get("provenance", {}))
+    public_lake = dict(manifest.get("public_lake_provenance", {}))
+    study_commit = manifest.get("repo_commit")
+    failures = []
+    if manifest.get("git_dirty") is not False:
+        failures.append("dirty-state: study git_dirty is not false")
+    if public_lake.get("git_dirty") is not False:
+        failures.append("dirty-state: public-lake git_dirty is not false")
+    if public_lake.get("fresh_build") is not True:
+        failures.append("freshness: public-lake fresh_build is not true")
+    if public_lake.get("as_of_date") != CANONICAL_PUBLIC_DATA_AS_OF_DATE:
+        failures.append("date: public-data as-of date is not " + CANONICAL_PUBLIC_DATA_AS_OF_DATE)
+    if not study_commit:
+        failures.append("identity: study commit is missing")
+    if study_commit != provenance.get("commit_sha"):
+        failures.append("identity: study and provenance commits differ")
+    if study_commit != public_lake.get("commit_sha"):
+        failures.append("identity: study and public-lake commits differ")
+    return ("CANONICAL" if not failures else "NON-CANONICAL", failures)
 
 
 def _public_lake_rows(report: dict[str, Any]) -> list[list[str]]:
@@ -983,38 +1050,87 @@ def _bridge_coverage_rows(path: Path) -> list[list[str]]:
     return [[metric, _fmt(values.get(metric))] for metric in wanted if metric in values]
 
 
-def _construct_alignment_rows(study_dir: Path) -> list[list[str]]:
-    public_to_benchmark = _read_csv(study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv")
-    benchmark_to_public = _read_csv(study_dir / "construct_overlap" / "reciprocal_alignment.csv")
+def _construct_alignment_frame(manuscript_package: Path) -> pd.DataFrame:
+    frame = _read_csv(manuscript_package / "tables" / "table_09_construct_alignment.csv")
+    required = {
+        "Direction",
+        "Model",
+        "Target",
+        "PR_AUC",
+        "ROC_AUC",
+        "Top_10pct_Precision",
+        "Top_10pct_FDR",
+        "Top_Decile_Lift",
+        "Lift_Bootstrap_Interval",
+    }
+    if len(frame) != 2 or not required.issubset(frame.columns):
+        raise ValueError("generated Table 9 must contain exactly two primary rows")
+    return frame
+
+
+def _construct_alignment_rows(manuscript_package: Path) -> list[list[str]]:
+    frame = _construct_alignment_frame(manuscript_package)
+    return [
+        [
+            row["Direction"],
+            _code(row["Model"]),
+            _code(row["Target"]),
+            _fmt(row["PR_AUC"]),
+            _fmt(row["ROC_AUC"]),
+            _fmt(row["Top_10pct_Precision"]),
+            _fmt(row["Top_10pct_FDR"]),
+            _fmt(row["Top_Decile_Lift"]),
+            str(row["Lift_Bootstrap_Interval"]),
+        ]
+        for _, row in frame.iterrows()
+    ]
+
+
+def _exploratory_maxima_rows(
+    study_dir: Path,
+    manuscript_package: Path,
+    construct_manifest: dict[str, Any],
+) -> list[list[str]]:
+    primary = _construct_alignment_frame(manuscript_package)
+    public_mask = primary["Direction"].astype(str).str.lower().str.startswith("public")
+    if int(public_mask.sum()) != 1:
+        raise ValueError("generated Table 9 must identify one public-to-benchmark row")
+    primary_by_direction = {
+        "public_to_benchmark": primary.loc[public_mask].iloc[0],
+        "benchmark_to_public": primary.loc[~public_mask].iloc[0],
+    }
+    raw_paths = {
+        "public_to_benchmark": (
+            study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv"
+        ),
+        "benchmark_to_public": (study_dir / "construct_overlap" / "reciprocal_alignment.csv"),
+    }
+    declared_maxima = construct_manifest.get("exploratory_maxima", {})
+    search_universe = construct_manifest.get("search_universe_rows", {})
     rows = []
-    if not public_to_benchmark.empty and "top_decile_lift" in public_to_benchmark.columns:
-        best = public_to_benchmark.sort_values("top_decile_lift", ascending=False).iloc[0]
+    for direction, path in raw_paths.items():
+        frame = _read_csv(path)
+        if frame.empty or "top_decile_lift" not in frame.columns:
+            continue
+        lifts = pd.to_numeric(frame["top_decile_lift"], errors="coerce")
+        if "metric_status" in frame.columns:
+            lifts = lifts.where(frame["metric_status"].eq("fit"))
+        if not lifts.notna().any():
+            continue
+        maximum = frame.loc[lifts.idxmax()]
+        maximum_lift = float(lifts.loc[lifts.idxmax()])
+        primary_lift = float(primary_by_direction[direction]["Top_Decile_Lift"])
+        declared = declared_maxima.get(direction, {})
+        key_names = list(declared.get("keys", {})) if isinstance(declared, dict) else []
+        maximum_keys = {name: str(maximum.get(name, "")) for name in key_names}
         rows.append(
             [
-                "Public cascade score -> benchmark positives",
-                _code(best.get("model_id")),
-                _code(best.get("task")),
-                _fmt(best.get("pr_auc")),
-                _fmt(best.get("roc_auc")),
-                _fmt(best.get("top_10pct_precision")),
-                _fmt(1 - best.get("top_10pct_precision") if pd.notna(best.get("top_10pct_precision")) else None),
-                _fmt(best.get("top_decile_lift")),
-                f"[{_fmt(best.get('top_decile_lift_ci_low'))}, {_fmt(best.get('top_decile_lift_ci_high'))}]",
-            ]
-        )
-    if not benchmark_to_public.empty and "top_decile_lift" in benchmark_to_public.columns:
-        best = benchmark_to_public.sort_values("top_decile_lift", ascending=False).iloc[0]
-        rows.append(
-            [
-                "Detected-misstatement score -> public labels",
-                _code(best.get("model_id")),
-                _code(best.get("target_public_label")),
-                _fmt(best.get("pr_auc")),
-                _fmt(best.get("roc_auc")),
-                _fmt(best.get("top_10pct_precision")),
-                _fmt(1 - best.get("top_10pct_precision") if pd.notna(best.get("top_10pct_precision")) else None),
-                _fmt(best.get("top_decile_lift")),
-                f"[{_fmt(best.get('top_decile_lift_ci_low'))}, {_fmt(best.get('top_decile_lift_ci_high'))}]",
+                _code(direction),
+                _fmt(search_universe.get(direction)),
+                _code(maximum_keys),
+                _fmt(maximum_lift),
+                _fmt(primary_lift),
+                _fmt(maximum_lift - primary_lift),
             ]
         )
     return rows
@@ -1047,7 +1163,13 @@ def _artifact_index(study_dir: Path) -> list[str]:
     return lines
 
 
-def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
+def build_snapshot(
+    study_dir: Path,
+    *,
+    manuscript_package: Path | None = None,
+    allow_partial: bool,
+) -> str:
+    manuscript_package = manuscript_package or ARTIFACTS_DIR / "manuscript_package"
     manifest = _read_json(study_dir / "study_run_manifest.json")
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
     bridge_summary = _read_json(study_dir / "bridge_probe" / "bridge_probe_summary.json")
@@ -1078,8 +1200,12 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
     validation_tier = construct_manifest.get("validation_tier") or "not available"
     bridge_status = bridge_summary.get("status") or manifest.get("bridge", {}).get("status") or ""
     peer_status = manifest.get("runtime", {}).get("peer_comparison_mode") or ""
-
-    manuscript_package = ARTIFACTS_DIR / "manuscript_package"
+    provenance = dict(manifest.get("provenance") or {})
+    public_lake = dict(manifest.get("public_lake_provenance") or {})
+    wrds = dict(provenance.get("wrds_export_metadata") or {})
+    form_ap = dict(public_lake.get("form_ap") or {})
+    canonical_status, canonical_failures = _canonical_status(manifest)
+    claim_maturity = dict(manifest.get("claim_maturity") or {})
 
     lines = [
         "---",
@@ -1125,7 +1251,9 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "`gvkey-CIK-year` bridge for overlap validation.",
         "",
         "- **Models.** The core public cascade uses XGBoost over metadata, XBRL, "
-        "text/notes, auditor, oversight, and all-feature sets. Peer-compatible "
+        "auditor, oversight, visibility/history, and all-feature sets. "
+        "Note/disclosure-breadth variables enter `all` without a standalone ablation. "
+        "Peer-compatible "
         "Dechow, Perols, Bao, and Bertomeu-style suites are included when the "
         "peer-enabled study directory is present.",
         "",
@@ -1150,22 +1278,61 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         _table(
             ["Field", "Value"],
             [
-                ["Study directory", _code(study_rel)],
+                ["Artifact generation time", _code(manifest.get("generated_at_utc"))],
+                ["Snapshot generation time", _code(generated_at)],
                 ["Snapshot mode", _code("partial" if allow_partial else "full")],
-                ["Study manifest timestamp", _code(manifest.get("generated_at_utc"))],
-                ["Public-lake report timestamp", _code(public_lake_report.get("timestamp_utc"))],
+                ["Study commit", _code(manifest.get("repo_commit"))],
+                ["Git dirty", _code(str(manifest.get("git_dirty")))],
+                ["Config hash", _code(provenance.get("config_hash"))],
+                ["Input hash", _code(provenance.get("input_hash"))],
+                ["uv.lock hash", _code(provenance.get("uv_lock_hash"))],
+                ["Public-data as-of date", _code(public_lake.get("as_of_date"))],
+                ["Public-lake fresh build", _code(str(public_lake.get("fresh_build")))],
+                ["Public-lake commit", _code(public_lake.get("commit_sha"))],
+                ["Public-lake Git dirty", _code(str(public_lake.get("git_dirty")))],
+                ["Public-lake config hash", _code(public_lake.get("config_hash"))],
+                ["Public-lake input hash", _code(public_lake.get("input_hash"))],
+                ["Public-lake uv.lock hash", _code(public_lake.get("uv_lock_hash"))],
+                ["Form AP source kind", _code(form_ap.get("source_kind"))],
+                ["Form AP archive hash", _code(form_ap.get("archive_sha256"))],
+                ["Form AP member", _code(form_ap.get("member"))],
+                ["Form AP member hash", _code(form_ap.get("member_sha256"))],
+                ["WRDS source", _code(wrds.get("source_values"))],
+                ["WRDS version", _code(wrds.get("source_version_values"))],
+                ["WRDS extraction time", _code(wrds.get("extracted_at_values"))],
+                ["WRDS hash", _code(wrds.get("sha256"))],
+                ["Canonical status", _code(canonical_status)],
+                [
+                    "Canonical predicate failures",
+                    "; ".join(canonical_failures) if canonical_failures else _code("none"),
+                ],
+                [
+                    "Public-lake report timestamp",
+                    _code(public_lake_report.get("timestamp_utc")),
+                ],
                 ["Peer comparison mode", _code(peer_status)],
                 ["Bridge status", _code(bridge_status)],
                 ["Construct-overlap validation tier", _code(validation_tier)],
-                ["Raw benchmark input", _code(manifest.get("inputs", {}).get("raw_data"))],
-                ["Public issuer panel", _code(manifest.get("inputs", {}).get("issuer_origin_panel"))],
-                ["Bridge crosswalk", _code(manifest.get("inputs", {}).get("crosswalk"))],
             ],
         ),
         "",
-        "### Component Status",
+        "### Source roles and hashes",
         "",
-        _table(["Component", "Status", "Tier", "Output"], _component_rows(manifest)),
+        "Local input paths are intentionally omitted; stable roles, availability, and "
+        "content hashes identify the evidence inputs.",
+        "",
+        _table(["Source role", "Available", "SHA-256"], _source_role_rows(provenance)),
+        "",
+        "### Component status",
+        "",
+        _table(
+            ["Component", "Status", "Tier", "Artifact declared"],
+            _component_rows(manifest),
+        ),
+        "",
+        "### Claim maturity",
+        "",
+        _table(["Claim", "Status"], _claim_maturity_rows(manifest)),
         "",
         "### Evidence Map",
         "",
@@ -1521,7 +1688,10 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         _table(["Bridge tier", "Rows", "Benchmark positives"], _overlap_sample_flow_rows(study_dir)),
         "",
-        "### Construct-Overlap Ranking Alignment",
+        "### Declared primary construct-alignment rows",
+        "",
+        "Generated Table 9 is the sole owner of the two declared primary rows shown "
+        "below; the snapshot does not reselect them from the raw alignment grids.",
         "",
         _table(
             [
@@ -1535,12 +1705,31 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
                 "Top-decile lift",
                 "Lift interval",
             ],
-            _construct_alignment_rows(study_dir),
+            _construct_alignment_rows(manuscript_package),
         ),
         "",
-        "The ranking-alignment rows are severe-tail diagnostics. Lift above one "
+        "The declared primary ranking-alignment rows are severe-tail diagnostics. "
+        "Lift above one "
         "shows enrichment, while low absolute precision and high FDR keep the "
         "interpretation bounded to construct overlap rather than event identification.",
+        "",
+        "### Exploratory maxima (post-hoc)",
+        "",
+        "These exploratory, post-hoc maxima summarize the searched raw alignment grids. "
+        "They disclose search-universe size and model-selection spread but never replace "
+        "the generated Table 9 primary rows.",
+        "",
+        _table(
+            [
+                "Direction",
+                "Search-universe rows",
+                "Maximum-row keys",
+                "Maximum lift",
+                "Primary lift",
+                "max_minus_primary",
+            ],
+            _exploratory_maxima_rows(study_dir, manuscript_package, construct_manifest),
+        ),
         "",
         "### Label Contingency and Lift",
         "",
@@ -1647,7 +1836,7 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         "",
         "## Discussion",
         "",
-        "### Key Readings",
+        "### Answers to the research questions",
         "",
         "- Public task results support a prevalence-aware ranking claim for three "
         "public cascade labels, but calibration diagnostics keep the interpretation "
@@ -1661,60 +1850,87 @@ def build_snapshot(study_dir: Path, *, allow_partial: bool) -> str:
         f"- `{validation_tier}` bridge evidence supports the integrated "
         "benchmark-to-public construct-overlap interpretation.",
         "",
-        "### Claim-Strength Ledger",
+        "### Comparison with prior literature",
+        "",
+        "The detected-misstatement and public-label peer suites align model-family and "
+        "metric language with prior accounting prediction work. They are transferred "
+        "family diagnostics, not original-sample replications or same-estimand leaderboard "
+        "comparisons.",
+        "",
+        "### Accounting and institutional interpretation",
+        "",
+        "The public outcomes capture observable review, correction, and filing-friction "
+        "states. The accounting contribution is therefore a filing-origin measurement and "
+        "prioritization design, with machine learning serving as measurement infrastructure.",
+        "",
+        "### Selection and visibility",
+        "",
+        "Comment-thread and correction labels are partly selected by issuer visibility, "
+        "filing history, source availability, and public scrutiny. Selection-profile and "
+        "opacity rows describe those boundaries without claiming a causal selection correction.",
+        "",
+        "### Generalizability",
+        "",
+        "Public-cascade findings generalize to the documented fiscal-year, filing-origin, "
+        "and observability frame. Construct-overlap findings generalize only to the covered "
+        f"`{validation_tier}` bridge sample.",
+        "",
+        "### Limitations and future work",
+        "",
+        "- The evidence supports measurement and decision-useful ranking claims, not causal "
+        "proof of hidden misconduct.",
+        "- Comment letters are public scrutiny signals, not the complete SEC review universe.",
+        "- Negative Brier Skill Score or large ECE remains evidence against deployment-ready "
+        "probability rules.",
+        "- External temporal validation and identified selection corrections remain future "
+        "work rather than current findings.",
+        "",
+        "### Claim ledger",
+        "",
+        "The controlled categories are `reportable`, `supporting`, `diagnostic`, and "
+        "`deferred`; no headline is promoted from a raw maximum.",
         "",
         _table(
-            ["Claim", "Evidence", "Strength", "Boundary"],
+            ["Claim", "Evidence", "Category", "Boundary"],
             [
                 [
                     "Filing-origin public information ranks later public review-and-correction labels.",
-                    "Public task metrics, annual fold support, Figure 1.",
-                    "Reportable",
+                    "Generated Table 3, annual fold support, and Figure 1.",
+                    _code(claim_maturity.get("public_prediction", "deferred")),
                     "Ranking evidence relative to prevalence, not calibrated deployment.",
                 ],
                 [
-                    "Feature fusion helps and metadata remains strong.",
-                    "Feature-family aggregate plus task-by-family matrix.",
-                    "Reportable with coverage caveat",
+                    "Feature and training-window patterns qualify the frozen public specification.",
+                    "Generated Tables 4 and 14 plus Figure 2.",
+                    _code(claim_maturity.get("feature_and_window_sensitivity", "deferred")),
                     "Information-set evidence, not mechanism or XBRL dominance.",
                 ],
                 [
                     "Public and detected-misstatement constructs are related but non-identical.",
-                    "WRDS-validated bridge coverage, ranking alignment, label-contingency matrix.",
-                    "Reportable for covered bridge sample",
+                    "WRDS bridge coverage, generated Table 9, Figure 5, and contingency matrix.",
+                    _code(claim_maturity.get("construct_alignment", "deferred")),
                     "Conditional on bridge tier and covered sample.",
                 ],
                 [
-                    "Item 4.02 provides severe-tail enrichment evidence.",
-                    "Construct-alignment lift, precision/FDR, event-time concentration.",
-                    "Diagnostic",
-                    "Rare public correction label; not sole construct-validity basis.",
-                ],
-                [
-                    "Opacity/missingness predicts public labels after adjustment.",
+                    "Opacity/missingness has adjusted-association evidence for public labels.",
                     "DML adjusted-association rows.",
-                    "Diagnostic",
+                    _code(claim_maturity.get("opacity_dml", "deferred")),
                     "Null or weak rows cannot support strategic-silence claims.",
                 ],
                 [
-                    "Peer-compatible models align metric language across evidence layers.",
-                    "Detected-misstatement and public-label peer-family tables.",
-                    "Candidate/supporting",
-                    "Not original-study replication or same-estimand superiority.",
+                    "Exploratory maximum lifts describe the searched alignment grid.",
+                    "Separately labeled post-hoc maximum table and search-universe counts.",
+                    _code("diagnostic"),
+                    "Never substitutes for the declared primary alignment rows.",
+                ],
+                [
+                    "The models identify hidden misconduct or causal regulatory effects.",
+                    "No current artifact identifies either estimand.",
+                    _code("deferred"),
+                    "Requires a different design and evidence base.",
                 ],
             ],
         ),
-        "",
-        "### Claim Boundaries",
-        "",
-        "- The evidence supports measurement and decision-useful ranking claims, not "
-        "causal proof of hidden misconduct.",
-        "- Comment letters are public scrutiny signals, not the complete SEC review "
-        "universe.",
-        "- WRDS-validated raw-only overlap can support a related-but-non-identical "
-        "construct argument only for the covered bridge sample.",
-        "- Negative Brier Skill Score or large ECE should be described as calibration "
-        "evidence against deployment-ready probability rules.",
         "",
         "## Tables, Figures, and Artifact Index",
         "",
@@ -1765,6 +1981,12 @@ def parse_args() -> argparse.Namespace:
         help="Markdown file to refresh.",
     )
     parser.add_argument(
+        "--manuscript-package",
+        default=ARTIFACTS_DIR / "manuscript_package",
+        type=Path,
+        help="Generated manuscript package whose tables and figures own snapshot displays.",
+    )
+    parser.add_argument(
         "--allow-partial",
         action="store_true",
         help="Allow a non-peer study directory and mark missing peer outputs in the docs.",
@@ -1776,6 +1998,7 @@ def main() -> None:
     args = parse_args()
     study_dir = _resolve_repo_path(args.study_dir)
     docs_file = _resolve_repo_path(args.docs_file)
+    manuscript_package = _resolve_repo_path(args.manuscript_package)
     missing = _missing_artifacts(study_dir, allow_partial=args.allow_partial)
     if missing:
         missing_list = "\n".join(f"- {_rel(path)}" for path in missing)
@@ -1789,7 +2012,11 @@ def main() -> None:
 
     docs_file.parent.mkdir(parents=True, exist_ok=True)
     docs_file.write_text(
-        build_snapshot(study_dir, allow_partial=args.allow_partial),
+        build_snapshot(
+            study_dir,
+            manuscript_package=manuscript_package,
+            allow_partial=args.allow_partial,
+        ),
         encoding="utf-8",
     )
     print(f"Refreshed {_rel(docs_file)} from {_rel(study_dir)}")

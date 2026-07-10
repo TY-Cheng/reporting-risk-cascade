@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tomllib
+from typing import Any
 
+import pandas as pd
+import pytest
 import yaml
+
+import scripts.refresh_results_snapshot as snapshot_module
+from scripts.refresh_results_snapshot import _construct_alignment_rows
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -279,6 +286,10 @@ def test_just_snapshot_refreshes_results_snapshot_then_checks() -> None:
     assert "--allow-partial" in snapshot_recipe
     assert "study_dir must be relative or under ARTIFACTS_DIR" in snapshot_recipe
     assert "artifacts/full_with_peer" in snapshot_recipe
+    assert '--manuscript-package "artifacts/manuscript_package"' in snapshot_recipe
+    manuscript_index = snapshot_recipe.index("just manuscript")
+    snapshot_index = snapshot_recipe.index("scripts/refresh_results_snapshot.py")
+    assert manuscript_index < snapshot_index
     assert "just check" in snapshot_recipe
 
 
@@ -404,6 +415,495 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         assert f"#### `{table}`" in results
     assert "ARS claim" in results
     assert "Boundary" in results
+
+
+CURRENT_PACKAGE_TABLES = [
+    "table_01_component_status",
+    "table_02_public_lake_scale",
+    "table_03_public_task_metrics",
+    "table_04_feature_family_metrics",
+    "table_05_benchmark_timing_metrics",
+    "table_06_detected_misstatement_peer_metrics",
+    "table_07_public_peer_metrics",
+    "table_08_bridge_coverage",
+    "table_09_construct_alignment",
+    "table_12_public_opacity_dml",
+    "table_13_public_fold_support",
+    "table_14_task_feature_family_metrics",
+    "table_15_bridge_overlap_matrix",
+    "table_16_bridge_sample_boundaries",
+    "table_17_selection_profile",
+    "table_18_public_sample_attrition",
+]
+CURRENT_PACKAGE_FIGURES = [
+    "figure_01_public_task_pr_auc",
+    "figure_02_feature_family_pr_auc",
+    "figure_03_detected_misstatement_peer_pr_auc",
+    "figure_04_public_peer_pr_auc",
+    "figure_05_construct_overlap_lift",
+]
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _table_09_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Direction": "Public score to benchmark positives",
+                "Model": "public_cascade",
+                "Target": "8k_402",
+                "PR_AUC": "0.0400",
+                "ROC_AUC": "0.7000",
+                "Top_10pct_Precision": "0.0600",
+                "Top_10pct_FDR": "0.9400",
+                "Top_Decile_Lift": "2.0000",
+                "Lift_Bootstrap_Interval": "[1.2000, 2.8000]",
+            },
+            {
+                "Direction": "Benchmark score to public positives",
+                "Model": "benchmark_xgb",
+                "Target": "label_8k_402_365",
+                "PR_AUC": "0.0300",
+                "ROC_AUC": "0.6000",
+                "Top_10pct_Precision": "0.0500",
+                "Top_10pct_FDR": "0.9500",
+                "Top_Decile_Lift": "1.8000",
+                "Lift_Bootstrap_Interval": "[1.1000, 2.5000]",
+            },
+        ]
+    )
+
+
+def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
+    study_dir = tmp_path / "study"
+    package_dir = tmp_path / "manuscript_package"
+    tables_dir = package_dir / "tables"
+    figures_dir = package_dir / "figures"
+    tables_dir.mkdir(parents=True)
+    figures_dir.mkdir(parents=True)
+
+    commit = "a" * 40
+    _write_json(
+        study_dir / "study_run_manifest.json",
+        {
+            "generated_at_utc": "2026-07-10T00:00:00+00:00",
+            "repo_commit": commit,
+            "git_dirty": False,
+            "provenance": {
+                "commit_sha": commit,
+                "dirty": False,
+                "config_hash": "b" * 64,
+                "input_hash": "c" * 64,
+                "uv_lock_hash": "d" * 64,
+                "input_files": [
+                    {"path": "/Users/example/raw.csv", "exists": True, "sha256": "1" * 64},
+                    {
+                        "path": "/Volumes/private/issuer.parquet",
+                        "exists": True,
+                        "sha256": "2" * 64,
+                    },
+                    {
+                        "path": "/Users/example/OneDrive/panel.parquet",
+                        "exists": True,
+                        "sha256": "3" * 64,
+                    },
+                    {"path": "/Volumes/private/bridge.csv", "exists": True, "sha256": "4" * 64},
+                    {"path": "/Users/example/lake.json", "exists": True, "sha256": "5" * 64},
+                    {"path": "/Users/example/form_ap.json", "exists": True, "sha256": "6" * 64},
+                ],
+                "wrds_export_metadata": {
+                    "path": "/Users/example/OneDrive/bridge.csv",
+                    "exists": True,
+                    "sha256": "7" * 64,
+                    "source_values": ["wrds_sec_analytics_cik_gvkey"],
+                    "source_version_values": ["WRDS SEC Analytics Suite 2026-05"],
+                    "extracted_at_values": ["2026-05-25T00:00:00Z"],
+                },
+            },
+            "public_lake_provenance": {
+                "as_of_date": "2026-07-06",
+                "fresh_build": True,
+                "commit_sha": commit,
+                "git_dirty": False,
+                "config_hash": "8" * 64,
+                "input_hash": "9" * 64,
+                "uv_lock_hash": "0" * 64,
+                "source_metadata_inventory": [
+                    {
+                        "metadata_file": "form-ap/FirmFilings.zip.meta.json",
+                        "metadata_sha256": "e" * 64,
+                        "source_name": "form-ap",
+                        "payload_sha256": "f" * 64,
+                    }
+                ],
+                "form_ap": {
+                    "source_kind": "verified_zip_member",
+                    "archive_sha256": "e" * 64,
+                    "member": "FirmFilings.csv",
+                    "member_sha256": "f" * 64,
+                },
+            },
+            "components": {
+                "benchmark": {"status": "complete", "out_dir": "/Users/example/benchmark"},
+                "public_cascade": {"status": "complete", "out_dir": "/Volumes/private/public"},
+                "bridge_probe": {
+                    "status": "crosswalk_available",
+                    "out_dir": "/Users/example/bridge",
+                },
+                "peer_comparison": {"status": "complete", "out_dir": "/Users/example/peer"},
+                "public_peer_comparison": {
+                    "status": "complete",
+                    "out_dir": "/Users/example/public_peer",
+                },
+                "construct_overlap": {
+                    "run_status": "complete",
+                    "validation_tier": "wrds_validated",
+                    "out_dir": "/Users/example/OneDrive/construct",
+                },
+            },
+            "claim_maturity": {
+                "public_prediction": "reportable",
+                "feature_and_window_sensitivity": "supporting",
+                "construct_alignment": "supporting",
+                "opacity_dml": "diagnostic",
+            },
+            "inputs": {
+                "raw_data": "/Users/example/raw.csv",
+                "issuer_origin_panel": "/Volumes/private/issuer.parquet",
+                "crosswalk": "/Users/example/OneDrive/bridge.csv",
+            },
+            "runtime": {"peer_comparison_mode": "full"},
+        },
+    )
+    _write_json(
+        study_dir / "public_cascade" / "public_cascade_summary.json",
+        {
+            "sample_years": [2011, 2024],
+            "primary_specification": {"feature_set": "all", "train_window": "expanding"},
+            "task_positive_counts": {},
+            "task_exclusion_counts": {},
+            "feature_family_summary": {},
+        },
+    )
+    _write_json(
+        study_dir / "bridge_probe" / "bridge_probe_summary.json",
+        {"status": "crosswalk_available"},
+    )
+    _write_json(
+        study_dir / "construct_overlap" / "construct_overlap_manifest.json",
+        {
+            "validation_tier": "wrds_validated",
+            "search_universe_rows": {
+                "public_to_benchmark": 17,
+                "benchmark_to_public": 23,
+            },
+            "exploratory_maxima": {
+                "public_to_benchmark": {
+                    "keys": {"model_id": "public_decoy", "train_window": "rolling_7y"}
+                },
+                "benchmark_to_public": {
+                    "keys": {"model_id": "benchmark_decoy", "train_window": "rolling_7y"}
+                },
+            },
+        },
+    )
+    pd.DataFrame(
+        [
+            {
+                "model_id": "public_cascade",
+                "task": "8k_402",
+                "train_window": "expanding",
+                "pr_auc": 0.04,
+                "roc_auc": 0.70,
+                "top_10pct_precision": 0.06,
+                "top_decile_lift": 2.0,
+            },
+            {
+                "model_id": "public_decoy",
+                "task": "8k_402",
+                "train_window": "rolling_7y",
+                "pr_auc": 0.09,
+                "roc_auc": 0.80,
+                "top_10pct_precision": 0.10,
+                "top_decile_lift": 9.0,
+            },
+        ]
+    ).to_csv(
+        study_dir / "construct_overlap" / "public_score_benchmark_ranking.csv",
+        index=False,
+    )
+    pd.DataFrame(
+        [
+            {
+                "model_id": "benchmark_xgb",
+                "target_public_label": "label_8k_402_365",
+                "train_window": "expanding",
+                "pr_auc": 0.03,
+                "roc_auc": 0.60,
+                "top_10pct_precision": 0.05,
+                "top_decile_lift": 1.8,
+            },
+            {
+                "model_id": "benchmark_decoy",
+                "target_public_label": "label_8k_402_365",
+                "train_window": "rolling_7y",
+                "pr_auc": 0.08,
+                "roc_auc": 0.75,
+                "top_10pct_precision": 0.09,
+                "top_decile_lift": 8.0,
+            },
+        ]
+    ).to_csv(
+        study_dir / "construct_overlap" / "reciprocal_alignment.csv",
+        index=False,
+    )
+
+    for table in CURRENT_PACKAGE_TABLES:
+        (tables_dir / f"{table}.md").write_text(
+            "| Fixture | Value |\n| --- | --- |\n| row | 1 |\n",
+            encoding="utf-8",
+        )
+    _table_09_frame().to_csv(
+        tables_dir / "table_09_construct_alignment.csv",
+        index=False,
+    )
+    for figure in CURRENT_PACKAGE_FIGURES:
+        (figures_dir / f"{figure}.png").write_bytes(b"fixture-png")
+        (figures_dir / f"{figure}.pdf").write_bytes(b"fixture-pdf")
+    _write_json(
+        package_dir / "manifest.json",
+        {
+            "tables": {
+                table: {"csv": f"/Users/example/OneDrive/{table}.csv"}
+                for table in CURRENT_PACKAGE_TABLES
+            },
+            "figures": {
+                figure: {"png": f"/Volumes/private/{figure}.png"}
+                for figure in CURRENT_PACKAGE_FIGURES
+            },
+        },
+    )
+    return {
+        "study_dir": study_dir,
+        "package_dir": package_dir,
+        "tables": CURRENT_PACKAGE_TABLES,
+        "figures": CURRENT_PACKAGE_FIGURES,
+    }
+
+
+def _build_fixture_snapshot(
+    fixture: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    monkeypatch.setattr(snapshot_module, "ARTIFACTS_DIR", tmp_path)
+    monkeypatch.setattr(snapshot_module, "DOCS_DIR", tmp_path / "docs")
+    monkeypatch.setattr(
+        snapshot_module,
+        "_latest_public_lake_report",
+        lambda: {"timestamp_utc": "2026-07-10T00:00:00Z", "row_counts": {}},
+    )
+    return snapshot_module.build_snapshot(
+        fixture["study_dir"],
+        manuscript_package=fixture["package_dir"],
+        allow_partial=False,
+    )
+
+
+def test_snapshot_construct_rows_read_generated_table_only(tmp_path: Path) -> None:
+    package_dir = tmp_path / "manuscript_package"
+    tables_dir = package_dir / "tables"
+    tables_dir.mkdir(parents=True)
+    _table_09_frame().to_csv(
+        tables_dir / "table_09_construct_alignment.csv",
+        index=False,
+    )
+
+    rows = _construct_alignment_rows(package_dir)
+
+    assert len(rows) == 2
+    assert {row[1] for row in rows} == {"`public_cascade`", "`benchmark_xgb`"}
+    assert {row[7] for row in rows} == {"2.0000", "1.8000"}
+
+
+@pytest.mark.parametrize("row_count", [1, 3])
+def test_snapshot_construct_rows_require_exactly_two_primary_rows(
+    tmp_path: Path,
+    row_count: int,
+) -> None:
+    tables_dir = tmp_path / "tables"
+    tables_dir.mkdir()
+    frame = pd.concat([_table_09_frame(), _table_09_frame().iloc[[0]]], ignore_index=True)
+    frame.iloc[:row_count].to_csv(tables_dir / "table_09_construct_alignment.csv", index=False)
+
+    with pytest.raises(
+        ValueError, match="generated Table 9 must contain exactly two primary rows"
+    ):
+        _construct_alignment_rows(tmp_path)
+
+
+def test_snapshot_construct_rows_require_generated_table_schema(tmp_path: Path) -> None:
+    tables_dir = tmp_path / "tables"
+    tables_dir.mkdir()
+    _table_09_frame().drop(columns="Lift_Bootstrap_Interval").to_csv(
+        tables_dir / "table_09_construct_alignment.csv",
+        index=False,
+    )
+
+    with pytest.raises(
+        ValueError, match="generated Table 9 must contain exactly two primary rows"
+    ):
+        _construct_alignment_rows(tmp_path)
+
+
+def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+
+    results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+    for phrase in [
+        "Artifact generation time",
+        "Study commit",
+        "Git dirty",
+        "Config hash",
+        "Input hash",
+        "uv.lock hash",
+        "Public-data as-of date",
+        "Form AP archive hash",
+        "WRDS source",
+        "WRDS version",
+        "WRDS extraction time",
+        "WRDS hash",
+        "Component status",
+        "Claim maturity",
+        "Canonical status",
+        "Detected-misstatement benchmark input",
+        "Public issuer dimension input",
+        "Public issuer-origin panel input",
+        "CIK-GVKEY bridge input",
+        "Public-lake run metadata input",
+        "Form AP source metadata input",
+        "## Results for Experiment 1: Label Observability and Detection Timing",
+        "## Results for Experiment 2: Concept Drift and Model Shelf-Life",
+        "## Results for Experiment 3: Opacity and Public Review/Correction Risk",
+        "## Results for Experiment 4: Public Cascade Construction",
+        "## Results for Experiment 5: Public Cascade Prediction",
+        "## Results for Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap",
+        "### Answers to the research questions",
+        "### Comparison with prior literature",
+        "### Accounting and institutional interpretation",
+        "### Selection and visibility",
+        "### Generalizability",
+        "### Limitations and future work",
+        "### Claim ledger",
+        "`reportable`",
+        "`supporting`",
+        "`diagnostic`",
+        "`deferred`",
+        "Note/disclosure-breadth variables enter `all` without a standalone ablation",
+    ]:
+        assert phrase in results
+    assert "| Canonical status | `CANONICAL` |" in results
+    assert "wrds_sec_analytics_cik_gvkey" in results
+    assert "WRDS SEC Analytics Suite 2026-05" in results
+    assert "2026-05-25T00:00:00Z" in results
+    assert "7" * 64 in results
+    for role_hash in ["1", "2", "3", "4", "5", "6"]:
+        assert role_hash * 64 in results
+    for component, status in {
+        "benchmark": "complete",
+        "public_cascade": "complete",
+        "bridge_probe": "crosswalk_available",
+        "peer_comparison": "complete",
+        "public_peer_comparison": "complete",
+        "construct_overlap": "complete",
+    }.items():
+        assert f"| {component} | `{status}` |" in results
+    for claim, maturity in {
+        "public_prediction": "reportable",
+        "feature_and_window_sensitivity": "supporting",
+        "construct_alignment": "supporting",
+        "opacity_dml": "diagnostic",
+    }.items():
+        assert f"| {claim} | `{maturity}` |" in results
+    for local_path_marker in ["/Users/", "/Volumes/", "OneDrive"]:
+        assert local_path_marker not in results
+    for table in fixture["tables"]:
+        assert f"#### `{table}`" in results
+    for figure in fixture["figures"]:
+        assert f"{figure}.png" in results
+    assert results.count("- **ARS claim.**") == len(fixture["tables"]) + len(fixture["figures"])
+
+
+def test_generated_snapshot_keeps_raw_maxima_exploratory_and_post_hoc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+
+    results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+    primary = results.split("### Declared primary construct-alignment rows", maxsplit=1)[1].split(
+        "### Exploratory maxima", maxsplit=1
+    )[0]
+    exploratory = results.split("### Exploratory maxima", maxsplit=1)[1].split(
+        "### Label Contingency and Lift", maxsplit=1
+    )[0]
+    assert "`public_cascade`" in primary
+    assert "`benchmark_xgb`" in primary
+    assert "public_decoy" not in primary
+    assert "benchmark_decoy" not in primary
+    assert "post-hoc" in exploratory
+    assert "public_decoy" in exploratory
+    assert "benchmark_decoy" in exploratory
+    assert "17" in exploratory
+    assert "23" in exploratory
+    assert "9.0000" in exploratory
+    assert "8.0000" in exploratory
+    assert "2.0000" in exploratory
+    assert "1.8000" in exploratory
+    assert "7.0000" in exploratory
+    assert "6.2000" in exploratory
+
+
+def test_generated_snapshot_lists_every_failed_canonical_predicate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    manifest_path = fixture["study_dir"] / "study_run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["git_dirty"] = True
+    manifest["provenance"]["commit_sha"] = "b" * 40
+    manifest["public_lake_provenance"].update(
+        {
+            "git_dirty": True,
+            "fresh_build": False,
+            "as_of_date": "2026-07-05",
+            "commit_sha": "c" * 40,
+        }
+    )
+    _write_json(manifest_path, manifest)
+
+    results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+    assert "| Canonical status | `NON-CANONICAL` |" in results
+    for reason in [
+        "dirty-state: study git_dirty is not false",
+        "dirty-state: public-lake git_dirty is not false",
+        "freshness: public-lake fresh_build is not true",
+        "date: public-data as-of date is not 2026-07-06",
+        "identity: study and provenance commits differ",
+        "identity: study and public-lake commits differ",
+    ]:
+        assert reason in results
 
 
 def test_readme_home_explains_project_and_workflow() -> None:
