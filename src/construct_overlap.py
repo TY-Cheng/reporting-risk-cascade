@@ -78,6 +78,36 @@ PROVENANCE_HEADER_FIELDS = (
     "link",
     "desc",
 )
+PROVENANCE_METADATA_ROLES = frozenset(
+    {
+        "provider",
+        "vendor",
+        "dataset",
+        "database",
+        "product",
+        "system",
+        "service",
+        "table",
+        "file",
+        "extract",
+        "extracted",
+        "extractedat",
+        "timestamp",
+        "feed",
+        "archive",
+        "validation",
+        "tier",
+        "status",
+        "flag",
+        "indicator",
+        "quality",
+        "confidence",
+        "path",
+        "url",
+        "uri",
+        "name",
+    }
+)
 WRDS_EXACT_CONTRACT_COMPACTS = tuple(
     _compact_identifier(value)
     for allowed in WRDS_PROVENANCE_TOKEN_ALLOWLISTS.values()
@@ -89,9 +119,8 @@ WRDS_DISTINCTIVE_CONTRACT_TERMS = (
     "Compustat",
     "Capital IQ",
     "SEC Analytics",
-    "CIK-GVKEY",
 )
-WRDS_COMMON_COMPACT_ALIASES = frozenset({"capiq", "gvkeycik"})
+WRDS_COMMON_COMPACT_ALIASES = frozenset({"capiq"})
 PROVENANCE_COMPACT_MARKERS = frozenset(
     marker
     for marker in map(_compact_identifier, WRDS_DISTINCTIVE_CONTRACT_TERMS)
@@ -113,13 +142,18 @@ def _is_unknown_provenance_column(column: object) -> bool:
         return True
     words = _identifier_words(name)
     has_field = any(field in compact for field in PROVENANCE_HEADER_FIELDS)
-    has_namespace = (
-        any(marker in compact for marker in PROVENANCE_COMPACT_MARKERS)
-        or bool(words & {"provenance", "bridge"})
-        or "raw" in words
-        or compact.startswith("raw")
+    has_metadata_role = bool(words & PROVENANCE_METADATA_ROLES) or any(
+        compact.endswith(role) for role in PROVENANCE_METADATA_ROLES
     )
-    return has_field and has_namespace
+    has_vendor_namespace = any(
+        marker in compact for marker in PROVENANCE_COMPACT_MARKERS
+    )
+    has_structural_namespace = (
+        bool(words & {"provenance", "bridge", "raw"}) or compact.startswith("raw")
+    )
+    return (has_field and (has_vendor_namespace or has_structural_namespace)) or (
+        has_metadata_role and has_vendor_namespace
+    )
 
 
 def _identifier_words(value: object) -> set[str]:

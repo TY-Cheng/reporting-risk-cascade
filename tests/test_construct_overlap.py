@@ -642,8 +642,31 @@ def test_unknown_provenance_like_column_is_rejected(tmp_path: Path) -> None:
         "ExternalCRSPSource",
         "ExternalSECAnalyticsSource",
         "foo_SECAnalytics_method",
-        "ExternalCIKGVKEYSource",
-        "ExternalGVKEYCIKMethod",
+        "ExternalWRDSProvider",
+        "ExternalCRSPVendor",
+        "CapitalIQDataset",
+        "CompustatDatabase",
+        "WRDSProduct",
+        "CRSPSystem",
+        "CapitalIQService",
+        "CompustatTable",
+        "WRDSFile",
+        "SECAnalyticsExtract",
+        "SECAnalyticsExtractedAt",
+        "WRDSTimestamp",
+        "CRSPFeed",
+        "CapitalIQArchive",
+        "CompustatValidation",
+        "WRDSTier",
+        "CRSPStatus",
+        "CapitalIQFlag",
+        "CompustatIndicator",
+        "WRDSQuality",
+        "CRSPConfidence",
+        "CapitalIQPath",
+        "CompustatURL",
+        "WRDSURI",
+        "CRSPName",
     ],
 )
 def test_conflicting_provenance_header_alias_is_rejected(
@@ -686,6 +709,12 @@ def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path
         "business_crsp_revenue": "100",
         "business_sec_analytics_revenue": "100",
         "business_cik_gvkey_revenue": "100",
+        "ExternalCIKGVKEYSource": "ordinary mapping field",
+        "ExternalGVKEYCIKMethod": "ordinary mapping field",
+        "ExternalCIKGVKEYMapping": "ordinary mapping field",
+        "external_cik_gvkey_dataset": "ordinary mapping field",
+        "ExternalGVKEYCIKPath": "ordinary mapping field",
+        "business_compustat_security_revenue": "100",
     }
     pd.DataFrame([row]).to_csv(crosswalk, index=False)
 
@@ -726,10 +755,6 @@ def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path
         ("source", "ExternalCRSPLink"),
         ("source_version", "SECAnalytics"),
         ("source_version", "ExternalSECAnalyticsProvider"),
-        ("match_method", "CIKGVKEY"),
-        ("match_method", "ExternalCIKGVKEYMethod"),
-        ("match_method", "GVKEYCIK"),
-        ("match_method", "ExternalGVKEYCIKMethod"),
     ],
 )
 def test_attempted_wrds_provenance_in_every_known_field_fails_closed(
@@ -740,7 +765,7 @@ def test_attempted_wrds_provenance_in_every_known_field_fails_closed(
     crosswalk = tmp_path / "attempted_wrds_provenance.csv"
     row = {
         **_valid_raw_bridge_row(),
-        "source": "external_crosswalk",
+        "source": "external_cik_gvkey",
         "source_version": "external 2026-05-01",
         "match_method": "external_date_range",
         "match_score": "",
@@ -774,7 +799,7 @@ def test_generic_provenance_value_alone_remains_candidate_external(
     crosswalk = tmp_path / "generic_external_provenance.csv"
     row = {
         **_valid_raw_bridge_row(),
-        "source": "external_crosswalk",
+        "source": "external_cik_gvkey",
         "source_version": "external 2026-05-01",
         "match_method": "external_date_range",
         "match_score": "",
@@ -797,7 +822,7 @@ def test_mixed_raw_and_external_crosswalk_is_rejected(tmp_path: Path) -> None:
         **_valid_raw_bridge_row(),
         "gvkey": "1001",
         "issuer_cik": "0000320001",
-        "source": "external_crosswalk",
+        "source": "external_cik_gvkey",
         "source_version": "external 2026-05-01",
         "match_method": "external_date_range",
         "match_score": "",
@@ -837,7 +862,7 @@ def test_raw_like_external_provenance_is_rejected(
     crosswalk = tmp_path / "partial_raw_crosswalk.csv"
     row = {
         **_valid_raw_bridge_row(),
-        "source": "external_crosswalk",
+        "source": "external_cik_gvkey",
         "source_version": "external 2026-05-01",
         "match_method": "external_date_range",
         "match_score": "",
@@ -898,8 +923,13 @@ def test_partial_or_forged_wrds_provenance_is_rejected(
         _bridge_evidence_from_crosswalk(crosswalk)
 
 
-def test_external_crosswalk_without_wrds_provenance_reports_candidate_source(
+@pytest.mark.parametrize(
+    "source_value",
+    ["external_cik_gvkey", "ExternalCIKGVKEYMapping", "external_gvkey_cik"],
+)
+def test_external_identifier_mapping_without_wrds_provenance_is_candidate(
     tmp_path: Path,
+    source_value: str,
 ) -> None:
     crosswalk = tmp_path / "external_crosswalk.csv"
     pd.DataFrame(
@@ -908,7 +938,7 @@ def test_external_crosswalk_without_wrds_provenance_reports_candidate_source(
                 "gvkey": "1001",
                 "data_year": 2018,
                 "issuer_cik": "0000320001",
-                "source": "external_crosswalk",
+                "source": source_value,
                 "match_method": "external_date_range",
             },
         ]
@@ -916,7 +946,7 @@ def test_external_crosswalk_without_wrds_provenance_reports_candidate_source(
 
     evidence = _bridge_evidence_from_crosswalk(crosswalk)
 
-    assert evidence["bridge_source"] == "external_crosswalk"
+    assert evidence["bridge_source"] == source_value
     assert evidence["validation_tier"] == "candidate_external"
 
 
@@ -924,7 +954,7 @@ def test_candidate_construct_summary_keeps_claim_deferred(tmp_path: Path) -> Non
     study, crosswalk, public_panel = _write_toy_study(tmp_path)
     frame = pd.read_csv(crosswalk)
     frame = frame.assign(
-        source="external_crosswalk",
+        source="external_cik_gvkey",
         source_version="external 2026-05-01",
         match_method="external_date_range",
         match_score="",
