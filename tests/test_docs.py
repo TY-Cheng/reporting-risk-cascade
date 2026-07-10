@@ -500,6 +500,24 @@ def _table_09_frame() -> pd.DataFrame:
     )
 
 
+def _bridge_claim_boundary(
+    component_tier: str | None,
+    artifact_tier: str | None,
+) -> dict[str, str]:
+    component_label = component_tier or "none"
+    artifact_label = artifact_tier or "none"
+    paired_tier = artifact_label
+    if component_tier != artifact_tier:
+        paired_tier = f"component={component_label}; manifest={artifact_label}"
+    status = "validated" if component_tier == artifact_tier == "wrds_validated" else "diagnostic"
+    return {
+        "construct_overlap_tier": paired_tier,
+        "construct_overlap_status": status,
+        "construct_overlap_component_tier": component_label,
+        "construct_overlap_artifact_tier": artifact_label,
+    }
+
+
 def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
     study_dir = tmp_path / "study"
     package_dir = tmp_path / "manuscript_package"
@@ -762,6 +780,10 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
     _write_json(
         package_dir / "manifest.json",
         {
+            "claim_boundary": _bridge_claim_boundary(
+                "wrds_validated",
+                "wrds_validated",
+            ),
             "tables": {
                 table: {"csv": f"{USER_PATH_PREFIX}example/{CLOUD_STORAGE_MARKER}/{table}.csv"}
                 for table in CURRENT_PACKAGE_TABLES
@@ -964,6 +986,13 @@ def test_candidate_bridge_snapshot_is_noncanonical_and_nonassertive(
     construct_manifest = json.loads(construct_manifest_path.read_text(encoding="utf-8"))
     construct_manifest["validation_tier"] = artifact_tier
     _write_json(construct_manifest_path, construct_manifest)
+    package_manifest_path = fixture["package_dir"] / "manifest.json"
+    package_manifest = json.loads(package_manifest_path.read_text(encoding="utf-8"))
+    package_manifest["claim_boundary"] = _bridge_claim_boundary(
+        component_tier,
+        artifact_tier,
+    )
+    _write_json(package_manifest_path, package_manifest)
 
     results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
     normalized = " ".join(results.lower().split())
@@ -993,6 +1022,75 @@ def test_candidate_bridge_snapshot_is_noncanonical_and_nonassertive(
         "integrated construct argument",
     ]:
         assert forbidden not in normalized
+
+
+@pytest.mark.parametrize(
+    ("component_tier", "artifact_tier", "package_component", "package_artifact"),
+    [
+        (
+            "candidate_external",
+            "candidate_external",
+            "wrds_validated",
+            "wrds_validated",
+        ),
+        (
+            "wrds_validated",
+            "wrds_validated",
+            "candidate_external",
+            "candidate_external",
+        ),
+    ],
+    ids=["live-candidate-stale-validated-package", "live-validated-stale-candidate-package"],
+)
+def test_snapshot_rejects_stale_package_bridge_boundary_before_rendering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    component_tier: str,
+    artifact_tier: str,
+    package_component: str,
+    package_artifact: str,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    study_manifest_path = fixture["study_dir"] / "study_run_manifest.json"
+    study_manifest = json.loads(study_manifest_path.read_text(encoding="utf-8"))
+    study_manifest["components"]["construct_overlap"]["validation_tier"] = component_tier
+    _write_json(study_manifest_path, study_manifest)
+    construct_manifest_path = (
+        fixture["study_dir"] / "construct_overlap" / "construct_overlap_manifest.json"
+    )
+    construct_manifest = json.loads(construct_manifest_path.read_text(encoding="utf-8"))
+    construct_manifest["validation_tier"] = artifact_tier
+    _write_json(construct_manifest_path, construct_manifest)
+    package_manifest_path = fixture["package_dir"] / "manifest.json"
+    package_manifest = json.loads(package_manifest_path.read_text(encoding="utf-8"))
+    package_manifest["claim_boundary"] = _bridge_claim_boundary(
+        package_component,
+        package_artifact,
+    )
+    _write_json(package_manifest_path, package_manifest)
+    stale_marker = "WRDS-validated stale package claim"
+    (fixture["package_dir"] / "tables" / "table_09_construct_alignment.md").write_text(
+        stale_marker,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="package claim boundary"):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+
+def test_snapshot_rejects_missing_package_claim_boundary(tmp_path: Path) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    package_manifest_path = fixture["package_dir"] / "manifest.json"
+    package_manifest = json.loads(package_manifest_path.read_text(encoding="utf-8"))
+    package_manifest.pop("claim_boundary")
+    _write_json(package_manifest_path, package_manifest)
+
+    with pytest.raises(ValueError, match="package claim boundary"):
+        snapshot_module.build_snapshot(
+            fixture["study_dir"],
+            manuscript_package=fixture["package_dir"],
+            allow_partial=False,
+        )
 
 
 def test_generated_snapshot_sanitizes_external_fixture_roots(

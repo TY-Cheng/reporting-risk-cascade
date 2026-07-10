@@ -201,13 +201,17 @@ def _bridge_language(
     component_tier = component.get("validation_tier") if isinstance(component, dict) else None
     artifact_tier = construct_manifest.get("validation_tier")
     tiers_match = component_tier == artifact_tier
-    tier = str(artifact_tier or component_tier or "none")
+    component_tier_label = str(component_tier or "none")
+    artifact_tier_label = str(artifact_tier or "none")
+    tier = artifact_tier_label if tiers_match else ""
     if not tiers_match:
-        tier = f"component={component_tier or 'none'}; manifest={artifact_tier or 'none'}"
+        tier = f"component={component_tier_label}; manifest={artifact_tier_label}"
     if tiers_match and artifact_tier == WRDS_VALIDATED_TIER:
         return {
             "tier": tier,
             "status": "validated",
+            "component_tier": component_tier_label,
+            "artifact_tier": artifact_tier_label,
             "overview_data": ("a raw-only `gvkey-CIK-year` bridge for overlap validation"),
             "overview_boundary": (
                 f"Construct overlap is `{tier}` using the confirmed WRDS SEC Analytics "
@@ -278,6 +282,8 @@ def _bridge_language(
     return {
         "tier": tier,
         "status": "diagnostic",
+        "component_tier": component_tier_label,
+        "artifact_tier": artifact_tier_label,
         "overview_data": (f"a `{tier}` crosswalk retained for diagnostic overlap analysis only"),
         "overview_boundary": (
             f"Construct overlap tier is `{tier}`; the evidence remains diagnostic and the "
@@ -340,6 +346,32 @@ def _bridge_language(
             "Candidate bridge coverage, generated Table 9, Figure 5, and contingency matrix."
         ),
     }
+
+
+def _validate_package_bridge_claim_boundary(
+    package_dir: Path,
+    bridge_language: dict[str, str],
+) -> None:
+    package_manifest = _read_json(package_dir / "manifest.json")
+    boundary = package_manifest.get("claim_boundary")
+    if not isinstance(boundary, dict):
+        raise ValueError("manuscript package claim boundary is missing or malformed")
+    expected = {
+        "construct_overlap_tier": bridge_language["tier"],
+        "construct_overlap_status": bridge_language["status"],
+        "construct_overlap_component_tier": bridge_language["component_tier"],
+        "construct_overlap_artifact_tier": bridge_language["artifact_tier"],
+    }
+    mismatches = [
+        f"{field}: expected {value!r}, got {boundary.get(field)!r}"
+        for field, value in expected.items()
+        if boundary.get(field) != value
+    ]
+    if mismatches:
+        raise ValueError(
+            "manuscript package claim boundary does not match live bridge evidence: "
+            + "; ".join(mismatches)
+        )
 
 
 def _bridge_artifact_explanations(
@@ -1425,6 +1457,7 @@ def build_snapshot(
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     study_rel = _rel(study_dir)
     bridge_language = _bridge_language(manifest, construct_manifest)
+    _validate_package_bridge_claim_boundary(manuscript_package, bridge_language)
     validation_tier = bridge_language["tier"]
     figure_explanations, table_explanations = _bridge_artifact_explanations(bridge_language)
     bridge_status = bridge_summary.get("status") or manifest.get("bridge", {}).get("status") or ""

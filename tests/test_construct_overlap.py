@@ -614,11 +614,62 @@ def test_unknown_provenance_like_column_is_rejected(tmp_path: Path) -> None:
         _bridge_evidence_from_crosswalk(crosswalk)
 
 
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "Source",
+        "SOURCE",
+        " source ",
+        "Match_Method",
+        "source2",
+        "source.1",
+        "wrds_source",
+        "wrds_source_extra",
+        "raw_source",
+        "capitaliq_origin",
+        "provenanceSourceExtra",
+        "compustat_source",
+        "crsp_compustat_source",
+        "CompustatSource",
+        "CRSPCompustatSource",
+        "wrds_description",
+        "capitaliq_desc",
+    ],
+)
+def test_conflicting_provenance_header_alias_is_rejected(
+    tmp_path: Path,
+    alias: str,
+) -> None:
+    crosswalk = tmp_path / "conflicting_provenance_alias.csv"
+    row = {**_valid_raw_bridge_row(), alias: "external_unverified_crosswalk"}
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
+def test_literal_duplicate_provenance_header_is_rejected(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "duplicate_source_header.csv"
+    row = _valid_raw_bridge_row()
+    headers = [*row, "source"]
+    values = [*[str(value) for value in row.values()], "external_unverified_crosswalk"]
+    crosswalk.write_text(
+        ",".join(headers) + "\n" + ",".join(values) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
 def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path) -> None:
     crosswalk = tmp_path / "business_column.csv"
     row = {
         **_valid_raw_bridge_row(),
         "business_source_extra": "external_unverified_crosswalk",
+        "business_note": "raw materials contract",
+        "revenue": "100",
+        "drawbridge_external": "ordinary business value",
     }
     pd.DataFrame([row]).to_csv(crosswalk, index=False)
 
@@ -640,6 +691,11 @@ def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path
         ("bridge_origin", "  WRDS  "),
         ("raw_link_sources", "  CRSP_COMPUSTAT_MERGED  "),
         ("raw_link_descs", "  Generic Compustat  "),
+        ("bridge_priority", "WRDSprimary"),
+        ("bridge_priority", "rawprimary"),
+        ("source", "CapitalIQ"),
+        ("source", "CompustatCompany"),
+        ("source", "CRSPCompustatMerged"),
     ],
 )
 def test_attempted_wrds_provenance_in_every_known_field_fails_closed(

@@ -59,13 +59,49 @@ MIN_RANKING_POSITIVES = 10
 BOOTSTRAP_POSITIVE_THRESHOLD = 30
 BRIDGE_PROVENANCE_COLUMNS = list(WRDS_PROVENANCE_TOKEN_ALLOWLISTS)
 BRIDGE_PROVENANCE_SCAN_COLUMNS = [*BRIDGE_PROVENANCE_COLUMNS, "extracted_at"]
+PROVENANCE_HEADER_COMPACTS = {
+    re.sub(r"[^a-z0-9]+", "", column.casefold()) for column in BRIDGE_PROVENANCE_SCAN_COLUMNS
+}
+PROVENANCE_HEADER_FIELDS = (
+    "source",
+    "version",
+    "method",
+    "score",
+    "priority",
+    "origin",
+    "link",
+    "desc",
+)
+PROVENANCE_HEADER_PREFIXES = (
+    "bridge",
+    "raw",
+    "wrds",
+    "capitaliq",
+    "compustat",
+    "crspcompustat",
+)
+WRDS_SOURCE_COMPACT_ALIASES = {
+    re.sub(r"[^a-z0-9]+", "", source.casefold())
+    for pair in WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE.items()
+    for source in pair
+}
 
 
 def _is_unknown_provenance_column(column: object) -> bool:
-    name = str(column).strip().lower()
+    name = str(column)
     if name in BRIDGE_PROVENANCE_SCAN_COLUMNS:
         return False
-    return name.startswith(("provenance_", "bridge_", "raw_link_", "source_", "match_"))
+    compact = re.sub(r"[^a-z0-9]+", "", name.casefold())
+    if any(compact.startswith(canonical) for canonical in PROVENANCE_HEADER_COMPACTS):
+        return True
+    if compact.startswith("provenance"):
+        return True
+    for prefix in PROVENANCE_HEADER_PREFIXES:
+        if compact.startswith(prefix) and any(
+            field in compact[len(prefix) :] for field in PROVENANCE_HEADER_FIELDS
+        ):
+            return True
+    return False
 
 
 def _attempts_wrds_provenance(column: str, value: object) -> bool:
@@ -75,7 +111,18 @@ def _attempts_wrds_provenance(column: str, value: object) -> bool:
     if column in {"raw_link_sources", "raw_link_descs"}:
         return True
     words = set(re.findall(r"[a-z0-9]+", text.casefold()))
-    return bool(words & {"wrds", "compustat", "raw"}) or {"capital", "iq"} <= words
+    compact_tokens = [
+        re.sub(r"[^a-z0-9]+", "", token.casefold()) for token in text.split(";")
+    ]
+    compact_claim = any(
+        token.startswith(("wrds", "raw")) or token in WRDS_SOURCE_COMPACT_ALIASES
+        for token in compact_tokens
+    )
+    return (
+        compact_claim
+        or bool(words & {"wrds", "compustat", "raw"})
+        or {"capital", "iq"} <= words
+    )
 
 
 def _utc_now() -> str:
