@@ -11,6 +11,9 @@ from typing import Any
 
 
 ALLOWED_ROOT_FILES = {
+    ".env.example",
+    ".gitignore",
+    ".github/workflows/ci.yml",
     ".python-version",
     "LICENSE",
     "README.md",
@@ -55,6 +58,7 @@ The raw detected-misstatement benchmark and WRDS crosswalk are not distributed.
 Authorized users must supply them at the configured paths before the full run.
 
 The source tree is an identity-redacted derivative of the recorded study commit.
+Refreshed report snapshot files from the report commit overlay their normal source paths.
 Before network acquisition, an authorized user must set a compliant SEC contact user-agent.
 """
 
@@ -321,7 +325,9 @@ def build_reviewer_package(
     redactions = _derive_identity_redactions(entries)
     for path in _tracked_paths(repo_root, report_commit):
         if _report_allowed(path):
-            entries[f"report/{path}"] = _git_bytes(repo_root, "show", f"{report_commit}:{path}")
+            payload = _git_bytes(repo_root, "show", f"{report_commit}:{path}")
+            entries[f"report/{path}"] = payload
+            entries[f"source/{path}"] = payload
 
     manuscript_package = _validated_package_root(manuscript_package)
     package_manifest = json.loads(
@@ -357,6 +363,13 @@ def build_reviewer_package(
             "source_namespace": "source/",
             "report_namespace": "report/",
             "generated_namespace": "generated/manuscript_package/",
+            "report_overlay": {
+                "policy": "report_commit_overlays_source",
+                "paths": [
+                    "docs/results_snapshot.md",
+                    "docs/assets/results_snapshot/",
+                ],
+            },
             "identity_redaction": {
                 "policy": "derived_from_study_source",
                 "categories": sorted({category for _, _, category in redactions}),

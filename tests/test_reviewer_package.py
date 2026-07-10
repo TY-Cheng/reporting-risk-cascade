@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -9,6 +11,8 @@ import pytest
 
 import scripts.build_reviewer_package as reviewer_module
 from scripts.build_reviewer_package import (
+    ALLOWED_PREFIXES,
+    ALLOWED_ROOT_FILES,
     _source_allowed,
     _validate_entries,
     build_reviewer_package,
@@ -24,6 +28,15 @@ ANONYMOUS_AUTHOR_NAME = "Anonymous Researcher"
 ANONYMOUS_AUTHOR_EMAIL = "researcher@example.invalid"
 ANONYMOUS_REPOSITORY_OWNER = "anonymous-owner"
 ANONYMOUS_COPYRIGHT_HOLDER = "Anonymous Copyright Holder"
+STALE_REPORT_MARKER = "STALE STUDY SNAPSHOT"
+REFRESHED_REPORT_MARKER = "REFRESHED REPORT SNAPSHOT"
+REPORT_OVERLAY_POLICY = {
+    "policy": "report_commit_overlays_source",
+    "paths": [
+        "docs/results_snapshot.md",
+        "docs/assets/results_snapshot/",
+    ],
+}
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -39,6 +52,25 @@ def _git(repo: Path, *args: str) -> str:
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _allowed_source_paths(repo_root: Path) -> list[str]:
+    paths = {
+        name
+        for name in ALLOWED_ROOT_FILES
+        if (repo_root / name).is_file() and _source_allowed(name)
+    }
+    for prefix in ALLOWED_PREFIXES:
+        root = repo_root / prefix.rstrip("/")
+        if not root.is_dir():
+            continue
+        for candidate in root.rglob("*"):
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            relative = candidate.relative_to(repo_root).as_posix()
+            if _source_allowed(relative):
+                paths.add(relative)
+    return sorted(paths)
 
 
 def _reviewer_fixture(
@@ -60,7 +92,10 @@ def _reviewer_fixture(
             f'    assert CONTACT == "{contact}"\n'
         ),
         "docs/example.md": f"Maintained by {INVENTED_AUTHOR_NAME}.\n",
-        "docs/results_snapshot.md": f"Prepared by {INVENTED_AUTHOR_EMAIL}.\n",
+        "docs/results_snapshot.md": f"# {STALE_REPORT_MARKER}\n",
+        "docs/assets/results_snapshot/figure_fixture.svg": (
+            f"<svg><text>{STALE_REPORT_MARKER}</text></svg>\n"
+        ),
         "README.md": (
             "# Fixture\n\n"
             f"https://github.com/{INVENTED_REPOSITORY_OWNER}/fixture\n"
@@ -82,12 +117,25 @@ def _reviewer_fixture(
         ),
         "justfile": "check:\n    python -m pytest\n",
         "uv.lock": "version = 1\n",
+        ".env.example": 'PROJECT_ROOT="/path/to/fixture"\n',
+        ".gitignore": ".env\n",
+        ".github/workflows/ci.yml": "name: fixture-ci\n",
     }
     for relative, content in files.items():
         _write(repo / relative, content)
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "fixture")
     commit = _git(repo, "rev-parse", "HEAD")
+    _write(
+        repo / "docs" / "results_snapshot.md",
+        f"# {REFRESHED_REPORT_MARKER}\nPrepared by {INVENTED_AUTHOR_EMAIL}.\n",
+    )
+    _write(
+        repo / "docs" / "assets" / "results_snapshot" / "figure_fixture.svg",
+        f"<svg><text>{REFRESHED_REPORT_MARKER}</text></svg>\n",
+    )
+    _git(repo, "add", "docs/results_snapshot.md", "docs/assets/results_snapshot")
+    _git(repo, "commit", "-m", "refresh report")
 
     study_dir = tmp_path / "study"
     package_dir = tmp_path / "package"
@@ -135,19 +183,19 @@ def _reviewer_fixture(
 
 
 def test_allowed_working_source_surface_does_not_self_trigger_validation() -> None:
-    paths = {
-        *_git(REPO_ROOT, "ls-files").splitlines(),
-        *_git(REPO_ROOT, "ls-files", "--others", "--exclude-standard").splitlines(),
-    }
     entries = {
         f"source/{path}": (REPO_ROOT / path).read_bytes()
-        for path in paths
-        if _source_allowed(path)
+        for path in _allowed_source_paths(REPO_ROOT)
     }
     redactions = reviewer_module._derive_identity_redactions(entries)
     redacted = reviewer_module._redact_entries(entries, redactions)
+    original_needles = [
+        needle
+        for needle, replacement, _ in redactions
+        if needle.casefold() != replacement.casefold()
+    ]
 
-    _validate_entries(redacted, identity_needles=[item[0] for item in redactions])
+    _validate_entries(redacted, identity_needles=original_needles)
 
     assert {item[2] for item in redactions} >= {
         "project_author_name",
@@ -156,7 +204,7 @@ def test_allowed_working_source_surface_does_not_self_trigger_validation() -> No
         "copyright_holder",
     }
     payload = b"\n".join(redacted.values()).decode("utf-8", errors="ignore").casefold()
-    assert all(item[0].casefold() not in payload for item in redactions)
+    assert all(needle.casefold() not in payload for needle in original_needles)
     implementation_text = "\n".join(
         (REPO_ROOT / relative).read_text(encoding="utf-8")
         for relative in (
@@ -164,7 +212,143 @@ def test_allowed_working_source_surface_does_not_self_trigger_validation() -> No
             "tests/test_reviewer_package.py",
         )
     ).casefold()
-    assert all(item[0].casefold() not in implementation_text for item in redactions)
+    assert all(needle.casefold() not in implementation_text for needle in original_needles)
+
+
+def test_allowed_source_paths_include_untracked_allowed_files_only(tmp_path: Path) -> None:
+    included = {
+        "README.md": "# Fixture\n",
+        ".env.example": "PROJECT_ROOT=/path/to/fixture\n",
+        ".gitignore": ".env\n",
+        ".github/workflows/ci.yml": "name: fixture-ci\n",
+        "tests/test_untracked.py": "def test_fixture():\n    assert True\n",
+        "scripts/untracked_helper.py": "VALUE = 1\n",
+    }
+    excluded = {
+        ".github/workflows/other.yml": "name: unrelated\n",
+        ".github/private.py": "VALUE = 1\n",
+        ".git/config": "fixture\n",
+        ".venv/private.py": "VALUE = 1\n",
+        "artifacts/private.py": "VALUE = 1\n",
+        "site/private.py": "VALUE = 1\n",
+        "docs/results_snapshot.md": "stale\n",
+        "docs/assets/results_snapshot/figure.svg": "<svg></svg>\n",
+        "docs/superpowers/plans/private.md": "private\n",
+        "tests/__pycache__/private.py": "VALUE = 1\n",
+        "tests/private.PARQUET": "PAR1\n",
+    }
+    for relative, content in {**included, **excluded}.items():
+        _write(tmp_path / relative, content)
+
+    paths = _allowed_source_paths(tmp_path)
+
+    assert set(included) <= set(paths)
+    assert set(excluded).isdisjoint(paths)
+
+
+def test_extracted_current_source_just_check_passes_without_git(tmp_path: Path) -> None:
+    if not (REPO_ROOT / ".git").exists():
+        paths = _allowed_source_paths(REPO_ROOT)
+        assert "tests/test_reviewer_package.py" in paths
+        assert all(_source_allowed(path) for path in paths)
+        return
+
+    repo = tmp_path / "current-source-repo"
+    repo.mkdir()
+    for relative in _allowed_source_paths(REPO_ROOT):
+        source = REPO_ROOT / relative
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "reviewer-closure@example.invalid")
+    _git(repo, "config", "user.name", "Reviewer Closure")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "current allowed source")
+    study_commit = _git(repo, "rev-parse", "HEAD")
+    snapshot = (REPO_ROOT / "docs" / "results_snapshot.md").read_text(encoding="utf-8")
+    snapshot = re.sub(
+        r"/(?:Users|Volumes|home)/[^`|\s]+",
+        lambda match: f"<external>/{Path(match.group()).name}",
+        snapshot,
+    )
+    _write(repo / "docs" / "results_snapshot.md", snapshot)
+    report_assets = REPO_ROOT / "docs" / "assets" / "results_snapshot"
+    for source in report_assets.rglob("*"):
+        if source.is_file():
+            relative = source.relative_to(REPO_ROOT)
+            target = repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+    _git(repo, "add", "docs/results_snapshot.md", "docs/assets/results_snapshot")
+    _git(repo, "commit", "-m", "sanitized current report")
+
+    study_dir = tmp_path / "study"
+    package_dir = tmp_path / "package"
+    _write(
+        study_dir / "study_run_manifest.json",
+        json.dumps(
+            {
+                "repo_commit": study_commit,
+                "git_dirty": False,
+                "public_lake_provenance": {
+                    "git_dirty": False,
+                    "source_metadata_inventory": [{"metadata_file": "fixture.meta.json"}],
+                },
+            }
+        ),
+    )
+    _write(package_dir / "tables" / "table_03.csv", "Task,PR_AUC\na,0.2\n")
+    _write(package_dir / "figures" / "figure_01.svg", "<svg></svg>\n")
+    _write(package_dir / "results_narrative.md", "Canonical aggregate fixture results.\n")
+    _write(
+        package_dir / "manifest.json",
+        json.dumps(
+            {
+                "tables": {"table_03": {"csv": "tables/table_03.csv"}},
+                "figures": {"figure_01": {"svg": "figures/figure_01.svg"}},
+            }
+        ),
+    )
+    output = tmp_path / "reviewer.zip"
+    build_reviewer_package(
+        repo_root=repo,
+        study_dir=study_dir,
+        manuscript_package=package_dir,
+        output=output,
+    )
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(output) as archive:
+        archive.extractall(extracted)
+    source_dir = extracted / "source"
+    assert not (source_dir / ".git").exists()
+
+    listed = subprocess.run(
+        ["just", "--list"],
+        cwd=source_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert listed.returncode == 0, listed.stderr
+    locked = subprocess.run(
+        ["uv", "lock", "--check"],
+        cwd=source_dir,
+        env=os.environ.copy(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert locked.returncode == 0, locked.stdout + locked.stderr
+    checked = subprocess.run(
+        ["just", "check"],
+        cwd=source_dir,
+        env=os.environ.copy(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert checked.returncode == 0, checked.stdout + checked.stderr
 
 
 def test_reviewer_package_is_exact_commit_anonymized_and_data_free(tmp_path: Path) -> None:
@@ -185,6 +369,13 @@ def test_reviewer_package_is_exact_commit_anonymized_and_data_free(tmp_path: Pat
         assert "source/src/example.py" in names
         assert "source/.python-version" in names
         assert "source/uv.lock" in names
+        assert "source/.env.example" in names
+        assert "source/.gitignore" in names
+        assert "source/.github/workflows/ci.yml" in names
+        assert "source/docs/results_snapshot.md" in names
+        assert "source/docs/assets/results_snapshot/figure_fixture.svg" in names
+        assert "report/docs/results_snapshot.md" in names
+        assert "report/docs/assets/results_snapshot/figure_fixture.svg" in names
         assert "generated/manuscript_package/manifest.json" in names
         assert "provenance/study_run_manifest.sanitized.json" in names
         assert "provenance/public_lake_provenance.json" in names
@@ -195,7 +386,8 @@ def test_reviewer_package_is_exact_commit_anonymized_and_data_free(tmp_path: Pat
         assert not any(name.endswith((".parquet", ".env")) for name in names)
         package_manifest = json.loads(zf.read("provenance/package_manifest.json").decode("utf-8"))
         assert package_manifest["study_commit"] == commit
-        assert package_manifest["report_commit"] == commit
+        assert package_manifest["report_commit"] == _git(repo, "rev-parse", "HEAD")
+        assert package_manifest["report_overlay"] == REPORT_OVERLAY_POLICY
         assert package_manifest["identity_redaction"] == {
             "policy": "derived_from_study_source",
             "categories": [
@@ -228,6 +420,14 @@ def test_reviewer_package_is_exact_commit_anonymized_and_data_free(tmp_path: Pat
         assert ANONYMOUS_REPOSITORY_OWNER in zf.read("source/README.md").decode("utf-8")
         assert ANONYMOUS_COPYRIGHT_HOLDER in zf.read("source/LICENSE").decode("utf-8")
         assert ANONYMOUS_AUTHOR_EMAIL in zf.read("report/docs/results_snapshot.md").decode("utf-8")
+        source_snapshot = zf.read("source/docs/results_snapshot.md")
+        report_snapshot = zf.read("report/docs/results_snapshot.md")
+        source_asset = zf.read("source/docs/assets/results_snapshot/figure_fixture.svg")
+        report_asset = zf.read("report/docs/assets/results_snapshot/figure_fixture.svg")
+        assert source_snapshot == report_snapshot
+        assert source_asset == report_asset
+        assert REFRESHED_REPORT_MARKER.encode() in source_snapshot
+        assert STALE_REPORT_MARKER.encode() not in source_snapshot
         readme = zf.read("REPLICATION_README.md").decode("utf-8")
         assert "cd source\nuv sync --locked" in readme
         assert "identity-redacted derivative" in readme
@@ -414,9 +614,49 @@ def test_reviewer_package_rejects_uppercase_forbidden_generated_data(tmp_path: P
 
 
 def test_source_filter_rejects_forbidden_names_case_insensitively() -> None:
+    assert _source_allowed(".env.example")
+    assert _source_allowed(".gitignore")
+    assert _source_allowed(".github/workflows/ci.yml")
+    assert not _source_allowed(".github/workflows/other.yml")
     assert not _source_allowed("tests/private.PARQUET")
     assert not _source_allowed("docs/.VeNv/private.txt")
     assert not _source_allowed("docs/SITE/private.txt")
+
+
+def test_env_example_uses_portable_placeholders_and_preserves_contract() -> None:
+    env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    variables = {
+        line.split("=", maxsplit=1)[0]
+        for line in env_example.splitlines()
+        if line and not line.startswith("#")
+    }
+    assert variables == {
+        "PROJECT_ROOT",
+        "WORK_DIR",
+        "DATA_DIR",
+        "DOCS_DIR",
+        "PAPER_DIR",
+        "ARTIFACTS_DIR",
+        "DEFAULT_CONFIG_PATH",
+        "RAW_DATASET_PATH",
+        "PUBLIC_LAKE_DIR",
+        "LAKE_BRONZE_DIR",
+        "LAKE_SILVER_DIR",
+        "LAKE_GOLD_DIR",
+        "UV_PROJECT_ENVIRONMENT",
+        "MANUSCRIPT_DIR",
+        "SEED_DEFAULT",
+    }
+    assert "cloud workspace" in env_example.casefold()
+    assert "/path/to/reporting-risk-cascade-data" in env_example
+    assert "reporting-risk-cascade-manuscript" in env_example
+    forbidden_markers = (
+        "/" + "Users" + "/",
+        "/" + "Volumes" + "/",
+        "/" + "home" + "/",
+        "One" + "Drive",
+    )
+    assert all(marker.casefold() not in env_example.casefold() for marker in forbidden_markers)
 
 
 def test_reviewer_package_rejects_declared_external_file_symlink(tmp_path: Path) -> None:
