@@ -10,13 +10,16 @@ import pytest
 
 from scripts import fetch_public_data
 from src.public_cascade import (
+    VISIBILITY_HISTORY_FEATURES,
     build_public_missingness_density_score,
     fit_public_opacity_dml,
     _build_preprocessor,
     _evaluate_binary,
     _infer_feature_families,
     _prepare_xy,
+    _resolve_primary_specification,
     _run_public_cascade_unit,
+    _validate_primary_metric_rows,
     run_public_cascade,
 )
 from src.table_io import read_table, write_table
@@ -62,6 +65,85 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
     assert "label_comment_thread_365" not in all_features
     assert "censored_365" not in all_features
     assert "k402_item_metadata_unknown_365" not in all_features
+
+
+def test_visibility_history_is_exact_and_reports_unavailable_fields() -> None:
+    panel = pd.DataFrame(
+        {
+            "size": [100],
+            "form": ["10-K"],
+            "entity_type": ["operating"],
+            "isXBRL": [1],
+            "days_since_previous_filing": [365],
+            "prior_filing_count": [8],
+            "filing_friction_is_nt": [0],
+            "public_history_comment_thread_1y_count": [1],
+            "public_history_8k_402_3y_count": [0],
+            "label_comment_thread_365": [0],
+            "source_available_notes": [1],
+            "xbrl_ratio_leverage": [0.2],
+        }
+    )
+
+    families = _infer_feature_families(panel)
+
+    assert families["visibility_history"] == [
+        "size",
+        "form",
+        "entity_type",
+        "isXBRL",
+        "days_since_previous_filing",
+        "prior_filing_count",
+        "filing_friction_is_nt",
+        "public_history_comment_thread_1y_count",
+        "public_history_8k_402_3y_count",
+    ]
+    assert "xbrl_ratio_leverage" not in families["visibility_history"]
+    assert "source_available_notes" not in families["visibility_history"]
+
+
+def test_primary_specification_requires_configured_family_and_window() -> None:
+    resolved = _resolve_primary_specification(
+        {"primary_specification": {"feature_set": "all", "train_window": "expanding"}},
+        requested_families=["metadata", "all"],
+        train_windows=[None, 5, 7, 10],
+    )
+    assert resolved == {"feature_set": "all", "train_window": "expanding"}
+
+    with pytest.raises(ValueError, match="primary feature_set"):
+        _resolve_primary_specification(
+            {"primary_specification": {"feature_set": "missing", "train_window": "expanding"}},
+            requested_families=["all"],
+            train_windows=[None],
+        )
+
+
+def test_primary_metric_rows_fail_closed_but_allow_all_empty_diagnostics() -> None:
+    primary = {"feature_set": "all", "train_window": "expanding"}
+    missing = pd.DataFrame(
+        {
+            "feature_set": ["metadata"],
+            "train_window": ["expanding"],
+            "task": ["comment_thread"],
+            "test_year": [2021],
+        }
+    )
+    with pytest.raises(ValueError, match="produced no metric rows"):
+        _validate_primary_metric_rows(missing, primary)
+
+    duplicated = pd.DataFrame(
+        {
+            "feature_set": ["all", "all"],
+            "train_window": ["expanding", "expanding"],
+            "task": ["comment_thread", "comment_thread"],
+            "test_year": [2021, 2021],
+        }
+    )
+    with pytest.raises(ValueError, match="duplicated task-year"):
+        _validate_primary_metric_rows(duplicated, primary)
+
+    empty = pd.DataFrame(columns=["feature_set", "train_window", "task", "test_year"])
+    assert _validate_primary_metric_rows(empty, primary).empty
 
 
 def test_sic_is_treated_as_categorical_feature() -> None:
@@ -241,6 +323,9 @@ analysis:
   candidate_train_windows: [null]
   min_train_years: 2
   feature_sets: ["metadata"]
+  primary_specification:
+    feature_set: "metadata"
+    train_window: "expanding"
 model:
   seed: 42
   xgb:
@@ -263,6 +348,15 @@ model:
     assert set(task_status["status"]) == {"skipped_one_class_train"}
     assert set(task_status["task"]) == {"comment_thread", "amendment", "8k_402"}
     assert summary["cascade_readiness_level"] == "metadata_baseline"
+    assert summary["visibility_history_metric_rows"] == int(
+        metrics["feature_set"].eq("visibility_history").sum()
+    )
+    assert summary["primary_metric_rows"] == int(
+        (
+            metrics["feature_set"].eq(summary["primary_specification"]["feature_set"])
+            & metrics["train_window"].eq(summary["primary_specification"]["train_window"])
+        ).sum()
+    )
 
 
 def test_public_cascade_excludes_8k402_item_metadata_unknown_rows(tmp_path: Path) -> None:
@@ -306,6 +400,9 @@ analysis:
   candidate_train_windows: [3]
   min_train_years: 3
   feature_sets: ["xbrl"]
+  primary_specification:
+    feature_set: "xbrl"
+    train_window: "rolling_3y"
 model:
   seed: 42
   xgb:
@@ -323,11 +420,21 @@ model:
         model_threads=1,
     )
     summary = json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
+    metrics = pd.read_csv(result["metrics_csv"])
     status = pd.read_csv(result["task_status_csv"])
     k402_status = status.loc[status["task"].eq("8k_402")]
 
     assert summary["task_exclusion_counts"]["8k_402"] == unknown_count
     assert int(k402_status["excluded_train"].sum() + k402_status["excluded_test"].sum()) > 0
+    assert summary["visibility_history_metric_rows"] == int(
+        metrics["feature_set"].eq("visibility_history").sum()
+    )
+    assert summary["primary_metric_rows"] == int(
+        (
+            metrics["feature_set"].eq(summary["primary_specification"]["feature_set"])
+            & metrics["train_window"].eq(summary["primary_specification"]["train_window"])
+        ).sum()
+    )
 
 
 def test_xbrl_ratio_features_unlock_xbrl_readiness_level(tmp_path: Path) -> None:
@@ -345,6 +452,7 @@ def test_xbrl_ratio_features_unlock_xbrl_readiness_level(tmp_path: Path) -> None
                 "report_date": f"{year}-12-31",
                 "as_of_date": "2026-04-23",
                 "fiscal_year": year,
+                "size": 100,
                 "form": "10-K",
                 "sic": 1234,
                 "is_domestic_us_gaap_proxy": 1,
@@ -366,7 +474,10 @@ sample:
 analysis:
   candidate_train_windows: [null]
   min_train_years: 2
-  feature_sets: ["xbrl"]
+  feature_sets: ["xbrl", "visibility_history"]
+  primary_specification:
+    feature_set: "xbrl"
+    train_window: "expanding"
 model:
   seed: 42
   xgb:
@@ -381,10 +492,26 @@ model:
         out_dir=out_dir,
     )
     summary = json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
+    metrics = pd.read_csv(result["metrics_csv"])
 
     assert summary["cascade_readiness_level"] == "xbrl_ratio_baseline"
     assert summary["feature_family_summary"]["xbrl"]["n_xbrl_ratio_features"] == 1
     assert summary["feature_family_summary"]["xbrl"]["n_xbrl_coverage_features"] == 1
+    visibility = summary["feature_family_summary"]["visibility_history"]
+    assert visibility["configured_features"] == list(VISIBILITY_HISTORY_FEATURES)
+    assert visibility["available_features"] == ["size", "form"]
+    assert visibility["unavailable_features"] == [
+        field for field in VISIBILITY_HISTORY_FEATURES if field not in {"size", "form"}
+    ]
+    assert summary["visibility_history_metric_rows"] == int(
+        metrics["feature_set"].eq("visibility_history").sum()
+    )
+    assert summary["primary_metric_rows"] == int(
+        (
+            metrics["feature_set"].eq(summary["primary_specification"]["feature_set"])
+            & metrics["train_window"].eq(summary["primary_specification"]["train_window"])
+        ).sum()
+    )
 
 
 def test_public_cascade_parallel_matches_serial_status_keys(tmp_path: Path) -> None:
@@ -422,6 +549,9 @@ analysis:
   candidate_train_windows: [null]
   min_train_years: 2
   feature_sets: ["xbrl"]
+  primary_specification:
+    feature_set: "xbrl"
+    train_window: "expanding"
   seed_policy: "task_isolated"
 model:
   seed: 42
@@ -449,6 +579,20 @@ model:
     key_cols = ["feature_set", "train_window", "test_year", "task", "status"]
 
     pd.testing.assert_frame_equal(serial_status[key_cols], parallel_status[key_cols])
+    for result in [serial, parallel]:
+        summary = json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
+        metrics = pd.read_csv(result["metrics_csv"])
+        assert summary["visibility_history_metric_rows"] == int(
+            metrics["feature_set"].eq("visibility_history").sum()
+        )
+        assert summary["primary_metric_rows"] == int(
+            (
+                metrics["feature_set"].eq(summary["primary_specification"]["feature_set"])
+                & metrics["train_window"].eq(
+                    summary["primary_specification"]["train_window"]
+                )
+            ).sum()
+        )
 
 
 def test_public_cascade_trains_nonzero_positive_tasks_and_writes_predictions(
@@ -491,6 +635,9 @@ analysis:
   candidate_train_windows: [3]
   min_train_years: 3
   feature_sets: ["metadata", "xbrl"]
+  primary_specification:
+    feature_set: "metadata"
+    train_window: "rolling_3y"
   parallel_jobs: 1
   seed_policy: "task_isolated"
 model:
@@ -514,6 +661,7 @@ model:
     )
 
     metrics = pd.read_csv(result["metrics_csv"])
+    summary = json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
     predictions = read_table(result["predictions_table"])
     status = pd.read_csv(result["task_status_csv"])
     opacity_dml = pd.read_csv(result["public_opacity_dml_csv"])
@@ -533,6 +681,15 @@ model:
     assert predictions["accession"].notna().all()
     assert "fit" in set(status["status"])
     assert "outcome" in opacity_dml.columns
+    assert summary["visibility_history_metric_rows"] == int(
+        metrics["feature_set"].eq("visibility_history").sum()
+    )
+    assert summary["primary_metric_rows"] == int(
+        (
+            metrics["feature_set"].eq(summary["primary_specification"]["feature_set"])
+            & metrics["train_window"].eq(summary["primary_specification"]["train_window"])
+        ).sum()
+    )
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,10 @@ sample:
 analysis:
   candidate_train_windows: [null, 5, 7, 10]
   min_train_years: 5
-  feature_sets: ["metadata", "xbrl", "auditor", "oversight", "all"]
+  feature_sets: ["metadata", "xbrl", "auditor", "oversight", "visibility_history", "all"]
+  primary_specification:
+    feature_set: "all"
+    train_window: "expanding"
   parallel_jobs: 2
   seed_policy: "task_isolated"
   opacity_dml:

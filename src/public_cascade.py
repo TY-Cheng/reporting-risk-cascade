@@ -73,6 +73,32 @@ MODEL_EXCLUDED_COLS = {
     "ein",
 }
 CATEGORICAL_FEATURE_COLS = {"sic", "form", "entity_type"}
+VISIBILITY_HISTORY_FEATURES = (
+    "size",
+    "core_type",
+    "form",
+    "entity_type",
+    "isXBRL",
+    "isInlineXBRL",
+    "isXBRLNumeric",
+    "days_since_previous_filing",
+    "prior_filing_count",
+    "filing_friction_is_nt",
+    "filing_friction_nt_pre_origin",
+    "filing_friction_nt_delay_days",
+    "public_history_comment_thread_1y_count",
+    "public_history_comment_thread_3y_count",
+    "public_history_amendment_1y_count",
+    "public_history_amendment_3y_count",
+    "public_history_8k_301_1y_count",
+    "public_history_8k_301_3y_count",
+    "public_history_8k_401_1y_count",
+    "public_history_8k_401_3y_count",
+    "public_history_8k_402_1y_count",
+    "public_history_8k_402_3y_count",
+    "public_history_8k_502_1y_count",
+    "public_history_8k_502_3y_count",
+)
 
 
 def stable_task_seed(base_seed: int, *parts: object) -> int:
@@ -145,6 +171,7 @@ def _infer_feature_families(df: pd.DataFrame) -> Dict[str, List[str]]:
         "text": [],
         "auditor": [],
         "oversight": [],
+        "visibility_history": [],
         "all": [],
     }
     for col in candidate_cols:
@@ -168,7 +195,49 @@ def _infer_feature_families(df: pd.DataFrame) -> Dict[str, List[str]]:
             *families["oversight"],
         }
     )
+    families["visibility_history"] = [
+        col for col in VISIBILITY_HISTORY_FEATURES if col in candidate_cols
+    ]
     return families
+
+
+def _resolve_primary_specification(
+    analysis_cfg: Dict[str, object],
+    *,
+    requested_families: Sequence[str],
+    train_windows: Sequence[Optional[int]],
+) -> Dict[str, str]:
+    primary = dict(analysis_cfg.get("primary_specification", {}))
+    feature_set = str(primary.get("feature_set", ""))
+    train_window = str(primary.get("train_window", ""))
+    available_windows = {
+        "expanding" if window is None else f"rolling_{int(window)}y" for window in train_windows
+    }
+    if feature_set not in requested_families:
+        raise ValueError(f"primary feature_set is not configured: {feature_set}")
+    if train_window not in available_windows:
+        raise ValueError(f"primary train_window is not configured: {train_window}")
+    return {"feature_set": feature_set, "train_window": train_window}
+
+
+def _validate_primary_metric_rows(
+    metrics: pd.DataFrame,
+    primary_specification: Dict[str, str],
+) -> pd.DataFrame:
+    if metrics.empty:
+        return metrics.copy()
+    required = {"feature_set", "train_window", "task", "test_year"}
+    if not required <= set(metrics):
+        raise ValueError("metric artifact lacks primary identity columns")
+    selected = metrics.loc[
+        metrics["feature_set"].eq(primary_specification["feature_set"])
+        & metrics["train_window"].eq(primary_specification["train_window"])
+    ].copy()
+    if selected.empty:
+        raise ValueError("primary specification produced no metric rows")
+    if selected.duplicated(["task", "test_year"]).any():
+        raise ValueError("primary specification duplicated task-year metric rows")
+    return selected
 
 
 def _build_preprocessor(df: pd.DataFrame, feature_cols: Sequence[str]) -> ColumnTransformer:
@@ -749,10 +818,26 @@ def run_public_cascade(
         }
         for family, cols in families.items()
     }
+    feature_family_summary["visibility_history"].update(
+        {
+            "configured_features": list(VISIBILITY_HISTORY_FEATURES),
+            "available_features": list(families["visibility_history"]),
+            "unavailable_features": [
+                column
+                for column in VISIBILITY_HISTORY_FEATURES
+                if column not in families["visibility_history"]
+            ],
+        }
+    )
     requested_families = [
         f for f in analysis_cfg.get("feature_sets", ["metadata", "all"]) if f in families
     ]
     train_windows = analysis_cfg.get("candidate_train_windows", [None, 5, 7, 10])
+    primary_specification = _resolve_primary_specification(
+        analysis_cfg,
+        requested_families=requested_families,
+        train_windows=train_windows,
+    )
     min_train_years = int(analysis_cfg.get("min_train_years", 5))
     seed = int(model_cfg.get("seed", 42))
     model_cfg = dict(model_cfg)
@@ -906,6 +991,7 @@ def run_public_cascade(
             .drop(columns=sort_internal)
             .reindex(columns=status_columns)
         )
+    primary_metrics = _validate_primary_metric_rows(metrics_df, primary_specification)
     task_positive_counts = {
         task_name: int(pd.to_numeric(panel[meta["label"]], errors="coerce").fillna(0).sum())
         for task_name, meta in TASKS.items()
@@ -947,6 +1033,18 @@ def run_public_cascade(
         "task_exclusion_counts": task_exclusion_counts,
         "zero_positive_tasks": zero_positive_tasks,
         "feature_family_summary": feature_family_summary,
+        "primary_specification_status": "revision_frozen",
+        "primary_specification": primary_specification,
+        "primary_metric_rows": int(len(primary_metrics)),
+        "visibility_history_metric_rows": int(
+            metrics_df["feature_set"].eq("visibility_history").sum()
+        ),
+        "visibility_history_requested_features": list(VISIBILITY_HISTORY_FEATURES),
+        "visibility_history_missing_features": [
+            col
+            for col in VISIBILITY_HISTORY_FEATURES
+            if col not in families["visibility_history"]
+        ],
         "empty_feature_family_blockers": empty_feature_family_blockers,
         "has_xbrl_ratio_features": has_xbrl_ratio_features,
         "xbrl_aggregate_only_blocker": xbrl_aggregate_only_blocker,
