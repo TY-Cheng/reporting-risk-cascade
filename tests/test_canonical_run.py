@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +10,7 @@ import pytest
 from scripts.verify_canonical_run import verify_canonical_run
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -38,6 +40,9 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
                 "fresh_build": True,
                 "git_dirty": False,
                 "commit_sha": "a" * 40,
+                "config_hash": "6" * 64,
+                "input_hash": "7" * 64,
+                "uv_lock_hash": "8" * 64,
                 "source_metadata_inventory": [
                     {
                         "metadata_file": "form-ap/FirmFilings.zip.meta.json",
@@ -203,10 +208,10 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
         {
             "Direction": [
                 "Public score to benchmark positives",
-                "Benchmark score to public positives",
+                "Detected-misstatement score to public labels",
             ],
             "Model": ["public_cascade", "benchmark_xgb"],
-            "Target": ["8k_402", "label_8k_402_365"],
+            "Target": ["Item 4.02", "Item 4.02"],
             "Feature_Set": ["all", "benchmark_all"],
             "Window": ["expanding", "expanding"],
             "Bridge_Tier": ["high_confidence", "high_confidence"],
@@ -422,3 +427,400 @@ def test_verify_canonical_run_rejects_wrong_attrition_drop(tmp_path: Path) -> No
     )
 
     assert any("sample attrition/table 18 consistency" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("key_path", "replacement", "message"),
+    [
+        (("public_lake_provenance",), None, "public-lake provenance object"),
+        (("components", "benchmark"), [], "benchmark component object"),
+        (
+            ("claim_maturity",),
+            [
+                ["public_prediction", "reportable"],
+                ["feature_and_window_sensitivity", "supporting"],
+                ["construct_alignment", "supporting"],
+                ["opacity_dml", "diagnostic"],
+            ],
+            "claim maturity object",
+        ),
+    ],
+)
+def test_verify_canonical_run_rejects_malformed_nested_json_without_raising(
+    tmp_path: Path,
+    key_path: tuple[str, ...],
+    replacement: object,
+    message: str,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    cursor = payload
+    for key in key_path[:-1]:
+        cursor = cursor[key]
+    cursor[key_path[-1]] = replacement
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any(message in error for error in errors)
+
+
+def test_verify_canonical_run_aggregates_nested_and_semantic_failures(tmp_path: Path) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    manifest["public_lake_provenance"] = None
+    _write_json(fixture["manifest"], manifest)
+    construct = json.loads(fixture["construct"].read_text(encoding="utf-8"))
+    construct["interval_seed"] = 7
+    _write_json(fixture["construct"], construct)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("public-lake provenance object" in error for error in errors)
+    assert any("construct bootstrap seed" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("column", "values"),
+    [
+        (
+            "Direction",
+            [
+                "Detected-misstatement score to public labels",
+                "Public score to benchmark positives",
+            ],
+        ),
+        ("Target", ["Item 4.02", "label_8k_402_365"]),
+    ],
+)
+def test_verify_canonical_run_rejects_wrong_table_09_display_identity(
+    tmp_path: Path,
+    column: str,
+    values: list[str],
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    table = pd.read_csv(fixture["table_09"])
+    table[column] = values
+    table.to_csv(fixture["table_09"], index=False)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("Table 9 primary rows" in error for error in errors)
+
+
+def test_verify_canonical_run_rejects_fit_dml_row_with_nan_encoded_controls(
+    tmp_path: Path,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
+    dml = pd.read_csv(path)
+    dml.loc[1, "status"] = "fit"
+    dml.to_csv(path, index=False)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
+
+
+def test_verify_canonical_run_accepts_post_encoding_dml_skip_with_dimensions(
+    tmp_path: Path,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
+    dml = pd.read_csv(dml_path)
+    dml.loc[1, ["status", "n_encoded_controls", "n_controls"]] = [
+        "skipped_insufficient_folds",
+        63,
+        63,
+    ]
+    dml.to_csv(dml_path, index=False)
+    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["n_encoded_controls_by_outcome"]["amendment"] = 63
+    _write_json(meta_path, meta)
+    table_path = fixture["package_dir"] / "tables" / "table_12_public_opacity_dml.csv"
+    table = pd.read_csv(table_path)
+    table.loc[1, "Encoded_Controls"] = 63
+    table.to_csv(table_path, index=False)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("column", "replacement"),
+    [
+        ("Mean_PR_AUC", float("inf")),
+        ("Panel_Positives", 100.5),
+        ("Panel_Positives", -1),
+    ],
+)
+def test_verify_canonical_run_rejects_invalid_table_03_numbers(
+    tmp_path: Path,
+    column: str,
+    replacement: float,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    path = fixture["package_dir"] / "tables" / "table_03_public_task_metrics.csv"
+    table = pd.read_csv(path)
+    table[column] = table[column].astype(float)
+    table.loc[0, column] = replacement
+    table.to_csv(path, index=False)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("Table 3 primary metrics" in error for error in errors)
+
+
+def test_verify_canonical_run_rejects_fractional_summary_attrition_count(tmp_path: Path) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["public"].read_text(encoding="utf-8"))
+    payload["sample_attrition"][0]["n_rows"] = 205652.5
+    _write_json(fixture["public"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("sample attrition/table 18 consistency" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("column", "row", "replacement"),
+    [
+        ("Rows", 0, 205652.5),
+        ("Dropped_From_Parent", 1, 108625.5),
+        ("Rows", 0, float("inf")),
+        ("Dropped_From_Parent", 1, float("inf")),
+    ],
+)
+def test_verify_canonical_run_rejects_invalid_table_18_counts_without_raising(
+    tmp_path: Path,
+    column: str,
+    row: int,
+    replacement: float,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    path = fixture["package_dir"] / "tables" / "table_18_public_sample_attrition.csv"
+    table = pd.read_csv(path)
+    table[column] = table[column].astype(float)
+    table.loc[row, column] = replacement
+    table.to_csv(path, index=False)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("sample attrition/table 18 consistency" in error for error in errors)
+
+
+def test_verify_canonical_run_rejects_dirty_provenance(tmp_path: Path) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    payload["provenance"]["dirty"] = True
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("provenance dirty" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("key_path", "replacement", "message"),
+    [
+        (("provenance", "config_hash"), "b" * 63, "config hash"),
+        (("provenance", "input_hash"), "not-hex" * 10, "input hash"),
+        (("provenance", "uv_lock_hash"), 123, "uv.lock hash"),
+        (
+            ("public_lake_provenance", "config_hash"),
+            "6" * 63,
+            "public-lake config hash",
+        ),
+        (
+            ("public_lake_provenance", "input_hash"),
+            "not-hex",
+            "public-lake input hash",
+        ),
+        (
+            ("public_lake_provenance", "uv_lock_hash"),
+            None,
+            "public-lake uv.lock hash",
+        ),
+        (
+            ("public_lake_provenance", "form_ap", "archive_sha256"),
+            "e" * 63,
+            "Form AP archive hash",
+        ),
+        (
+            ("public_lake_provenance", "form_ap", "member_sha256"),
+            "z" * 64,
+            "Form AP member hash",
+        ),
+        (
+            ("public_lake_provenance", "source_metadata_inventory", 0, "metadata_sha256"),
+            "1" * 63,
+            "public source inventory",
+        ),
+        (
+            ("public_lake_provenance", "source_metadata_inventory", 0, "payload_sha256"),
+            "x" * 64,
+            "public source inventory",
+        ),
+    ],
+)
+def test_verify_canonical_run_rejects_malformed_sha256_values(
+    tmp_path: Path,
+    key_path: tuple[object, ...],
+    replacement: object,
+    message: str,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    cursor: Any = payload
+    for key in key_path[:-1]:
+        cursor = cursor[key]
+    cursor[key_path[-1]] = replacement
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any(message in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("key_path", "message"),
+    [
+        (("repo_commit",), "study commit"),
+        (("provenance", "commit_sha"), "provenance commit"),
+        (("public_lake_provenance", "commit_sha"), "public-lake commit"),
+    ],
+)
+def test_verify_canonical_run_rejects_malformed_commit_shape(
+    tmp_path: Path,
+    key_path: tuple[str, ...],
+    message: str,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    cursor = payload
+    for key in key_path[:-1]:
+        cursor = cursor[key]
+    cursor[key_path[-1]] = "g" * 40
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any(message in error for error in errors)
+
+
+def test_verify_canonical_run_rejects_malformed_source_inventory(tmp_path: Path) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    payload["public_lake_provenance"]["source_metadata_inventory"] = [None]
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert any("public source inventory" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "invalid_case",
+    ["nested", "table_09", "dml", "table_03", "attrition", "dirty", "hash"],
+)
+def test_cli_never_verifies_invalid_canonical_fixture(
+    tmp_path: Path,
+    invalid_case: str,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    if invalid_case in {"nested", "dirty", "hash"}:
+        payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+        if invalid_case == "nested":
+            payload["public_lake_provenance"] = None
+        elif invalid_case == "dirty":
+            payload["provenance"]["dirty"] = True
+        else:
+            payload["provenance"]["config_hash"] = "not-a-sha256"
+        _write_json(fixture["manifest"], payload)
+    elif invalid_case == "table_09":
+        table = pd.read_csv(fixture["table_09"])
+        table.loc[0, "Direction"] = "wrong direction"
+        table.to_csv(fixture["table_09"], index=False)
+    elif invalid_case == "dml":
+        path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
+        dml = pd.read_csv(path)
+        dml.loc[1, "status"] = "fit"
+        dml.to_csv(path, index=False)
+    elif invalid_case == "table_03":
+        path = fixture["package_dir"] / "tables" / "table_03_public_task_metrics.csv"
+        table = pd.read_csv(path)
+        table.loc[0, "Mean_PR_AUC"] = float("inf")
+        table.to_csv(path, index=False)
+    else:
+        payload = json.loads(fixture["public"].read_text(encoding="utf-8"))
+        payload["sample_attrition"][0]["n_rows"] = 205652.5
+        _write_json(fixture["public"], payload)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/verify_canonical_run.py",
+            "--study-dir",
+            str(fixture["study_dir"]),
+            "--manuscript-package",
+            str(fixture["package_dir"]),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "CANONICAL RUN VERIFIED" not in completed.stdout
+    assert "FAILED:" in completed.stdout
+    assert "Traceback" not in completed.stderr
