@@ -66,31 +66,70 @@ def input_provenance(paths: Iterable[Path]) -> dict[str, Any]:
     return {"input_hash": payload["hash"], "input_files": payload["files"]}
 
 
-def _source_metadata_inventory(input_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _required(
+    payload: dict[str, Any],
+    field: str,
+    expected_type: type,
+    context: str,
+) -> Any:
+    if field not in payload:
+        raise ValueError(f"{context}.{field} is required")
+    value = payload[field]
+    valid = type(value) is expected_type
+    if expected_type is str:
+        valid = valid and bool(value.strip())
+    if not valid:
+        type_label = "a nonempty string" if expected_type is str else expected_type.__name__
+        raise ValueError(f"{context}.{field} must be {type_label}")
+    return value
+
+
+def _load_json_object(path: Path, context: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{context} is not valid JSON: {exc.msg}") from exc
+    if type(payload) is not dict:
+        raise ValueError(f"{context} must be a JSON object")
+    return payload
+
+
+def _source_metadata_inventory(input_files: list[Any]) -> list[dict[str, Any]]:
     inventory: list[dict[str, Any]] = []
-    for record in input_files:
-        path = Path(str(record.get("path", "")))
+    for index, raw_record in enumerate(input_files):
+        context = f"public lake run metadata.provenance.input_files[{index}]"
+        if type(raw_record) is not dict:
+            raise ValueError(f"{context} must be a JSON object")
+        path = Path(_required(raw_record, "path", str, context))
+        metadata_sha256 = _required(raw_record, "sha256", str, context)
         parts = path.parts
         relative_name = path.name
         if "bronze" in parts:
             relative_name = "/".join(parts[parts.index("bronze") + 1 :])
         item: dict[str, Any] = {
             "metadata_file": relative_name,
-            "metadata_sha256": record.get("sha256"),
+            "metadata_sha256": metadata_sha256,
         }
-        if path.name.endswith(".meta.json") and path.is_file():
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            item.update(
-                {
-                    "source_name": payload.get("source_name"),
-                    "source_url": payload.get("source_url"),
-                    "downloaded_at_utc": payload.get("downloaded_at_utc"),
-                    "payload_sha256": payload.get("sha256"),
-                    "payload_size_bytes": payload.get("size_bytes"),
-                    "parser_version": payload.get("parser_version"),
-                    "schema_version": payload.get("schema_version"),
-                }
-            )
+        if path.name.endswith(".meta.json"):
+            if not path.is_file():
+                raise ValueError(f"{context}.path references missing metadata sidecar: {path}")
+            sidecar_context = f"source metadata sidecar {path}"
+            payload = _load_json_object(path, sidecar_context)
+            for output_field, source_field, expected_type in (
+                ("source_name", "source_name", str),
+                ("source_url", "source_url", str),
+                ("downloaded_at_utc", "downloaded_at_utc", str),
+                ("payload_sha256", "sha256", str),
+                ("payload_size_bytes", "size_bytes", int),
+                ("parser_version", "parser_version", str),
+                ("schema_version", "schema_version", str),
+            ):
+                item[output_field] = _required(
+                    payload,
+                    source_field,
+                    expected_type,
+                    sidecar_context,
+                )
         inventory.append(item)
     return sorted(inventory, key=lambda item: str(item["metadata_file"]))
 
@@ -99,25 +138,58 @@ def public_lake_provenance(
     run_metadata_path: Path,
     form_ap_metadata_path: Path,
 ) -> dict[str, Any]:
-    run_metadata = json.loads(Path(run_metadata_path).read_text(encoding="utf-8"))
-    form_ap = json.loads(Path(form_ap_metadata_path).read_text(encoding="utf-8"))
-    provenance = dict(run_metadata.get("provenance", {}))
+    run_context = f"public lake run metadata ({run_metadata_path})"
+    form_ap_context = f"Form AP source metadata ({form_ap_metadata_path})"
+    run_metadata = _load_json_object(Path(run_metadata_path), run_context)
+    form_ap = _load_json_object(Path(form_ap_metadata_path), form_ap_context)
+    _required(run_metadata, "as_of_date", str, run_context)
+    _required(run_metadata, "fresh_build", bool, run_context)
+    provenance = _required(run_metadata, "provenance", dict, run_context)
+    provenance_context = f"{run_context}.provenance"
+    for field, expected_type in (
+        ("commit_sha", str),
+        ("dirty", bool),
+        ("config_hash", str),
+        ("input_hash", str),
+        ("uv_lock_hash", str),
+    ):
+        _required(provenance, field, expected_type, provenance_context)
+    input_files = _required(provenance, "input_files", list, provenance_context)
+
+    source_kind = _required(form_ap, "source_kind", str, form_ap_context)
+    if source_kind not in {"verified_zip_member", "standalone_csv_fallback"}:
+        raise ValueError(
+            f"{form_ap_context}.source_kind must be verified_zip_member or "
+            "standalone_csv_fallback"
+        )
+    if "archive_sha256" not in form_ap:
+        raise ValueError(f"{form_ap_context}.archive_sha256 is required")
+    archive_sha256 = form_ap["archive_sha256"]
+    if archive_sha256 is None:
+        if source_kind != "standalone_csv_fallback":
+            raise ValueError(
+                f"{form_ap_context}.archive_sha256 may be null only for "
+                "standalone_csv_fallback"
+            )
+    elif not isinstance(archive_sha256, str) or not archive_sha256.strip():
+        raise ValueError(f"{form_ap_context}.archive_sha256 must be a nonempty string or null")
+    for field in ("member", "member_sha256"):
+        _required(form_ap, field, str, form_ap_context)
+
     return {
-        "as_of_date": run_metadata.get("as_of_date"),
-        "fresh_build": bool(run_metadata.get("fresh_build")),
-        "commit_sha": provenance.get("commit_sha"),
-        "git_dirty": provenance.get("dirty"),
-        "config_hash": provenance.get("config_hash"),
-        "input_hash": provenance.get("input_hash"),
-        "uv_lock_hash": provenance.get("uv_lock_hash"),
-        "source_metadata_inventory": _source_metadata_inventory(
-            list(provenance.get("input_files", []))
-        ),
+        "as_of_date": run_metadata["as_of_date"],
+        "fresh_build": run_metadata["fresh_build"],
+        "commit_sha": provenance["commit_sha"],
+        "git_dirty": provenance["dirty"],
+        "config_hash": provenance["config_hash"],
+        "input_hash": provenance["input_hash"],
+        "uv_lock_hash": provenance["uv_lock_hash"],
+        "source_metadata_inventory": _source_metadata_inventory(input_files),
         "form_ap": {
-            "source_kind": form_ap.get("source_kind"),
-            "archive_sha256": form_ap.get("archive_sha256"),
-            "member": form_ap.get("member"),
-            "member_sha256": form_ap.get("member_sha256"),
+            "source_kind": source_kind,
+            "archive_sha256": archive_sha256,
+            "member": form_ap["member"],
+            "member_sha256": form_ap["member_sha256"],
         },
     }
 

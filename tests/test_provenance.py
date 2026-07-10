@@ -18,6 +18,57 @@ from src.provenance import (
 )
 
 
+def _valid_public_lake_run_metadata(
+    *,
+    input_files: list[Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "as_of_date": "2026-07-06",
+        "fresh_build": True,
+        "provenance": {
+            "commit_sha": "lake-commit",
+            "dirty": False,
+            "config_hash": "lake-config-hash",
+            "input_hash": "lake-input-hash",
+            "uv_lock_hash": "lake-lock-hash",
+            "input_files": input_files or [],
+        },
+    }
+
+
+def _valid_form_ap_metadata() -> dict[str, Any]:
+    return {
+        "source_kind": "verified_zip_member",
+        "archive_sha256": "archive-hash",
+        "member": "FirmFilings.csv",
+        "member_sha256": "member-hash",
+    }
+
+
+def _valid_source_sidecar() -> dict[str, Any]:
+    return {
+        "source_name": "form-ap",
+        "source_url": "https://example.invalid/FirmFilings.zip",
+        "downloaded_at_utc": "2026-07-06T00:00:00+00:00",
+        "sha256": "payload-hash",
+        "size_bytes": 0,
+        "parser_version": "public-lake-v1",
+        "schema_version": "public-lake-v1",
+    }
+
+
+def _write_public_lake_metadata(
+    tmp_path: Path,
+    run_payload: Any,
+    form_ap_payload: Any,
+) -> tuple[Path, Path]:
+    run_metadata = tmp_path / "public_lake_run_metadata.json"
+    form_ap_metadata = tmp_path / "form_ap_source_metadata.json"
+    run_metadata.write_text(json.dumps(run_payload), encoding="utf-8")
+    form_ap_metadata.write_text(json.dumps(form_ap_payload), encoding="utf-8")
+    return run_metadata, form_ap_metadata
+
+
 def _write_study_fixture(
     tmp_path: Path,
     *,
@@ -37,31 +88,11 @@ def _write_study_fixture(
     }
     paths["issuer_origin_panel"].write_bytes(b"issuer-panel")
     paths["public_lake_run_metadata"].write_text(
-        json.dumps(
-            {
-                "as_of_date": "2026-07-06",
-                "fresh_build": True,
-                "provenance": {
-                    "commit_sha": "lake-commit",
-                    "dirty": False,
-                    "config_hash": "lake-config-hash",
-                    "input_hash": "lake-input-hash",
-                    "uv_lock_hash": "lake-lock-hash",
-                    "input_files": [],
-                },
-            }
-        ),
+        json.dumps(_valid_public_lake_run_metadata()),
         encoding="utf-8",
     )
     paths["form_ap_source_metadata"].write_text(
-        json.dumps(
-            {
-                "source_kind": "verified_zip_member",
-                "archive_sha256": "archive-hash",
-                "member": "FirmFilings.csv",
-                "member_sha256": "member-hash",
-            }
-        ),
+        json.dumps(_valid_form_ap_metadata()),
         encoding="utf-8",
     )
     paths["config"].write_text(
@@ -136,17 +167,7 @@ def test_public_lake_provenance_is_pathless_and_keeps_form_ap_hashes(tmp_path: P
     source_sidecar = tmp_path / "bronze" / "form-ap" / "FirmFilings.zip.meta.json"
     source_sidecar.parent.mkdir(parents=True)
     source_sidecar.write_text(
-        json.dumps(
-            {
-                "source_name": "form-ap",
-                "source_url": "https://example.invalid/FirmFilings.zip",
-                "downloaded_at_utc": "2026-07-06T00:00:00+00:00",
-                "sha256": "payload-hash",
-                "size_bytes": 123,
-                "parser_version": "public-lake-v1",
-                "schema_version": "public-lake-v1",
-            }
-        ),
+        json.dumps(_valid_source_sidecar()),
         encoding="utf-8",
     )
     run_metadata.write_text(
@@ -197,12 +218,262 @@ def test_public_lake_provenance_is_pathless_and_keeps_form_ap_hashes(tmp_path: P
             "source_url": "https://example.invalid/FirmFilings.zip",
             "downloaded_at_utc": "2026-07-06T00:00:00+00:00",
             "payload_sha256": "payload-hash",
-            "payload_size_bytes": 123,
+            "payload_size_bytes": 0,
             "parser_version": "public-lake-v1",
             "schema_version": "public-lake-v1",
         }
     ]
     assert str(tmp_path) not in json.dumps(reduced)
+
+
+@pytest.mark.parametrize(
+    ("malformed_part", "match"),
+    [
+        ("run_metadata", "public lake run metadata"),
+        ("form_ap_metadata", "Form AP source metadata"),
+        ("provenance", "provenance"),
+        ("input_files", "input_files"),
+        ("input_file", r"input_files\[0\]"),
+        ("source_sidecar", "source metadata sidecar"),
+    ],
+)
+def test_public_lake_provenance_rejects_malformed_object_and_list_shapes(
+    tmp_path: Path,
+    malformed_part: str,
+    match: str,
+) -> None:
+    run_payload: Any = _valid_public_lake_run_metadata()
+    form_ap_payload: Any = _valid_form_ap_metadata()
+    if malformed_part == "run_metadata":
+        run_payload = []
+    elif malformed_part == "form_ap_metadata":
+        form_ap_payload = []
+    elif malformed_part == "provenance":
+        run_payload["provenance"] = []
+    elif malformed_part == "input_files":
+        run_payload["provenance"]["input_files"] = {}
+    elif malformed_part == "input_file":
+        run_payload["provenance"]["input_files"] = [[]]
+    else:
+        sidecar = tmp_path / "bronze" / "form-ap" / "source.meta.json"
+        sidecar.parent.mkdir(parents=True)
+        sidecar.write_text("[]", encoding="utf-8")
+        run_payload["provenance"]["input_files"] = [
+            {"path": str(sidecar), "sha256": "sidecar-hash"}
+        ]
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        run_payload,
+        form_ap_payload,
+    )
+
+    with pytest.raises(ValueError, match=match):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+@pytest.mark.parametrize(
+    ("section", "missing_field"),
+    [
+        ("run", "as_of_date"),
+        ("run", "fresh_build"),
+        ("provenance", "commit_sha"),
+        ("provenance", "dirty"),
+        ("provenance", "input_files"),
+        ("input_file", "path"),
+        ("input_file", "sha256"),
+    ],
+)
+def test_public_lake_provenance_rejects_missing_run_provenance_fields(
+    tmp_path: Path,
+    section: str,
+    missing_field: str,
+) -> None:
+    run_payload = _valid_public_lake_run_metadata(
+        input_files=[{"path": "manifest.csv", "sha256": "manifest-hash"}]
+    )
+    if section == "run":
+        del run_payload[missing_field]
+    elif section == "provenance":
+        del run_payload["provenance"][missing_field]
+    else:
+        del run_payload["provenance"]["input_files"][0][missing_field]
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        run_payload,
+        _valid_form_ap_metadata(),
+    )
+
+    with pytest.raises(ValueError, match=missing_field):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "invalid_value"),
+    [
+        ("run", "as_of_date", ""),
+        ("run", "fresh_build", "true"),
+        ("provenance", "commit_sha", ""),
+        ("provenance", "config_hash", None),
+        ("provenance", "dirty", 0),
+        ("input_file", "path", ""),
+        ("input_file", "sha256", ""),
+    ],
+)
+def test_public_lake_provenance_rejects_invalid_run_provenance_values(
+    tmp_path: Path,
+    section: str,
+    field: str,
+    invalid_value: Any,
+) -> None:
+    run_payload = _valid_public_lake_run_metadata(
+        input_files=[{"path": "manifest.csv", "sha256": "manifest-hash"}]
+    )
+    if section == "run":
+        run_payload[field] = invalid_value
+    elif section == "provenance":
+        run_payload["provenance"][field] = invalid_value
+    else:
+        run_payload["provenance"]["input_files"][0][field] = invalid_value
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        run_payload,
+        _valid_form_ap_metadata(),
+    )
+
+    with pytest.raises(ValueError, match=field):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+def test_public_lake_provenance_rejects_missing_referenced_sidecar(tmp_path: Path) -> None:
+    missing_sidecar = tmp_path / "bronze" / "form-ap" / "missing.meta.json"
+    run_payload = _valid_public_lake_run_metadata(
+        input_files=[{"path": str(missing_sidecar), "sha256": "sidecar-hash"}]
+    )
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        run_payload,
+        _valid_form_ap_metadata(),
+    )
+
+    with pytest.raises(ValueError, match="missing metadata sidecar"):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+@pytest.mark.parametrize("missing_field", ["source_name", "size_bytes"])
+def test_public_lake_provenance_rejects_missing_sidecar_fields(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    sidecar = tmp_path / "bronze" / "form-ap" / "source.meta.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar_payload = _valid_source_sidecar()
+    del sidecar_payload[missing_field]
+    sidecar.write_text(json.dumps(sidecar_payload), encoding="utf-8")
+    run_payload = _valid_public_lake_run_metadata(
+        input_files=[{"path": str(sidecar), "sha256": "sidecar-hash"}]
+    )
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        run_payload,
+        _valid_form_ap_metadata(),
+    )
+
+    with pytest.raises(ValueError, match=missing_field):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [("source_url", ""), ("size_bytes", False)],
+)
+def test_public_lake_provenance_rejects_invalid_sidecar_values(
+    tmp_path: Path,
+    field: str,
+    invalid_value: Any,
+) -> None:
+    sidecar = tmp_path / "bronze" / "form-ap" / "source.meta.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar_payload = _valid_source_sidecar()
+    sidecar_payload[field] = invalid_value
+    sidecar.write_text(json.dumps(sidecar_payload), encoding="utf-8")
+    run_payload = _valid_public_lake_run_metadata(
+        input_files=[{"path": str(sidecar), "sha256": "sidecar-hash"}]
+    )
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        run_payload,
+        _valid_form_ap_metadata(),
+    )
+
+    with pytest.raises(ValueError, match=field):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["source_kind", "archive_sha256", "member", "member_sha256"],
+)
+def test_public_lake_provenance_rejects_missing_form_ap_fields(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    form_ap_payload = _valid_form_ap_metadata()
+    del form_ap_payload[missing_field]
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        _valid_public_lake_run_metadata(),
+        form_ap_payload,
+    )
+
+    with pytest.raises(ValueError, match=missing_field):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("source_kind", "unverified_source"),
+        ("archive_sha256", None),
+        ("member", ""),
+        ("member_sha256", ""),
+    ],
+)
+def test_public_lake_provenance_rejects_invalid_form_ap_values(
+    tmp_path: Path,
+    field: str,
+    invalid_value: Any,
+) -> None:
+    form_ap_payload = _valid_form_ap_metadata()
+    form_ap_payload[field] = invalid_value
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        _valid_public_lake_run_metadata(),
+        form_ap_payload,
+    )
+
+    with pytest.raises(ValueError, match=field):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+def test_public_lake_provenance_accepts_standalone_form_ap_without_archive_hash(
+    tmp_path: Path,
+) -> None:
+    form_ap_payload = _valid_form_ap_metadata()
+    form_ap_payload.update(
+        {
+            "source_kind": "standalone_csv_fallback",
+            "archive_sha256": None,
+        }
+    )
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        _valid_public_lake_run_metadata(),
+        form_ap_payload,
+    )
+
+    reduced = public_lake_provenance(run_metadata, form_ap_metadata)
+
+    assert reduced["form_ap"]["archive_sha256"] is None
 
 
 def test_claim_maturity_is_controlled_by_component_status() -> None:
@@ -236,8 +507,8 @@ def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
         calls.append(kwargs)
         out_dir = Path(kwargs["out_dir"])
         out_dir.mkdir(parents=True, exist_ok=True)
-        summary_json = out_dir / "public_cascade_summary.json"
-        sample_attrition_csv = out_dir / "public_sample_attrition.csv"
+        summary_json = out_dir / "returned-summary.nonstandard.json"
+        sample_attrition_csv = out_dir / "returned-attrition.nonstandard.csv"
         summary_json.write_text(
             json.dumps({"primary_specification": primary_specification}),
             encoding="utf-8",
@@ -265,9 +536,11 @@ def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
     assert component == {
         "status": "complete",
         "out_dir": str(paths["out_dir"] / "public_cascade"),
-        "summary_json": str(paths["out_dir"] / "public_cascade/public_cascade_summary.json"),
+        "summary_json": str(
+            paths["out_dir"] / "public_cascade/returned-summary.nonstandard.json"
+        ),
         "sample_attrition_csv": str(
-            paths["out_dir"] / "public_cascade/public_sample_attrition.csv"
+            paths["out_dir"] / "public_cascade/returned-attrition.nonstandard.csv"
         ),
         "primary_specification": primary_specification,
     }
@@ -310,13 +583,17 @@ def test_run_study_fails_before_public_cascade_when_metadata_is_missing(
     assert calls == 0
 
 
-def test_run_study_skipped_public_cascade_omits_missing_lake_provenance(
+@pytest.mark.parametrize(
+    "missing_metadata_key",
+    ["public_lake_run_metadata", "form_ap_source_metadata"],
+)
+def test_run_study_skipped_public_cascade_omits_singly_missing_lake_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    missing_metadata_key: str,
 ) -> None:
     args, paths = _write_study_fixture(tmp_path, skip_public_cascade=True)
-    paths["public_lake_run_metadata"].unlink()
-    paths["form_ap_source_metadata"].unlink()
+    paths[missing_metadata_key].unlink()
 
     def fail_if_called(**kwargs: Any) -> dict[str, Path]:
         raise AssertionError(f"unexpected public cascade call: {kwargs}")
