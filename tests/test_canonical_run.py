@@ -47,8 +47,13 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
                     {
                         "metadata_file": "form-ap/FirmFilings.zip.meta.json",
                         "metadata_sha256": "1" * 64,
+                        "source_name": "FINRA Firm Filings",
                         "source_url": "https://example.invalid/FirmFilings.zip",
+                        "downloaded_at_utc": "2026-07-06T00:00:00Z",
                         "payload_sha256": "2" * 64,
+                        "payload_size_bytes": 123,
+                        "parser_version": "1",
+                        "schema_version": "1",
                     }
                 ],
                 "form_ap": {
@@ -824,23 +829,192 @@ def test_verify_canonical_run_rejects_malformed_source_inventory(tmp_path: Path)
 
 
 @pytest.mark.parametrize(
+    "field",
+    [
+        "source_name",
+        "source_url",
+        "downloaded_at_utc",
+        "payload_sha256",
+        "payload_size_bytes",
+        "parser_version",
+        "schema_version",
+    ],
+)
+def test_verify_canonical_run_rejects_sidecar_missing_required_field(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    payload["public_lake_provenance"]["source_metadata_inventory"][0].pop(field)
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert "public source inventory" in errors
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("source_name", ""),
+        ("source_url", 1),
+        ("downloaded_at_utc", []),
+        ("payload_sha256", 1),
+        ("payload_size_bytes", True),
+        ("payload_size_bytes", 1.0),
+        ("payload_size_bytes", "1"),
+        ("payload_size_bytes", -1),
+        ("parser_version", None),
+        ("schema_version", " "),
+    ],
+)
+def test_verify_canonical_run_rejects_sidecar_wrong_field_type_or_value(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    payload["public_lake_provenance"]["source_metadata_inventory"][0][field] = replacement
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert "public source inventory" in errors
+
+
+def test_verify_canonical_run_accepts_minimal_non_sidecar_inventory_record(
+    tmp_path: Path,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    payload["public_lake_provenance"]["source_metadata_inventory"] = [
+        {
+            "metadata_file": "issuer-origin/issuer_origin.csv",
+            "metadata_sha256": "3" * 64,
+        }
+    ]
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    "extra_fields",
+    [
+        {"payload_sha256": "2" * 64},
+        {"payload_sha256": "not-a-sha256"},
+        {"source_name": "unexpected acquisition metadata"},
+    ],
+)
+def test_verify_canonical_run_rejects_non_sidecar_acquisition_fields(
+    tmp_path: Path,
+    extra_fields: dict[str, object],
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    payload["public_lake_provenance"]["source_metadata_inventory"] = [
+        {
+            "metadata_file": "issuer-origin/issuer_origin.csv",
+            "metadata_sha256": "3" * 64,
+            **extra_fields,
+        }
+    ]
+    _write_json(fixture["manifest"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert "public source inventory" in errors
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("interval_seed", 42.0, "construct bootstrap seed"),
+        ("interval_seed", True, "construct bootstrap seed"),
+        ("interval_seed", "42", "construct bootstrap seed"),
+        ("interval_reps", 1000.0, "construct bootstrap reps"),
+        ("interval_reps", True, "construct bootstrap reps"),
+        ("interval_reps", "1000", "construct bootstrap reps"),
+    ],
+)
+def test_verify_canonical_run_rejects_non_integer_bootstrap_contract(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+    message: str,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["construct"].read_text(encoding="utf-8"))
+    payload[field] = replacement
+    _write_json(fixture["construct"], payload)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert message in errors
+
+
+@pytest.mark.parametrize(
     "invalid_case",
-    ["nested", "table_09", "dml", "table_03", "attrition", "dirty", "hash"],
+    [
+        "nested",
+        "table_09",
+        "dml",
+        "table_03",
+        "attrition",
+        "dirty",
+        "hash",
+        "sidecar_missing_payload_hash",
+        "interval_seed_float",
+        "interval_reps_float",
+    ],
 )
 def test_cli_never_verifies_invalid_canonical_fixture(
     tmp_path: Path,
     invalid_case: str,
 ) -> None:
     fixture = _write_canonical_fixture(tmp_path)
-    if invalid_case in {"nested", "dirty", "hash"}:
+    if invalid_case in {"nested", "dirty", "hash", "sidecar_missing_payload_hash"}:
         payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
         if invalid_case == "nested":
             payload["public_lake_provenance"] = None
         elif invalid_case == "dirty":
             payload["provenance"]["dirty"] = True
+        elif invalid_case == "sidecar_missing_payload_hash":
+            payload["public_lake_provenance"]["source_metadata_inventory"][0].pop("payload_sha256")
         else:
             payload["provenance"]["config_hash"] = "not-a-sha256"
         _write_json(fixture["manifest"], payload)
+    elif invalid_case in {"interval_seed_float", "interval_reps_float"}:
+        payload = json.loads(fixture["construct"].read_text(encoding="utf-8"))
+        if invalid_case == "interval_seed_float":
+            payload["interval_seed"] = 42.0
+        else:
+            payload["interval_reps"] = 1000.0
+        _write_json(fixture["construct"], payload)
     elif invalid_case == "table_09":
         table = pd.read_csv(fixture["table_09"])
         table.loc[0, "Direction"] = "wrong direction"

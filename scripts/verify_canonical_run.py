@@ -99,8 +99,8 @@ def _is_hex(value: object, length: int) -> bool:
     return isinstance(value, str) and re.fullmatch(rf"[0-9a-fA-F]{{{length}}}", value) is not None
 
 
-def _is_exact_one(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value == 1
+def _is_exact_integer(value: object, expected: int) -> bool:
+    return type(value) is int and value == expected
 
 
 def _nonnegative_integer(value: object) -> int | None:
@@ -128,11 +128,30 @@ def _source_inventory_is_valid(value: object) -> bool:
     for record in value:
         if not isinstance(record, dict):
             return False
-        if not isinstance(record.get("metadata_file"), str) or not record["metadata_file"].strip():
+        metadata_file = record.get("metadata_file")
+        if not isinstance(metadata_file, str) or not metadata_file.strip():
             return False
         if not _is_hex(record.get("metadata_sha256"), 64):
             return False
-        if "payload_sha256" in record and not _is_hex(record.get("payload_sha256"), 64):
+        if not metadata_file.endswith(".meta.json"):
+            if set(record) != {"metadata_file", "metadata_sha256"}:
+                return False
+            continue
+        if any(
+            not isinstance(record.get(field), str) or not record[field].strip()
+            for field in (
+                "source_name",
+                "source_url",
+                "downloaded_at_utc",
+                "parser_version",
+                "schema_version",
+            )
+        ):
+            return False
+        if not _is_hex(record.get("payload_sha256"), 64):
+            return False
+        payload_size = record.get("payload_size_bytes")
+        if type(payload_size) is not int or payload_size < 0:
             return False
     return True
 
@@ -615,16 +634,18 @@ def verify_canonical_run(
         "sample attrition/table 18 consistency": _attrition_matches(public_summary, table_18),
         "construct bootstrap scope": construct_manifest.get("interval_scope")
         == "primary_plus_top_5_per_direction",
-        "construct bootstrap seed": construct_manifest.get("interval_seed") == 42,
-        "construct bootstrap reps": construct_manifest.get("interval_reps") == 1000,
+        "construct bootstrap seed": _is_exact_integer(construct_manifest.get("interval_seed"), 42),
+        "construct bootstrap reps": _is_exact_integer(
+            construct_manifest.get("interval_reps"), 1000
+        ),
         "public-to-benchmark primary keys": primary.get("public_to_benchmark") == PUBLIC_PRIMARY,
         "benchmark-to-public primary keys": primary.get("benchmark_to_public")
         == RECIPROCAL_PRIMARY,
-        "public-to-benchmark primary count": _is_exact_one(
-            primary.get("public_to_benchmark_count")
+        "public-to-benchmark primary count": _is_exact_integer(
+            primary.get("public_to_benchmark_count"), 1
         ),
-        "benchmark-to-public primary count": _is_exact_one(
-            primary.get("benchmark_to_public_count")
+        "benchmark-to-public primary count": _is_exact_integer(
+            primary.get("benchmark_to_public_count"), 1
         ),
         "DML CSV/meta/Table 12 consistency": _dml_matches(dml, dml_meta, table_12),
         "Table 3 primary metrics": _table_03_matches(table_03, package_manifest),
