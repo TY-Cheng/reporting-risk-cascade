@@ -875,7 +875,7 @@ def run_public_cascade(
     analysis_cfg = config.get("analysis", {})
 
     start_year = int(sample_cfg.get("start_year", 2011))
-    end_year = int(sample_cfg.get("end_year", 2023))
+    end_year = int(sample_cfg.get("end_year", 2024))
     domestic_only = bool(sample_cfg.get("domestic_only", True))
     sample_attrition_df = _sample_attrition(
         panel,

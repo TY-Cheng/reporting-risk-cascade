@@ -103,6 +103,35 @@ def test_visibility_history_is_exact_and_reports_unavailable_fields() -> None:
     assert "source_available_notes" not in families["visibility_history"]
 
 
+def test_visibility_history_contract_is_complete_and_ordered() -> None:
+    assert VISIBILITY_HISTORY_FEATURES == (
+        "size",
+        "core_type",
+        "form",
+        "entity_type",
+        "isXBRL",
+        "isInlineXBRL",
+        "isXBRLNumeric",
+        "days_since_previous_filing",
+        "prior_filing_count",
+        "filing_friction_is_nt",
+        "filing_friction_nt_pre_origin",
+        "filing_friction_nt_delay_days",
+        "public_history_comment_thread_1y_count",
+        "public_history_comment_thread_3y_count",
+        "public_history_amendment_1y_count",
+        "public_history_amendment_3y_count",
+        "public_history_8k_301_1y_count",
+        "public_history_8k_301_3y_count",
+        "public_history_8k_401_1y_count",
+        "public_history_8k_401_3y_count",
+        "public_history_8k_402_1y_count",
+        "public_history_8k_402_3y_count",
+        "public_history_8k_502_1y_count",
+        "public_history_8k_502_3y_count",
+    )
+
+
 def test_primary_specification_requires_configured_family_and_window() -> None:
     resolved = _resolve_primary_specification(
         {"primary_specification": {"feature_set": "all", "train_window": "expanding"}},
@@ -118,9 +147,26 @@ def test_primary_specification_requires_configured_family_and_window() -> None:
             train_windows=[None],
         )
 
+    with pytest.raises(ValueError, match="primary train_window"):
+        _resolve_primary_specification(
+            {"primary_specification": {"feature_set": "all", "train_window": "rolling_99y"}},
+            requested_families=["all"],
+            train_windows=[None, 5, 7, 10],
+        )
+
 
 def test_primary_metric_rows_fail_closed_but_allow_all_empty_diagnostics() -> None:
     primary = {"feature_set": "all", "train_window": "expanding"}
+    missing_identity = pd.DataFrame(
+        {
+            "feature_set": ["all"],
+            "task": ["comment_thread"],
+            "test_year": [2021],
+        }
+    )
+    with pytest.raises(ValueError, match="lacks primary identity columns"):
+        _validate_primary_metric_rows(missing_identity, primary)
+
     missing = pd.DataFrame(
         {
             "feature_set": ["metadata"],
@@ -339,14 +385,14 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
     assert skipped_row["n_controls_definition"] == "encoded_nuisance_columns"
 
 
-def test_public_cascade_skips_zero_positive_tasks_without_metrics(
+def test_public_cascade_omitted_sample_end_year_includes_2024(
     tmp_path: Path,
 ) -> None:
     panel_path = tmp_path / "issuer_origin_panel.parquet"
     config_path = tmp_path / "public_cascade.yaml"
     out_dir = tmp_path / "out"
     rows = []
-    for year in [2011, 2012, 2013, 2014]:
+    for year in [2011, 2012, 2013, 2014, 2024]:
         rows.append(
             {
                 "issuer_cik": "0000000001",
@@ -378,7 +424,6 @@ def test_public_cascade_skips_zero_positive_tasks_without_metrics(
         """
 sample:
   start_year: 2011
-  end_year: 2014
   domestic_only: true
 analysis:
   candidate_train_windows: [null]
@@ -411,10 +456,13 @@ model:
     )
 
     assert set(summary["zero_positive_tasks"]) == {"comment_thread", "amendment", "8k_402"}
-    assert summary["n_rows"] == 4
+    assert summary["n_rows"] == 5
+    assert summary["sample_years"] == [2011, 2024]
     assert summary["sample_attrition"] == attrition.to_dict(orient="records")
-    assert attrition.set_index("stage").loc["source_issuer_origin", "n_rows"] == 5
-    assert attrition.set_index("stage").loc["observable_365_day_horizon", "n_rows"] == 4
+    indexed_attrition = attrition.set_index("stage")
+    assert indexed_attrition.loc["source_issuer_origin", "n_rows"] == 6
+    assert indexed_attrition.loc["fiscal_year_2011_2024", "n_rows"] == 6
+    assert indexed_attrition.loc["observable_365_day_horizon", "n_rows"] == 5
     assert opacity_meta["n_raw_controls"] == 0
     assert opacity_meta["n_encoded_controls_by_outcome"] == {}
     assert opacity_meta["n_controls"] == 0
