@@ -59,8 +59,14 @@ MIN_RANKING_POSITIVES = 10
 BOOTSTRAP_POSITIVE_THRESHOLD = 30
 BRIDGE_PROVENANCE_COLUMNS = list(WRDS_PROVENANCE_TOKEN_ALLOWLISTS)
 BRIDGE_PROVENANCE_SCAN_COLUMNS = [*BRIDGE_PROVENANCE_COLUMNS, "extracted_at"]
+
+
+def _compact_identifier(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).casefold())
+
+
 PROVENANCE_HEADER_COMPACTS = {
-    re.sub(r"[^a-z0-9]+", "", column.casefold()) for column in BRIDGE_PROVENANCE_SCAN_COLUMNS
+    _compact_identifier(column) for column in BRIDGE_PROVENANCE_SCAN_COLUMNS
 }
 PROVENANCE_HEADER_FIELDS = (
     "source",
@@ -72,14 +78,27 @@ PROVENANCE_HEADER_FIELDS = (
     "link",
     "desc",
 )
-PROVENANCE_COMPACT_MARKERS = (
-    "wrds",
-    "compustat",
-    "capitaliq",
-    "capiq",
+WRDS_EXACT_CONTRACT_COMPACTS = tuple(
+    _compact_identifier(value)
+    for allowed in WRDS_PROVENANCE_TOKEN_ALLOWLISTS.values()
+    for value in allowed
 )
+WRDS_DISTINCTIVE_CONTRACT_TERMS = (
+    "WRDS",
+    "CRSP",
+    "Compustat",
+    "Capital IQ",
+    "SEC Analytics",
+    "CIK-GVKEY",
+)
+WRDS_COMMON_COMPACT_ALIASES = frozenset({"capiq", "gvkeycik"})
+PROVENANCE_COMPACT_MARKERS = frozenset(
+    marker
+    for marker in map(_compact_identifier, WRDS_DISTINCTIVE_CONTRACT_TERMS)
+    if any(marker in contract for contract in WRDS_EXACT_CONTRACT_COMPACTS)
+) | WRDS_COMMON_COMPACT_ALIASES
 WRDS_SOURCE_COMPACT_ALIASES = {
-    re.sub(r"[^a-z0-9]+", "", source.casefold())
+    _compact_identifier(source)
     for pair in WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE.items()
     for source in pair
 }
@@ -89,7 +108,7 @@ def _is_unknown_provenance_column(column: object) -> bool:
     name = str(column)
     if name in BRIDGE_PROVENANCE_SCAN_COLUMNS:
         return False
-    compact = re.sub(r"[^a-z0-9]+", "", name.casefold())
+    compact = _compact_identifier(name)
     if any(compact.startswith(canonical) for canonical in PROVENANCE_HEADER_COMPACTS):
         return True
     words = _identifier_words(name)
@@ -117,7 +136,7 @@ def _attempts_wrds_provenance(column: str, value: object) -> bool:
         return True
     words = _identifier_words(text)
     compact_tokens = [
-        re.sub(r"[^a-z0-9]+", "", token.casefold()) for token in text.split(";")
+        _compact_identifier(token) for token in text.split(";")
     ]
     compact_claim = any(
         token.startswith("raw")
