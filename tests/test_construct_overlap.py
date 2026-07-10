@@ -667,6 +667,18 @@ def test_unknown_provenance_like_column_is_rejected(tmp_path: Path) -> None:
         "CompustatURL",
         "WRDSURI",
         "CRSPName",
+        "ExternalWRDSOwner",
+        "ExternalCRSPSupplier",
+        "CapitalIQCatalog",
+        "CompustatRepository",
+        "SECAnalyticsEdition",
+        "WRDSFoo",
+        "WRDSRevenueProvider",
+        "WRDSSourceRevenue",
+        "raw_provider",
+        "raw_foo",
+        "provenance_owner",
+        "bridge_vendor",
     ],
 )
 def test_conflicting_provenance_header_alias_is_rejected(
@@ -715,6 +727,11 @@ def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path
         "external_cik_gvkey_dataset": "ordinary mapping field",
         "ExternalGVKEYCIKPath": "ordinary mapping field",
         "business_compustat_security_revenue": "100",
+        "CRSPReturn": "0.10",
+        "CompustatAssets": "100",
+        "CapitalIQMarketCap": "100",
+        "SECAnalyticsSales": "100",
+        "bridge_financing_flag": "business control",
     }
     pd.DataFrame([row]).to_csv(crosswalk, index=False)
 

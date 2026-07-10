@@ -98,8 +98,6 @@ PROVENANCE_METADATA_ROLES = frozenset(
         "validation",
         "tier",
         "status",
-        "flag",
-        "indicator",
         "quality",
         "confidence",
         "path",
@@ -107,6 +105,42 @@ PROVENANCE_METADATA_ROLES = frozenset(
         "uri",
         "name",
     }
+)
+BUSINESS_DATA_HEADER_ROLES = frozenset(
+    {
+        "revenue",
+        "sales",
+        "asset",
+        "assets",
+        "liability",
+        "liabilities",
+        "income",
+        "earnings",
+        "return",
+        "returns",
+        "price",
+        "volume",
+        "marketcap",
+        "marketvalue",
+        "count",
+        "ratio",
+        "margin",
+        "cash",
+        "debt",
+        "equity",
+        "employee",
+        "employees",
+        "industry",
+        "sector",
+        "sic",
+        "naics",
+        "material",
+        "materials",
+        "financing",
+    }
+)
+BUSINESS_DATA_COMPACT_SUFFIX_ROLES = frozenset(
+    role for role in BUSINESS_DATA_HEADER_ROLES if len(role) >= 4
 )
 WRDS_EXACT_CONTRACT_COMPACTS = tuple(
     _compact_identifier(value)
@@ -151,9 +185,12 @@ def _is_unknown_provenance_column(column: object) -> bool:
     has_structural_namespace = (
         bool(words & {"provenance", "bridge", "raw"}) or compact.startswith("raw")
     )
-    return (has_field and (has_vendor_namespace or has_structural_namespace)) or (
-        has_metadata_role and has_vendor_namespace
+    has_business_role = bool(words & BUSINESS_DATA_HEADER_ROLES) or any(
+        compact.endswith(role) for role in BUSINESS_DATA_COMPACT_SUFFIX_ROLES
     )
+    if has_vendor_namespace or has_structural_namespace:
+        return has_field or has_metadata_role or not has_business_role
+    return False
 
 
 def _identifier_words(value: object) -> set[str]:
