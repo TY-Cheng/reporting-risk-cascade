@@ -74,6 +74,7 @@ _test-core:
         tests/test_public_cascade_interfaces.py \
         tests/test_public_peer_comparison.py \
         tests/test_provenance.py \
+        tests/test_repo_hygiene.py \
         tests/test_linkage.py \
         tests/test_raw_dataset.py \
         tests/test_table_io_sample.py \
