@@ -634,6 +634,11 @@ def test_unknown_provenance_like_column_is_rejected(tmp_path: Path) -> None:
         "CRSPCompustatSource",
         "wrds_description",
         "capitaliq_desc",
+        "capiq_origin",
+        "ExternalWRDSSource",
+        "foo_compustat_source",
+        "ExternalCapIQSource",
+        "compustatProviderOrigin",
     ],
 )
 def test_conflicting_provenance_header_alias_is_rejected(
@@ -670,6 +675,9 @@ def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path
         "business_note": "raw materials contract",
         "revenue": "100",
         "drawbridge_external": "ordinary business value",
+        "raw_material_flag": "business control",
+        "business_compustat_revenue": "100",
+        "external_wrds_revenue": "100",
     }
     pd.DataFrame([row]).to_csv(crosswalk, index=False)
 
@@ -696,6 +704,15 @@ def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path
         ("source", "CapitalIQ"),
         ("source", "CompustatCompany"),
         ("source", "CRSPCompustatMerged"),
+        ("source", "CapIQ"),
+        ("source", "CapitalIQProvider"),
+        ("source", "ExternalCapitalIQProvider"),
+        ("source", "ExternalWRDSLink"),
+        ("source", "FooCompustatBar"),
+        ("source", "CompustatCompanyExtra"),
+        ("source", "CRSPCompustatMergedExtra"),
+        ("source", "ExternalCompustatCompany"),
+        ("source", "CompustatProviderExternal"),
     ],
 )
 def test_attempted_wrds_provenance_in_every_known_field_fails_closed(

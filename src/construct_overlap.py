@@ -72,13 +72,11 @@ PROVENANCE_HEADER_FIELDS = (
     "link",
     "desc",
 )
-PROVENANCE_HEADER_PREFIXES = (
-    "bridge",
-    "raw",
+PROVENANCE_COMPACT_MARKERS = (
     "wrds",
-    "capitaliq",
     "compustat",
-    "crspcompustat",
+    "capitaliq",
+    "capiq",
 )
 WRDS_SOURCE_COMPACT_ALIASES = {
     re.sub(r"[^a-z0-9]+", "", source.casefold())
@@ -94,14 +92,21 @@ def _is_unknown_provenance_column(column: object) -> bool:
     compact = re.sub(r"[^a-z0-9]+", "", name.casefold())
     if any(compact.startswith(canonical) for canonical in PROVENANCE_HEADER_COMPACTS):
         return True
-    if compact.startswith("provenance"):
-        return True
-    for prefix in PROVENANCE_HEADER_PREFIXES:
-        if compact.startswith(prefix) and any(
-            field in compact[len(prefix) :] for field in PROVENANCE_HEADER_FIELDS
-        ):
-            return True
-    return False
+    words = _identifier_words(name)
+    has_field = any(field in compact for field in PROVENANCE_HEADER_FIELDS)
+    has_namespace = (
+        any(marker in compact for marker in PROVENANCE_COMPACT_MARKERS)
+        or bool(words & {"provenance", "bridge"})
+        or "raw" in words
+        or compact.startswith("raw")
+    )
+    return has_field and has_namespace
+
+
+def _identifier_words(value: object) -> set[str]:
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value))
+    text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
+    return set(re.findall(r"[a-z0-9]+", text.casefold()))
 
 
 def _attempts_wrds_provenance(column: str, value: object) -> bool:
@@ -110,17 +115,20 @@ def _attempts_wrds_provenance(column: str, value: object) -> bool:
         return False
     if column in {"raw_link_sources", "raw_link_descs"}:
         return True
-    words = set(re.findall(r"[a-z0-9]+", text.casefold()))
+    words = _identifier_words(text)
     compact_tokens = [
         re.sub(r"[^a-z0-9]+", "", token.casefold()) for token in text.split(";")
     ]
     compact_claim = any(
-        token.startswith(("wrds", "raw")) or token in WRDS_SOURCE_COMPACT_ALIASES
+        token.startswith("raw")
+        or token in WRDS_SOURCE_COMPACT_ALIASES
+        or any(marker in token for marker in PROVENANCE_COMPACT_MARKERS)
         for token in compact_tokens
     )
     return (
         compact_claim
         or bool(words & {"wrds", "compustat", "raw"})
+        or "capiq" in words
         or {"capital", "iq"} <= words
     )
 
