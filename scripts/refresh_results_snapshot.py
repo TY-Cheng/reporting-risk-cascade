@@ -672,11 +672,7 @@ def _public_feature_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list
         return []
     grouped = (
         metrics.groupby("feature_set", dropna=False)
-        .agg(
-            rows=("pr_auc", "size"),
-            mean_pr_auc=("pr_auc", "mean"),
-            mean_roc_auc=("roc_auc", "mean"),
-        )
+        .agg(rows=("pr_auc", "size"), mean_pr_auc=("pr_auc", "mean"), mean_roc_auc=("roc_auc", "mean"))
         .reset_index()
         .sort_values("mean_pr_auc", ascending=False)
     )
@@ -808,11 +804,7 @@ def _benchmark_timing_rows(metrics: pd.DataFrame) -> list[list[str]]:
         )
         .reset_index()
     )
-    best = (
-        grouped.sort_values("pr_auc", ascending=False)
-        .groupby("label_mode", as_index=False)
-        .head(1)
-    )
+    best = grouped.sort_values("pr_auc", ascending=False).groupby("label_mode", as_index=False).head(1)
     rows = []
     for _, row in best.sort_values("pr_auc", ascending=False).iterrows():
         rows.append(
@@ -933,9 +925,7 @@ def _benchmark_window_rows(study_dir: Path) -> list[list[str]]:
         .reset_index()
     )
     rows = []
-    for _, row in grouped.sort_values(
-        ["label_mode", "pr_auc"], ascending=[True, False]
-    ).iterrows():
+    for _, row in grouped.sort_values(["label_mode", "pr_auc"], ascending=[True, False]).iterrows():
         rows.append(
             [
                 _code(row["label_mode"]),
@@ -953,14 +943,7 @@ def _benchmark_window_rows(study_dir: Path) -> list[list[str]]:
 
 def _structural_break_rows(study_dir: Path, *, max_rows: int = 12) -> list[list[str]]:
     frame = _read_csv(study_dir / "benchmark" / "structural_breaks.csv")
-    if frame.empty or not {
-        "window",
-        "label_mode",
-        "family",
-        "break_year",
-        "f_stat",
-        "p_value",
-    }.issubset(frame.columns):
+    if frame.empty or not {"window", "label_mode", "family", "break_year", "f_stat", "p_value"}.issubset(frame.columns):
         return []
     frame = frame.copy()
     frame["p_value_num"] = pd.to_numeric(frame["p_value"], errors="coerce")
@@ -991,9 +974,7 @@ def _feature_importance_rows(study_dir: Path, *, max_rows: int = 12) -> list[lis
     )
     rows = []
     for _, row in grouped.head(max_rows).iterrows():
-        rows.append(
-            [_code(row["label_mode"]), _code(row["family"]), _fmt(row["importance_share"])]
-        )
+        rows.append([_code(row["label_mode"]), _code(row["family"]), _fmt(row["importance_share"])])
     return rows
 
 
@@ -1021,9 +1002,7 @@ def _opacity_rows(study_dir: Path) -> list[list[str]]:
     return rows
 
 
-def _simple_csv_rows(
-    path: Path, columns: list[str], *, max_rows: int | None = None
-) -> list[list[str]]:
+def _simple_csv_rows(path: Path, columns: list[str], *, max_rows: int | None = None) -> list[list[str]]:
     frame = _read_csv(path)
     if frame.empty or not set(columns).issubset(frame.columns):
         return []
@@ -1031,14 +1010,7 @@ def _simple_csv_rows(
         frame = frame.head(max_rows)
     rows = []
     for _, row in frame.iterrows():
-        rows.append(
-            [
-                _fmt(row.get(col))
-                if col not in {"public_label", "bridge_tier", "label_pattern", "metric_status"}
-                else _code(row.get(col))
-                for col in columns
-            ]
-        )
+        rows.append([_fmt(row.get(col)) if col not in {"public_label", "bridge_tier", "label_pattern", "metric_status"} else _code(row.get(col)) for col in columns])
     return rows
 
 
@@ -1168,9 +1140,7 @@ def _table_figure_rows(package_dir: Path) -> list[list[str]]:
         if not root.exists():
             rows.append([kind, _code(subdir), "missing"])
             continue
-        files = sorted(
-            path for path in root.iterdir() if path.is_file() and path.name != ".DS_Store"
-        )
+        files = sorted(path for path in root.iterdir() if path.is_file() and path.name != ".DS_Store")
         for path in files:
             rows.append([kind, _code(path.name), _rel(path)])
     return rows
@@ -1430,9 +1400,7 @@ def build_snapshot(
     manifest = _read_json(study_dir / "study_run_manifest.json")
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
     bridge_summary = _read_json(study_dir / "bridge_probe" / "bridge_probe_summary.json")
-    construct_manifest = _read_json(
-        study_dir / "construct_overlap" / "construct_overlap_manifest.json"
-    )
+    construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
     public_lake_report = _latest_public_lake_report()
     public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
     benchmark_metrics = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
@@ -1818,15 +1786,7 @@ def build_snapshot(
         "### Annual Fold Support",
         "",
         _table(
-            [
-                "Task",
-                "Test year",
-                "Configs",
-                "Test rows",
-                "Positives",
-                "Prevalence",
-                "Sparse excluded",
-            ],
+            ["Task", "Test year", "Configs", "Test rows", "Positives", "Prevalence", "Sparse excluded"],
             _public_fold_support_rows(public_metrics),
         ),
         "",
@@ -1901,17 +1861,8 @@ def build_snapshot(
         "of the original-paper samples.",
         "",
         _table(
-            [
-                "Model",
-                "Metric rows",
-                "Mean PR-AUC",
-                "Mean ROC-AUC",
-                "Max config PR-AUC",
-                "Mean Brier",
-            ],
-            _peer_model_rows(
-                study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv"
-            ),
+            ["Model", "Metric rows", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC", "Mean Brier"],
+            _peer_model_rows(study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv"),
         ),
         "",
         "### Detected-Misstatement Peer Fit and Skip Status",
@@ -1924,14 +1875,7 @@ def build_snapshot(
         "### Public-Label Peer Transfer",
         "",
         _table(
-            [
-                "Model",
-                "Metric rows",
-                "Mean PR-AUC",
-                "Mean ROC-AUC",
-                "Max config PR-AUC",
-                "Mean Brier",
-            ],
+            ["Model", "Metric rows", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC", "Mean Brier"],
             _peer_model_rows(
                 study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
             ),
@@ -1940,14 +1884,7 @@ def build_snapshot(
         "### Public Peer Task Summary",
         "",
         _table(
-            [
-                "Task",
-                "Metric rows",
-                "Mean prevalence",
-                "Mean PR-AUC",
-                "Mean ROC-AUC",
-                "Max config PR-AUC",
-            ],
+            ["Task", "Metric rows", "Mean prevalence", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC"],
             _public_peer_task_rows(
                 study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
             ),
@@ -1984,9 +1921,7 @@ def build_snapshot(
         "",
         "### Overlap Sample Flow",
         "",
-        _table(
-            ["Bridge tier", "Rows", "Benchmark positives"], _overlap_sample_flow_rows(study_dir)
-        ),
+        _table(["Bridge tier", "Rows", "Benchmark positives"], _overlap_sample_flow_rows(study_dir)),
         "",
         "### Declared primary construct-alignment rows",
         "",
@@ -2091,9 +2026,7 @@ def build_snapshot(
                 "Display count",
             ],
             _simple_csv_rows(
-                study_dir
-                / "construct_overlap"
-                / "benchmark_positive_public_label_cooccurrence.csv",
+                study_dir / "construct_overlap" / "benchmark_positive_public_label_cooccurrence.csv",
                 [
                     "label_pattern",
                     "label_comment_thread_365",
