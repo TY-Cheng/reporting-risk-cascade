@@ -739,6 +739,10 @@ def verify_canonical_run(
         "benchmark peer component": benchmark_peer_component.get("status") == "complete",
         "public peer component": public_peer_component.get("status") == "complete",
         "construct component": construct_component.get("run_status") == "complete",
+        "construct component validation tier": construct_component.get("validation_tier")
+        == "wrds_validated",
+        "construct manifest validation tier": construct_manifest.get("validation_tier")
+        == "wrds_validated",
         "package manifest files": _package_artifacts_exist(manuscript_package, package_manifest),
     }
     errors.extend(name for name, passed in checks.items() if not passed)

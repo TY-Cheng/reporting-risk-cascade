@@ -86,6 +86,56 @@ def test_normalize_raw_cik_gvkey_links_filters_valid_rows_and_intersects_dates()
     assert out["raw_link_sources"].unique().tolist() == ["CRSP/Compustat Merged"]
 
 
+def test_normalize_raw_links_emits_the_closed_four_source_contract() -> None:
+    raw_sources = [
+        "CRSP/Compustat Merged",
+        "Compustat Company",
+        "Compustat Security",
+        "Capital IQ",
+    ]
+    links = pd.DataFrame(
+        {
+            "link_desc": ["Valid CIK-GVKEY Link"] * 4,
+            "source": raw_sources,
+            "cik": ["0000001111"] * 4,
+            "gvkey": ["000100"] * 4,
+            "sec_start_date": ["2011-01-01"] * 4,
+            "sec_end_date": ["2011-12-31"] * 4,
+            "link_start_date": ["2011-01-01"] * 4,
+            "link_end_date": ["2011-12-31"] * 4,
+        }
+    )
+
+    out = normalize_raw_cik_gvkey_links(
+        links,
+        raw_data=_raw_data(),
+        extracted_at="2026-05-25T00:00:00Z",
+    )
+
+    row = out.iloc[0]
+    assert set(row["source"].split(";")) == {
+        "wrds_sec_analytics_cik_gvkey:crsp_compustat_merged",
+        "wrds_sec_analytics_cik_gvkey:compustat_company",
+        "wrds_sec_analytics_cik_gvkey:compustat_security",
+        "wrds_sec_analytics_cik_gvkey:capital_iq",
+    }
+    assert set(row["raw_link_sources"].split(";")) == set(raw_sources)
+    assert row["source_version"] == "WRDS SEC Analytics Suite / CIK-GVKEY Link Table.csv"
+    assert row["match_method"] == "wrds_sec_analytics_cik_gvkey_intersection"
+    assert row["match_score"] == "1.0"
+    assert row["bridge_priority"] == "raw_primary"
+    assert row["bridge_origin"] == "raw"
+    assert row["raw_link_descs"] == "Valid CIK-GVKEY Link"
+
+
+def test_normalize_raw_links_rejects_unknown_source() -> None:
+    links = _raw_links().iloc[[0]].copy()
+    links.loc[:, "source"] = "Generic WRDS/Compustat"
+
+    with pytest.raises(ValueError, match="unsupported raw CIK-GVKEY source"):
+        normalize_raw_cik_gvkey_links(links, raw_data=_raw_data())
+
+
 def test_raw_primary_external_supplement_uses_external_only_for_missing_gvkey_years() -> None:
     raw = normalize_raw_cik_gvkey_links(
         _raw_links(),

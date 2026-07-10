@@ -253,6 +253,75 @@ def test_results_narrative_renders_external_component_path_privately(
     assert "`<external>/public_cascade`" in narrative
 
 
+def test_candidate_bridge_package_notes_and_narrative_are_nonassertive() -> None:
+    bridge_language = getattr(manuscript_module, "_bridge_language", None)
+    assert callable(bridge_language), "package bridge language must derive from both tiers"
+    manifest = {
+        "generated_at_utc": "2026-07-10T00:00:00Z",
+        "components": {
+            "public_cascade": {"out_dir": "artifacts/public_cascade"},
+            "construct_overlap": {
+                "run_status": "complete",
+                "validation_tier": "candidate_external",
+            },
+        },
+    }
+    construct_manifest = {"validation_tier": "candidate_external"}
+    language = bridge_language(manifest, construct_manifest)
+    public_task = pd.DataFrame(
+        {
+            "Task": ["comment_thread", "amendment", "8k_402"],
+            "Mean_PR_AUC": ["0.3000", "0.2000", "0.1000"],
+        }
+    )
+
+    narrative = _result_narrative(
+        manifest=manifest,
+        public_summary={
+            "primary_specification": {"feature_set": "all", "train_window": "expanding"}
+        },
+        public_task=public_task,
+        benchmark_peer=pd.DataFrame(),
+        public_peer=pd.DataFrame(),
+        construct_alignment=pd.DataFrame(),
+        construct_manifest=construct_manifest,
+    )
+    normalized = " ".join(" ".join([narrative, *language.values()]).lower().split())
+
+    assert "candidate_external" in normalized
+    assert "diagnostic" in normalized
+    assert "deferred" in normalized
+    for forbidden in [
+        "confirmed wrds",
+        "wrds-validated",
+        "manuscript-grade",
+        "supports the integrated",
+        "support the integrated",
+    ]:
+        assert forbidden not in normalized
+
+
+def test_validated_bridge_package_retains_wrds_claim_language() -> None:
+    bridge_language = getattr(manuscript_module, "_bridge_language", None)
+    assert callable(bridge_language), "package bridge language must derive from both tiers"
+
+    language = bridge_language(
+        {
+            "components": {
+                "construct_overlap": {
+                    "run_status": "complete",
+                    "validation_tier": "wrds_validated",
+                }
+            }
+        },
+        {"validation_tier": "wrds_validated"},
+    )
+
+    assert "Bridge tier is wrds_validated" in language["construct_lift_note"]
+    assert "WRDS-validated" in language["narrative"]
+    assert "manuscript-grade" in language["narrative"]
+
+
 def test_external_manifest_paths_are_private_and_basename_resolvable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

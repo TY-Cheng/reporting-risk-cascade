@@ -77,13 +77,15 @@ def _existing_or_skipped_component(
 
 def _claim_maturity(components: dict[str, Any]) -> dict[str, str]:
     public_complete = components.get("public_cascade", {}).get("status") == "complete"
-    construct_complete = (
-        components.get("construct_overlap", {}).get("run_status") == "complete"
+    construct = components.get("construct_overlap", {})
+    construct_validated = (
+        construct.get("run_status") == "complete"
+        and construct.get("validation_tier") == "wrds_validated"
     )
     return {
         "public_prediction": "reportable" if public_complete else "deferred",
         "feature_and_window_sensitivity": "supporting" if public_complete else "deferred",
-        "construct_alignment": "supporting" if construct_complete else "deferred",
+        "construct_alignment": "supporting" if construct_validated else "deferred",
         "opacity_dml": "diagnostic" if public_complete else "deferred",
     }
 

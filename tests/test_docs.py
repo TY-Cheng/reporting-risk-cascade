@@ -927,6 +927,49 @@ def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifac
     assert results.count("- **ARS claim.**") == len(fixture["tables"]) + len(fixture["figures"])
 
 
+def test_candidate_bridge_snapshot_is_noncanonical_and_nonassertive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    study_manifest_path = fixture["study_dir"] / "study_run_manifest.json"
+    study_manifest = json.loads(study_manifest_path.read_text(encoding="utf-8"))
+    study_manifest["components"]["construct_overlap"]["validation_tier"] = "candidate_external"
+    study_manifest["claim_maturity"]["construct_alignment"] = "supporting"
+    _write_json(study_manifest_path, study_manifest)
+    construct_manifest_path = (
+        fixture["study_dir"] / "construct_overlap" / "construct_overlap_manifest.json"
+    )
+    construct_manifest = json.loads(construct_manifest_path.read_text(encoding="utf-8"))
+    construct_manifest["validation_tier"] = "candidate_external"
+    _write_json(construct_manifest_path, construct_manifest)
+
+    results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+    normalized = " ".join(results.lower().split())
+
+    assert "| Canonical status | `NON-CANONICAL` |" in results
+    assert "construct component validation tier is not `wrds_validated`" in results
+    assert "construct manifest validation tier is not `wrds_validated`" in results
+    assert "candidate_external" in results
+    assert "diagnostic" in normalized
+    assert "deferred" in normalized
+    assert "construct-overlap headline claims are deferred" in normalized
+    assert (
+        "headline claims should describe filing-origin measurement, prevalence-aware ranking, "
+        "and construct overlap"
+        not in normalized
+    )
+    for forbidden in [
+        "confirmed wrds",
+        "wrds-validated",
+        "manuscript-grade",
+        "supports the integrated",
+        "support the integrated",
+        "integrated construct argument",
+    ]:
+        assert forbidden not in normalized
+
+
 def test_generated_snapshot_sanitizes_external_fixture_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

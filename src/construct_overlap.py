@@ -16,7 +16,11 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from . import DATA_DIR, PROJECT_ROOT
-from .linkage import DEFAULT_LINKAGE_OUT_DIR
+from .linkage import (
+    DEFAULT_LINKAGE_OUT_DIR,
+    WRDS_PROVENANCE_TOKEN_ALLOWLISTS,
+    WRDS_VALIDATED_TIER,
+)
 from .ranking_metrics import matlab_round_positive
 from .table_io import parquet_scan_sql, write_table
 
@@ -51,7 +55,7 @@ BOOTSTRAP_INTERVAL_METHOD = "row_level_percentile_bootstrap"
 BOOTSTRAP_CHUNK_REPS = 100
 MIN_RANKING_POSITIVES = 10
 BOOTSTRAP_POSITIVE_THRESHOLD = 30
-BRIDGE_PROVENANCE_COLUMNS = ["source", "source_version", "match_method"]
+BRIDGE_PROVENANCE_COLUMNS = list(WRDS_PROVENANCE_TOKEN_ALLOWLISTS)
 
 
 def _utc_now() -> str:
@@ -154,7 +158,7 @@ def _write_json(payload: dict[str, Any], path: Path) -> Path:
 
 
 def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
-    """Infer bridge evidence tier from normalized crosswalk provenance columns."""
+    """Infer bridge tier, rejecting any partial or mixed raw-WRDS provenance."""
     if not crosswalk_path.exists():
         return {
             "bridge_source": "none",
@@ -162,56 +166,82 @@ def _bridge_evidence_from_crosswalk(crosswalk_path: Path) -> dict[str, Any]:
             "bridge_provenance": {"source_values": [], "match_methods": []},
         }
 
-    header = pd.read_csv(crosswalk_path, nrows=0)
-    available = [col for col in BRIDGE_PROVENANCE_COLUMNS if col in header.columns]
+    try:
+        sample = pd.read_csv(crosswalk_path, nrows=1)
+    except pd.errors.EmptyDataError:
+        raise ValueError("crosswalk is empty") from None
+    if sample.empty:
+        raise ValueError("crosswalk is empty")
+    available = [col for col in BRIDGE_PROVENANCE_COLUMNS if col in sample.columns]
     if not available:
         return {
             "bridge_source": "external_crosswalk_unknown_provenance",
             "validation_tier": "candidate_external",
             "bridge_provenance": {"source_values": [], "match_methods": []},
         }
-
     frame = pd.read_csv(crosswalk_path, usecols=available, dtype=str).fillna("")
-    source_values = (
-        sorted(value for value in frame["source"].str.strip().unique() if value)
-        if "source" in frame
-        else []
-    )
-    match_methods = (
-        sorted(value for value in frame["match_method"].str.strip().unique() if value)
-        if "match_method" in frame
-        else []
-    )
-    evidence_text = frame.apply(lambda row: " ".join(str(value) for value in row), axis=1).str.lower()
-    has_wrds = evidence_text.str.contains(r"\bwrds\b|wrds_", regex=True).any()
-    has_raw = evidence_text.str.contains(
-        r"raw_cik_gvkey|raw_primary|wrds_sec_analytics_cik_gvkey",
-        regex=True,
-    ).any()
+    for column in BRIDGE_PROVENANCE_COLUMNS:
+        if column not in frame:
+            frame[column] = ""
 
-    if has_wrds:
-        all_wrds_sec_analytics = bool(source_values) and all(
-            "wrds_sec_analytics_cik_gvkey" in value for value in source_values
+    def tokens(value: object) -> list[str]:
+        return str(value).split(";")
+
+    def values(column: str) -> list[str]:
+        return sorted({token for value in frame[column] for token in tokens(value) if token})
+
+    provenance = {
+        "source_values": values("source"),
+        "source_version_values": values("source_version"),
+        "match_methods": values("match_method"),
+        "match_score_values": values("match_score"),
+        "bridge_priority_values": values("bridge_priority"),
+        "bridge_origin_values": values("bridge_origin"),
+        "raw_link_source_values": values("raw_link_sources"),
+        "raw_link_description_values": values("raw_link_descs"),
+    }
+    raw_claim = any(
+        (
+            "wrds" in str(row["source"]).lower()
+            or "raw" in str(row["source"]).lower()
+            or "wrds" in str(row["source_version"]).lower()
+            or "raw" in str(row["source_version"]).lower()
+            or "wrds" in str(row["match_method"]).lower()
+            or "raw" in str(row["match_method"]).lower()
+            or "raw" in str(row["bridge_priority"]).lower()
+            or "raw" in str(row["bridge_origin"]).lower()
+            or any(
+                token in WRDS_PROVENANCE_TOKEN_ALLOWLISTS["raw_link_sources"]
+                for token in tokens(row["source"])
+            )
+            or bool(str(row["raw_link_sources"]).strip())
+            or bool(str(row["raw_link_descs"]).strip())
         )
-        if all_wrds_sec_analytics:
-            bridge_source = "wrds_sec_analytics_cik_gvkey_link"
-        else:
-            bridge_source = source_values[0] if len(source_values) == 1 else "wrds_compustat_crosswalk"
-        validation_tier = "wrds_validated"
-    elif has_raw:
-        bridge_source = "wrds_sec_analytics_cik_gvkey_link"
-        validation_tier = "wrds_validated"
-    else:
+        for _, row in frame.iterrows()
+    )
+
+    if not raw_claim:
+        source_values = provenance["source_values"]
         bridge_source = source_values[0] if len(source_values) == 1 else "external_crosswalk"
-        validation_tier = "candidate_external"
+        return {
+            "bridge_source": bridge_source,
+            "validation_tier": "candidate_external",
+            "bridge_provenance": provenance,
+        }
+
+    for index, row in frame.iterrows():
+        for column, allowed in WRDS_PROVENANCE_TOKEN_ALLOWLISTS.items():
+            row_tokens = tokens(row[column])
+            if any(not token or token not in allowed for token in row_tokens):
+                raise ValueError(
+                    "WRDS bridge provenance failed closed at "
+                    f"row {index}, field {column}: {row[column]!r}"
+                )
 
     return {
-        "bridge_source": bridge_source,
-        "validation_tier": validation_tier,
-        "bridge_provenance": {
-            "source_values": source_values,
-            "match_methods": match_methods,
-        },
+        "bridge_source": "wrds_sec_analytics_cik_gvkey_link",
+        "validation_tier": WRDS_VALIDATED_TIER,
+        "bridge_provenance": provenance,
     }
 
 
@@ -1219,11 +1249,17 @@ def _write_summary(
         "## Claim Template",
         "",
     ]
-    if best.empty:
+    if best.empty and validation_tier == "wrds_validated":
         lines.append(
-            "The matched candidate-bridge sample is available, but ranking metrics did not meet reporting thresholds."
+            "The WRDS-validated bridge sample is available, but ranking metrics did not meet "
+            "reporting thresholds."
         )
-    else:
+    elif best.empty:
+        lines.append(
+            "The matched candidate-bridge sample is available for diagnostic use, but the "
+            "construct claim is deferred and ranking metrics did not meet reporting thresholds."
+        )
+    elif validation_tier == "wrds_validated":
         row = best.iloc[0]
         lines.append(
             f"In the {matched_sample_label}, detected-misstatement benchmark "
@@ -1238,6 +1274,13 @@ def _write_summary(
             "public cascade captures a broader set of review-and-correction events "
             "than detected-misstatement benchmark positives."
         )
+    else:
+        row = best.iloc[0]
+        lines.append(
+            f"In the {matched_sample_label}, the best top-decile lift is "
+            f"{row['top_decile_lift']:.2f}. This is diagnostic candidate-bridge evidence only; "
+            "the related-construct claim is deferred pending exact raw bridge validation."
+        )
     lines.extend(
         [
             "",
@@ -1249,7 +1292,7 @@ def _write_summary(
     if validation_tier == "wrds_validated":
         lines.append("- Bridge tier is inferred from WRDS/Compustat provenance in the normalized crosswalk.")
     else:
-        lines.append("- Bridge tier is inferred from crosswalk provenance; non-WRDS tiers remain candidate evidence.")
+        lines.append("- Non-WRDS bridge rows remain diagnostic, and the construct claim is deferred.")
     (out_dir / "construct_overlap_summary.md").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )

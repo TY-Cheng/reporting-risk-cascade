@@ -480,7 +480,10 @@ def test_claim_maturity_is_controlled_by_component_status() -> None:
     maturity = _claim_maturity(
         {
             "public_cascade": {"status": "complete"},
-            "construct_overlap": {"run_status": "complete"},
+            "construct_overlap": {
+                "run_status": "complete",
+                "validation_tier": "wrds_validated",
+            },
         }
     )
 
@@ -490,6 +493,23 @@ def test_claim_maturity_is_controlled_by_component_status() -> None:
         "construct_alignment": "supporting",
         "opacity_dml": "diagnostic",
     }
+
+
+@pytest.mark.parametrize("validation_tier", ["candidate_external", "none", None])
+def test_claim_maturity_defers_complete_construct_without_wrds_validation(
+    validation_tier: str | None,
+) -> None:
+    maturity = _claim_maturity(
+        {
+            "public_cascade": {"status": "complete"},
+            "construct_overlap": {
+                "run_status": "complete",
+                "validation_tier": validation_tier,
+            },
+        }
+    )
+
+    assert maturity["construct_alignment"] == "deferred"
 
 
 def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(

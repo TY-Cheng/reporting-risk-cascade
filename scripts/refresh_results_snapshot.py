@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src import ARTIFACTS_DIR, DOCS_DIR, PROJECT_ROOT  # noqa: E402
+from src.linkage import WRDS_VALIDATED_TIER  # noqa: E402
 
 
 CANONICAL_PUBLIC_DATA_AS_OF_DATE = "2026-07-06"
@@ -192,6 +193,183 @@ TABLE_EXPLANATIONS = {
 }
 
 
+def _bridge_language(
+    manifest: dict[str, Any],
+    construct_manifest: dict[str, Any],
+) -> dict[str, str]:
+    component = manifest.get("components", {}).get("construct_overlap", {})
+    component_tier = component.get("validation_tier") if isinstance(component, dict) else None
+    artifact_tier = construct_manifest.get("validation_tier")
+    tiers_match = component_tier == artifact_tier
+    tier = str(artifact_tier or component_tier or "none")
+    if not tiers_match:
+        tier = f"component={component_tier or 'none'}; manifest={artifact_tier or 'none'}"
+    if tiers_match and artifact_tier == WRDS_VALIDATED_TIER:
+        return {
+            "tier": tier,
+            "status": "validated",
+            "overview_data": ("a raw-only `gvkey-CIK-year` bridge for overlap validation"),
+            "overview_boundary": (
+                f"Construct overlap is `{tier}` using the confirmed WRDS SEC Analytics "
+                "Suite CIK-GVKEY bridge."
+            ),
+            "headline_guidance": (
+                "Headline claims should describe filing-origin measurement, prevalence-aware "
+                "ranking, and construct overlap within the stated bridge tier."
+            ),
+            "evidence_map_label": (
+                '    B["Experiment 6<br/>raw-only bridge and construct overlap"]'
+            ),
+            "reading_support": (
+                "The WRDS-validated bridge shows related-but-non-identical overlap, "
+                "especially in severe public correction states."
+            ),
+            "reading_boundary": (
+                "Read Item 4.02 lift with absolute precision/FDR and the broader "
+                "label-contingency matrix."
+            ),
+            "experiment_intro": (
+                "This experiment is the integrated-paper gate. The current bridge is the "
+                "confirmed WRDS SEC Analytics Suite CIK-GVKEY link export, used as a "
+                "raw-only `gvkey-CIK-year` bridge."
+            ),
+            "contingency": (
+                "The contingency matrix is the broader construct-validity evidence. Comment "
+                "threads are broad public scrutiny, amendments show stronger correction/friction "
+                "alignment, and Item 4.02 is a rare severe-tail state; the integrated claim rests "
+                "on this typed pattern plus the bridge gate, not on Item 4.02 alone."
+            ),
+            "experiment_close": (
+                "Overlap results determine whether the benchmark and public cascade are related "
+                "enough for an integrated construct argument. The evidence can support a "
+                "related-but-non-identical interpretation only when bridge coverage, "
+                "multiplicity, reciprocal alignment, and event-time concentration are all "
+                "reported."
+            ),
+            "discussion_answer": (
+                f"`{tier}` bridge evidence supports the integrated benchmark-to-public "
+                "construct-overlap interpretation."
+            ),
+            "discussion_relation": (
+                "- Public labels and detected-misstatement benchmark labels are related but "
+                "non-identical constructs."
+            ),
+            "discussion_reciprocal": (
+                "- Public-cascade scores can rank benchmark positives in the matched overlap; "
+                "detected-misstatement scores can also rank severe public correction labels."
+            ),
+            "generalizability": (
+                f"Construct-overlap findings generalize only to the covered `{tier}` bridge "
+                "sample."
+            ),
+            "claim_text": (
+                "Public and detected-misstatement constructs are related but non-identical."
+            ),
+            "claim_evidence": (
+                "WRDS bridge coverage, generated Table 9, Figure 5, and contingency matrix."
+            ),
+        }
+    return {
+        "tier": tier,
+        "status": "diagnostic",
+        "overview_data": (f"a `{tier}` crosswalk retained for diagnostic overlap analysis only"),
+        "overview_boundary": (
+            f"Construct overlap tier is `{tier}`; the evidence remains diagnostic and the "
+            "cross-construct claim is deferred."
+        ),
+        "headline_guidance": (
+            "Headline claims should describe filing-origin measurement and prevalence-aware "
+            "ranking; construct-overlap headline claims are deferred, and candidate bridge "
+            "rows remain diagnostic."
+        ),
+        "evidence_map_label": (
+            '    B["Experiment 6<br/>candidate bridge diagnostics; claim deferred"]'
+        ),
+        "reading_support": (
+            f"The `{tier}` crosswalk yields diagnostic overlap rows; no cross-construct claim "
+            "matures from them."
+        ),
+        "reading_boundary": (
+            "Treat all lift, precision/FDR, and contingency rows as diagnostic; the manuscript "
+            "claim is deferred pending exact raw bridge validation."
+        ),
+        "experiment_intro": (
+            f"This experiment reports `{tier}` bridge diagnostics. It does not mature a "
+            "cross-construct manuscript claim, which remains deferred pending exact raw bridge "
+            "validation."
+        ),
+        "contingency": (
+            "The contingency matrix remains diagnostic. Its label patterns do not mature a "
+            "cross-construct claim while the bridge tier is unvalidated."
+        ),
+        "experiment_close": (
+            "Overlap rows are retained as diagnostic evidence only. Bridge coverage, "
+            "multiplicity, reciprocal alignment, and event-time concentration cannot mature a "
+            "cross-construct claim until the exact raw bridge contract is validated."
+        ),
+        "discussion_answer": (
+            f"`{tier}` bridge evidence is diagnostic; the benchmark-to-public construct claim "
+            "is deferred."
+        ),
+        "discussion_relation": (
+            "- Candidate bridge rows show diagnostic public/benchmark patterns; a "
+            "related-construct claim is deferred."
+        ),
+        "discussion_reciprocal": (
+            "- Reciprocal score-alignment rows remain diagnostic and do not mature a "
+            "cross-construct claim."
+        ),
+        "generalizability": (
+            f"The `{tier}` overlap rows are diagnostic only; cross-construct generalization is "
+            "deferred."
+        ),
+        "claim_text": (
+            "Candidate bridge rows provide diagnostic public/benchmark overlap patterns."
+        ),
+        "claim_evidence": (
+            "Candidate bridge coverage, generated Table 9, Figure 5, and contingency matrix."
+        ),
+    }
+
+
+def _bridge_artifact_explanations(
+    bridge_language: dict[str, str],
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
+    figures = {key: dict(value) for key, value in FIGURE_EXPLANATIONS.items()}
+    tables = {key: dict(value) for key, value in TABLE_EXPLANATIONS.items()}
+    if bridge_language["status"] == "validated":
+        return figures, tables
+    figures["figure_05_construct_overlap_lift"] = {
+        "title": "Construct-overlap lift",
+        "claim": "Candidate bridge lift rows are diagnostic; the construct claim is deferred.",
+        "evidence": (
+            "Figure 5 displays the two declared alignment rows alongside precision/FDR context."
+        ),
+        "boundary": "The rows cannot support a cross-construct manuscript claim.",
+    }
+    tables["table_08_bridge_coverage"] = {
+        "claim": "Candidate bridge coverage is diagnostic; the construct claim is deferred.",
+        "evidence": "Row, firm, and positive-row coverage describe the candidate crosswalk.",
+        "boundary": "Coverage does not validate bridge provenance or construct overlap.",
+    }
+    tables["table_09_construct_alignment"] = {
+        "claim": "Alignment rows remain diagnostic under the candidate bridge tier.",
+        "evidence": "Table 9 reports lift, precision, FDR, and bootstrap intervals.",
+        "boundary": "No cross-construct manuscript claim matures from these rows.",
+    }
+    tables["table_15_bridge_overlap_matrix"] = {
+        "claim": "The candidate overlap matrix is diagnostic; the construct claim is deferred.",
+        "evidence": "The matrix reports benchmark/public rates and co-occurrence by label.",
+        "boundary": "The patterns do not validate provenance or establish label equivalence.",
+    }
+    tables["table_16_bridge_sample_boundaries"] = {
+        "claim": "Candidate bridge sample boundaries are explicit and diagnostic.",
+        "evidence": "Rows and positives are shown across covered, ambiguous, and dropped groups.",
+        "boundary": "Cross-construct generalization is deferred.",
+    }
+    return figures, tables
+
+
 def _resolve_repo_path(path: str | Path) -> Path:
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
@@ -337,14 +515,32 @@ def _source_role_rows(provenance: dict[str, Any]) -> list[list[str]]:
     return rows
 
 
-def _claim_maturity_rows(manifest: dict[str, Any]) -> list[list[str]]:
+def _claim_maturity_rows(
+    manifest: dict[str, Any],
+    bridge_language: dict[str, str] | None = None,
+) -> list[list[str]]:
     maturity = manifest.get("claim_maturity", {})
     if not isinstance(maturity, dict):
         return []
-    return [[str(claim), _code(status)] for claim, status in maturity.items()]
+    return [
+        [
+            str(claim),
+            _code(
+                "deferred"
+                if claim == "construct_alignment"
+                and bridge_language
+                and bridge_language["status"] != "validated"
+                else status
+            ),
+        ]
+        for claim, status in maturity.items()
+    ]
 
 
-def _canonical_status(manifest: dict[str, Any]) -> tuple[str, list[str]]:
+def _canonical_status(
+    manifest: dict[str, Any],
+    construct_manifest: dict[str, Any],
+) -> tuple[str, list[str]]:
     provenance = dict(manifest.get("provenance", {}))
     public_lake = dict(manifest.get("public_lake_provenance", {}))
     study_commit = manifest.get("repo_commit")
@@ -363,6 +559,17 @@ def _canonical_status(manifest: dict[str, Any]) -> tuple[str, list[str]]:
         failures.append("identity: study and provenance commits differ")
     if study_commit != public_lake.get("commit_sha"):
         failures.append("identity: study and public-lake commits differ")
+    construct_component = manifest.get("components", {}).get("construct_overlap", {})
+    component_tier = (
+        construct_component.get("validation_tier")
+        if isinstance(construct_component, dict)
+        else None
+    )
+    manifest_tier = construct_manifest.get("validation_tier")
+    if component_tier != WRDS_VALIDATED_TIER:
+        failures.append("bridge: construct component validation tier is not `wrds_validated`")
+    if manifest_tier != WRDS_VALIDATED_TIER:
+        failures.append("bridge: construct manifest validation tier is not `wrds_validated`")
     return ("CANONICAL" if not failures else "NON-CANONICAL", failures)
 
 
@@ -951,7 +1158,11 @@ def _ars_explanation_block(explanation: dict[str, str]) -> list[str]:
     ]
 
 
-def _inline_figure_gallery(package_dir: Path) -> list[str]:
+def _inline_figure_gallery(
+    package_dir: Path,
+    explanations: dict[str, dict[str, str]] | None = None,
+) -> list[str]:
+    explanations = explanations or FIGURE_EXPLANATIONS
     figure_paths = _copy_inline_figures(package_dir)
     manifest = _read_json(package_dir / "manifest.json")
     figure_keys = sorted((manifest.get("figures") or {}).keys()) or sorted(figure_paths)
@@ -963,7 +1174,7 @@ def _inline_figure_gallery(package_dir: Path) -> list[str]:
         "",
     ]
     for key in figure_keys:
-        explanation = FIGURE_EXPLANATIONS.get(
+        explanation = explanations.get(
             key,
             {
                 "title": key.replace("_", " ").title(),
@@ -993,7 +1204,11 @@ def _inline_figure_gallery(package_dir: Path) -> list[str]:
     return lines
 
 
-def _inline_table_gallery(package_dir: Path) -> list[str]:
+def _inline_table_gallery(
+    package_dir: Path,
+    explanations: dict[str, dict[str, str]] | None = None,
+) -> list[str]:
+    explanations = explanations or TABLE_EXPLANATIONS
     manifest = _read_json(package_dir / "manifest.json")
     table_keys = sorted((manifest.get("tables") or {}).keys())
     if not table_keys:
@@ -1008,7 +1223,7 @@ def _inline_table_gallery(package_dir: Path) -> list[str]:
     ]
     for key in table_keys:
         md_path = package_dir / "tables" / f"{key}.md"
-        explanation = TABLE_EXPLANATIONS.get(
+        explanation = explanations.get(
             key,
             {
                 "claim": "This table is part of the generated manuscript evidence package.",
@@ -1199,15 +1414,22 @@ def build_snapshot(
 
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     study_rel = _rel(study_dir)
-    validation_tier = construct_manifest.get("validation_tier") or "not available"
+    bridge_language = _bridge_language(manifest, construct_manifest)
+    validation_tier = bridge_language["tier"]
+    figure_explanations, table_explanations = _bridge_artifact_explanations(bridge_language)
     bridge_status = bridge_summary.get("status") or manifest.get("bridge", {}).get("status") or ""
     peer_status = manifest.get("runtime", {}).get("peer_comparison_mode") or ""
     provenance = dict(manifest.get("provenance") or {})
     public_lake = dict(manifest.get("public_lake_provenance") or {})
     wrds = dict(provenance.get("wrds_export_metadata") or {})
     form_ap = dict(public_lake.get("form_ap") or {})
-    canonical_status, canonical_failures = _canonical_status(manifest)
+    canonical_status, canonical_failures = _canonical_status(manifest, construct_manifest)
     claim_maturity = dict(manifest.get("claim_maturity") or {})
+    construct_claim_maturity = (
+        claim_maturity.get("construct_alignment", "deferred")
+        if bridge_language["status"] == "validated"
+        else "deferred"
+    )
 
     lines = [
         "---",
@@ -1234,9 +1456,9 @@ def build_snapshot(
         "traced to concrete files.",
         "",
         "When using this page for manuscript prose, read it as an interpretation "
-        "guide rather than a model leaderboard. Headline claims should describe "
-        "filing-origin measurement, prevalence-aware ranking, and construct overlap "
-        "within the stated bridge tier. Single best windows, maximum PR-AUC rows, "
+        "guide rather than a model leaderboard.",
+        bridge_language["headline_guidance"],
+        "Single best windows, maximum PR-AUC rows, "
         "and severe-tail lifts are diagnostics unless the manuscript gives a "
         "pre-specified reason to elevate them.",
         "",
@@ -1249,8 +1471,9 @@ def build_snapshot(
         "",
         "- **Data.** The workflow combines the `gvkey x data_year` "
         "detected-misstatement benchmark, the public SEC/PCAOB lake, the gold "
-        "`issuer_origin_panel` and `filing_origin_panel`, and a raw-only "
-        "`gvkey-CIK-year` bridge for overlap validation.",
+        "`issuer_origin_panel` and `filing_origin_panel`, and "
+        + bridge_language["overview_data"]
+        + ".",
         "",
         "- **Models.** The core public cascade uses XGBoost over metadata, XBRL, "
         "auditor, oversight, visibility/history, and all-feature sets. "
@@ -1267,8 +1490,7 @@ def build_snapshot(
         "Use this as a descriptive configuration diagnostic, not as a model-selection "
         "headline.",
         "",
-        f"- **Bridge boundary.** Construct overlap is `{validation_tier}` using the "
-        "confirmed WRDS SEC Analytics Suite CIK-GVKEY bridge.",
+        "- **Bridge boundary.** " + bridge_language["overview_boundary"],
         "",
         "- **Sellable claim.** The strongest current framing is a measurement-and-ranking "
         "paper on filing-origin public reporting-risk states. It does not support causal "
@@ -1334,7 +1556,10 @@ def build_snapshot(
         "",
         "### Claim maturity",
         "",
-        _table(["Claim", "Status"], _claim_maturity_rows(manifest)),
+        _table(
+            ["Claim", "Status"],
+            _claim_maturity_rows(manifest, bridge_language),
+        ),
         "",
         "### Evidence Map",
         "",
@@ -1343,7 +1568,7 @@ def build_snapshot(
         '    L["Experiment 1-2<br/>benchmark timing and drift"]',
         '    O["Experiment 3<br/>opacity and public labels"]',
         '    P["Experiment 4-5<br/>public cascade construction and prediction"]',
-        '    B["Experiment 6<br/>raw-only bridge and construct overlap"]',
+        bridge_language["evidence_map_label"],
         '    D["Discussion<br/>claim boundary and manuscript tables/figures"]',
         "    L --> D",
         "    O --> D",
@@ -1373,8 +1598,8 @@ def build_snapshot(
                 ],
                 [
                     "Construct-overlap tables and Figure 5",
-                    "The WRDS-validated bridge shows related-but-non-identical overlap, especially in severe public correction states.",
-                    "Read Item 4.02 lift with absolute precision/FDR and the broader label-contingency matrix.",
+                    bridge_language["reading_support"],
+                    bridge_language["reading_boundary"],
                 ],
                 [
                     "Selection profile and DML opacity diagnostics",
@@ -1675,9 +1900,7 @@ def build_snapshot(
         "",
         "## Results for Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap",
         "",
-        "This experiment is the integrated-paper gate. The current bridge is the "
-        "confirmed WRDS SEC Analytics Suite CIK-GVKEY link export, used as a "
-        "raw-only `gvkey-CIK-year` bridge.",
+        bridge_language["experiment_intro"],
         "",
         "### Bridge Coverage",
         "",
@@ -1753,10 +1976,7 @@ def build_snapshot(
             _label_contingency_rows(study_dir),
         ),
         "",
-        "The contingency matrix is the broader construct-validity evidence. Comment "
-        "threads are broad public scrutiny, amendments show stronger correction/friction "
-        "alignment, and Item 4.02 is a rare severe-tail state; the integrated claim "
-        "rests on this typed pattern plus the bridge gate, not on Item 4.02 alone.",
+        bridge_language["contingency"],
         "",
         "### Aggregation Sensitivity",
         "",
@@ -1830,11 +2050,7 @@ def build_snapshot(
         "",
         "### Interpretation",
         "",
-        "Overlap results determine whether the benchmark and public cascade are related "
-        "enough for an integrated construct argument. The evidence can support a "
-        "related-but-non-identical interpretation only when bridge coverage, "
-        "multiplicity, reciprocal alignment, and event-time concentration are all "
-        "reported.",
+        bridge_language["experiment_close"],
         "",
         "## Discussion",
         "",
@@ -1843,14 +2059,11 @@ def build_snapshot(
         "- Public task results support a prevalence-aware ranking claim for three "
         "public cascade labels, but calibration diagnostics keep the interpretation "
         "to ranking and prioritization.",
-        "- Public labels and detected-misstatement benchmark labels are related but "
-        "non-identical constructs.",
-        "- Public-cascade scores can rank benchmark positives in the matched overlap; "
-        "detected-misstatement scores can also rank severe public correction labels.",
+        bridge_language["discussion_relation"],
+        bridge_language["discussion_reciprocal"],
         "- Selection-profile rows show that public comment-thread outcomes are "
         "partly public-scrutiny states, not a clean issuer-risk-only label.",
-        f"- `{validation_tier}` bridge evidence supports the integrated "
-        "benchmark-to-public construct-overlap interpretation.",
+        "- " + bridge_language["discussion_answer"],
         "",
         "### Comparison with prior literature",
         "",
@@ -1874,8 +2087,7 @@ def build_snapshot(
         "### Generalizability",
         "",
         "Public-cascade findings generalize to the documented fiscal-year, filing-origin, "
-        "and observability frame. Construct-overlap findings generalize only to the covered "
-        f"`{validation_tier}` bridge sample.",
+        "and observability frame. " + bridge_language["generalizability"],
         "",
         "### Limitations and future work",
         "",
@@ -1908,9 +2120,9 @@ def build_snapshot(
                     "Information-set evidence, not mechanism or XBRL dominance.",
                 ],
                 [
-                    "Public and detected-misstatement constructs are related but non-identical.",
-                    "WRDS bridge coverage, generated Table 9, Figure 5, and contingency matrix.",
-                    _code(claim_maturity.get("construct_alignment", "deferred")),
+                    bridge_language["claim_text"],
+                    bridge_language["claim_evidence"],
+                    _code(construct_claim_maturity),
                     "Conditional on bridge tier and covered sample.",
                 ],
                 [
@@ -1946,9 +2158,9 @@ def build_snapshot(
         "each display is paired with a claim, the evidence it contributes, and the "
         "boundary that prevents over-interpretation.",
         "",
-        *_inline_figure_gallery(manuscript_package),
+        *_inline_figure_gallery(manuscript_package, figure_explanations),
         "",
-        *_inline_table_gallery(manuscript_package),
+        *_inline_table_gallery(manuscript_package, table_explanations),
         "",
         "### Manuscript Package Tables and Figures",
         "",

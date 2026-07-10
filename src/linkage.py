@@ -39,7 +39,32 @@ LINKAGE_OUTPUT_COLUMNS = (
 DEFAULT_LINKAGE_SUBDIR = "raw_only"
 DEFAULT_RAW_CIK_GVKEY_LINK_PATH = DATA_DIR / "raw" / "CIK-GVKEY Link Table.csv"
 DEFAULT_LINKAGE_OUT_DIR = DATA_DIR / "linkage" / DEFAULT_LINKAGE_SUBDIR
-VALID_LINK_DESC = "Valid CIK-GVKEY Link"
+WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE = {
+    "CRSP/Compustat Merged": "wrds_sec_analytics_cik_gvkey:crsp_compustat_merged",
+    "Compustat Company": "wrds_sec_analytics_cik_gvkey:compustat_company",
+    "Compustat Security": "wrds_sec_analytics_cik_gvkey:compustat_security",
+    "Capital IQ": "wrds_sec_analytics_cik_gvkey:capital_iq",
+}
+WRDS_RAW_SOURCES = frozenset(WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE)
+WRDS_NORMALIZED_SOURCES = frozenset(WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE.values())
+WRDS_SOURCE_VERSION = "WRDS SEC Analytics Suite / CIK-GVKEY Link Table.csv"
+WRDS_MATCH_METHOD = "wrds_sec_analytics_cik_gvkey_intersection"
+WRDS_BRIDGE_PRIORITY = "raw_primary"
+WRDS_BRIDGE_ORIGIN = "raw"
+WRDS_MATCH_SCORE = "1.0"
+WRDS_RAW_LINK_DESCRIPTION = "Valid CIK-GVKEY Link"
+WRDS_VALIDATED_TIER = "wrds_validated"
+WRDS_PROVENANCE_TOKEN_ALLOWLISTS = {
+    "source": WRDS_NORMALIZED_SOURCES,
+    "source_version": frozenset({WRDS_SOURCE_VERSION}),
+    "match_method": frozenset({WRDS_MATCH_METHOD}),
+    "match_score": frozenset({WRDS_MATCH_SCORE}),
+    "bridge_priority": frozenset({WRDS_BRIDGE_PRIORITY}),
+    "bridge_origin": frozenset({WRDS_BRIDGE_ORIGIN}),
+    "raw_link_sources": WRDS_RAW_SOURCES,
+    "raw_link_descs": frozenset({WRDS_RAW_LINK_DESCRIPTION}),
+}
+VALID_LINK_DESC = WRDS_RAW_LINK_DESCRIPTION
 
 
 @dataclass(frozen=True)
@@ -204,12 +229,6 @@ def _raw_key_frame(raw_data: pd.DataFrame | None) -> pd.DataFrame:
     ]].drop_duplicates()
 
 
-def _source_slug(value: object) -> str:
-    text = str(value or "unknown").strip().lower()
-    text = text.replace("&", "and").replace("/", "_").replace(" ", "_")
-    return "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in text)
-
-
 def _join_unique(values: pd.Series) -> str:
     parts = sorted(str(value).strip() for value in values if str(value).strip())
     return ";".join(dict.fromkeys(parts))
@@ -271,7 +290,9 @@ def normalize_raw_cik_gvkey_links(
         years = _years_from_dates(*span, raw_year_set=raw_years)
         raw_source = str(row.get("source", "") or "").strip()
         raw_desc = str(row.get("link_desc", "") or "").strip()
-        source = f"wrds_sec_analytics_cik_gvkey:{_source_slug(raw_source)}"
+        source = WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE.get(raw_source)
+        if source is None:
+            raise ValueError(f"unsupported raw CIK-GVKEY source: {raw_source!r}")
         for year in years:
             rows.append(
                 {
@@ -279,12 +300,16 @@ def normalize_raw_cik_gvkey_links(
                     "data_year": int(year),
                     "issuer_cik": issuer_cik,
                     "source": source,
-                    "source_version": "WRDS SEC Analytics Suite / CIK-GVKEY Link Table.csv",
+                    "source_version": WRDS_SOURCE_VERSION,
                     "extracted_at": extracted_at,
-                    "match_method": f"wrds_sec_analytics_cik_gvkey_{date_rule}",
-                    "match_score": "1.0",
-                    "bridge_priority": "raw_primary",
-                    "bridge_origin": "raw",
+                    "match_method": (
+                        WRDS_MATCH_METHOD
+                        if date_rule == "intersection"
+                        else f"wrds_sec_analytics_cik_gvkey_{date_rule}"
+                    ),
+                    "match_score": WRDS_MATCH_SCORE,
+                    "bridge_priority": WRDS_BRIDGE_PRIORITY,
+                    "bridge_origin": WRDS_BRIDGE_ORIGIN,
                     "raw_link_sources": raw_source,
                     "raw_link_descs": raw_desc,
                 }

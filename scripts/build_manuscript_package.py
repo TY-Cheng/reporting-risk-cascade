@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src import ARTIFACTS_DIR, LAKE_GOLD_DIR, PROJECT_ROOT  # noqa: E402
+from src.linkage import WRDS_VALIDATED_TIER  # noqa: E402
 
 
 REQUIRED_ARTIFACTS = [
@@ -51,17 +52,6 @@ ANNUAL_INTERVAL_NOTE = (
     "Rolling and expanding training windows overlap, so the intervals describe "
     "evaluation-period dispersion rather than independent sampling uncertainty, "
     "superpopulation confidence intervals, or causal inference uncertainty."
-)
-CONSTRUCT_LIFT_NOTE = (
-    "Lift bootstrap intervals are row-level percentile bootstrap intervals "
-    "from the bridge-gated artifacts, not annual fold-dispersion intervals. "
-    "Bridge tier is wrds_validated, and displayed rows are restricted to "
-    "high-confidence bridge rows. Top-10% precision and FDR report the absolute "
-    "base-rate burden behind lift; the implicit bridge-sample base rate can differ "
-    "from the full public-cascade task prevalence because of the high-confidence "
-    "bridge restriction. These Item 4.02 rows are severe-tail "
-    "diagnostics within the broader construct-validation case; they support "
-    "related-construct enrichment rather than label equivalence."
 )
 PEER_TRANSFER_NOTE = (
     ANNUAL_INTERVAL_NOTE
@@ -121,23 +111,6 @@ TASK_FEATURE_NOTE = (
     "training windows. They clarify the aggregation behind the feature-family "
     "summary and should be read as information-set evidence, not causal decomposition."
 )
-BRIDGE_OVERLAP_NOTE = (
-    "Bridge_Rows are bridge-gated label-overlap diagnostics. The table reports "
-    "absolute public and benchmark rates and lift for each public label by bridge tier. These "
-    "descriptive rates broaden construct-validation evidence beyond the sparse "
-    "Item 4.02 severe-tail ranking rows; they do not imply label equivalence."
-)
-BRIDGE_COVERAGE_NOTE = (
-    "These rates describe raw CIK-GVKEY bridge availability. Construct-overlap "
-    "claims use the narrower high-confidence sample reported in the bridge-overlap "
-    "sample-boundaries appendix table."
-)
-BRIDGE_BOUNDARY_NOTE = (
-    "This table reports the construct-overlap sample boundary after bridge accounting, "
-    "not the raw CIK-GVKEY coverage rate reported in the bridge-coverage table. "
-    "Construct-overlap claims are bounded to high-confidence rows. Dropped rows define "
-    "the generalizability boundary of the overlap exercise."
-)
 SELECTION_PROFILE_NOTE = (
     "Issuer_Years are descriptive strata from the existing public issuer-origin panel. "
     "They show how public-label rates vary with filing visibility, history, and "
@@ -152,6 +125,93 @@ PUBLIC_ATTRITION_NOTE = (
     "branch from observable_365_day_horizon and therefore compare with that common "
     "observable parent rather than with one another."
 )
+
+
+def _bridge_language(
+    manifest: dict[str, Any],
+    construct_manifest: dict[str, Any],
+) -> dict[str, str]:
+    component = manifest.get("components", {}).get("construct_overlap", {})
+    component_tier = component.get("validation_tier") if isinstance(component, dict) else None
+    artifact_tier = construct_manifest.get("validation_tier")
+    tiers_match = component_tier == artifact_tier
+    tier = str(artifact_tier or component_tier or "none")
+    if not tiers_match:
+        tier = f"component={component_tier or 'none'}; manifest={artifact_tier or 'none'}"
+    validated = tiers_match and artifact_tier == WRDS_VALIDATED_TIER
+    if validated:
+        return {
+            "tier": tier,
+            "status": "validated",
+            "component_role": "Bridge-gated related-construct evidence",
+            "boundary_interpretation": (
+                "Rows used for headline bridge-gated construct-alignment statistics"
+            ),
+            "construct_lift_note": (
+                "Lift bootstrap intervals are row-level percentile bootstrap intervals "
+                "from the bridge-gated artifacts, not annual fold-dispersion intervals. "
+                "Bridge tier is wrds_validated, and displayed rows are restricted to "
+                "high-confidence bridge rows. Top-10% precision and FDR report the absolute "
+                "base-rate burden behind lift; the implicit bridge-sample base rate can differ "
+                "from the full public-cascade task prevalence because of the high-confidence "
+                "bridge restriction. These Item 4.02 rows are severe-tail diagnostics within "
+                "the broader construct-validation case; they support related-construct "
+                "enrichment rather than label equivalence."
+            ),
+            "coverage_note": (
+                "These rates describe raw CIK-GVKEY bridge availability. Construct-overlap "
+                "claims use the narrower high-confidence sample reported in the bridge-overlap "
+                "sample-boundaries appendix table."
+            ),
+            "overlap_note": (
+                "Bridge_Rows are bridge-gated label-overlap diagnostics. The table reports "
+                "absolute public and benchmark rates and lift for each public label by bridge "
+                "tier. These descriptive rates broaden construct-validation evidence beyond "
+                "the sparse Item 4.02 severe-tail ranking rows; they do not imply label "
+                "equivalence."
+            ),
+            "boundary_note": (
+                "This table reports the construct-overlap sample boundary after bridge "
+                "accounting, not the raw CIK-GVKEY coverage rate reported in the bridge-coverage "
+                "table. Construct-overlap claims are bounded to high-confidence rows. Dropped "
+                "rows define the generalizability boundary of the overlap exercise."
+            ),
+            "narrative": (
+                "The WRDS-validated bridge shows that public-cascade scores and detected-"
+                "misstatement benchmark labels are related but non-identical. This supports "
+                "manuscript-grade integrated overlap claims while preserving the construct "
+                "boundary."
+            ),
+        }
+    return {
+        "tier": tier,
+        "status": "diagnostic",
+        "component_role": "Diagnostic bridge-overlap evidence; construct claim deferred",
+        "boundary_interpretation": (
+            "Rows retained for diagnostic alignment only; construct claim deferred"
+        ),
+        "construct_lift_note": (
+            f"Bridge tier is {tier}; displayed lift rows remain diagnostic and the "
+            "construct-alignment claim is deferred. Top-10% precision, FDR, and row-level "
+            "bootstrap intervals describe the candidate bridge sample only."
+        ),
+        "coverage_note": (
+            f"These rates describe {tier} bridge availability. Any construct-overlap claim is "
+            "deferred; the rows are retained only as diagnostic coverage evidence."
+        ),
+        "overlap_note": (
+            f"Bridge_Rows under tier {tier} are diagnostic label-overlap rows. They do not "
+            "mature a related-construct claim or imply label equivalence."
+        ),
+        "boundary_note": (
+            f"This table reports the {tier} bridge sample boundary. All overlap rows remain "
+            "diagnostic, and cross-construct generalization is deferred."
+        ),
+        "narrative": (
+            f"The bridge tier is {tier}. The overlap rows remain diagnostic, and cross-construct "
+            "manuscript claims are deferred pending exact raw bridge validation."
+        ),
+    }
 
 
 def _resolve_repo_path(path: str | Path) -> Path:
@@ -437,11 +497,19 @@ def _latest_public_lake_report() -> dict[str, Any]:
     return report
 
 
-def _component_status(manifest: dict[str, Any]) -> pd.DataFrame:
+def _component_status(
+    manifest: dict[str, Any],
+    bridge_language: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    bridge_role = (
+        bridge_language["component_role"]
+        if bridge_language
+        else "Bridge-gated related-construct evidence"
+    )
     roles = {
         "benchmark": "Detected-misstatement timing and model-family diagnostics",
         "bridge_probe": "CIK-GVKEY coverage and multiplicity checks",
-        "construct_overlap": "Bridge-gated related-construct evidence",
+        "construct_overlap": bridge_role,
         "peer_comparison": "Benchmark model-family transfer checks",
         "public_cascade": "Filing-origin public-label ranking evidence",
         "public_peer_comparison": "Public-label model-family transfer checks",
@@ -958,7 +1026,10 @@ def _bridge_overlap_matrix(study_dir: Path) -> pd.DataFrame:
     return out
 
 
-def _bridge_sample_boundaries(study_dir: Path) -> pd.DataFrame:
+def _bridge_sample_boundaries(
+    study_dir: Path,
+    bridge_language: dict[str, str] | None = None,
+) -> pd.DataFrame:
     flow_path = study_dir / "construct_overlap" / "overlap_sample_flow.csv"
     unmatched_path = study_dir / "bridge_probe" / "unmatched_raw_characteristics.csv"
     rows: list[dict[str, Any]] = []
@@ -975,7 +1046,11 @@ def _bridge_sample_boundaries(study_dir: Path) -> pd.DataFrame:
             "full_raw": "Benchmark rows entering the bridge-overlap accounting screen",
             "ambiguous": "Mapped rows retained for sensitivity diagnostics, not headline overlap",
             "dropped": "Rows without a usable high-confidence public-side overlap match",
-            "high_confidence": "Rows used for headline bridge-gated construct-alignment statistics",
+            "high_confidence": (
+                bridge_language["boundary_interpretation"]
+                if bridge_language
+                else "Rows used for headline bridge-gated construct-alignment statistics"
+            ),
         }
         for _, row in flow.iterrows():
             bridge_tier = row.get("bridge_tier", "")
@@ -1326,7 +1401,8 @@ def _result_narrative(
     severe_row = public_task[public_task["Task"].eq("8k_402")].head(1)
     benchmark_leader = benchmark_peer.iloc[0] if not benchmark_peer.empty else None
     public_peer_leader = public_peer.iloc[0] if not public_peer.empty else None
-    validation_tier = construct_manifest.get("validation_tier", "")
+    bridge_language = _bridge_language(manifest, construct_manifest)
+    validation_tier = bridge_language["tier"]
     generated = manifest.get("generated_at_utc", "")
     public_out_dir = manifest.get("components", {}).get("public_cascade", {}).get("out_dir", "")
     public_out_dir_display = _rel(public_out_dir) if public_out_dir else ""
@@ -1375,14 +1451,12 @@ def _result_narrative(
         "",
         "## Construct-Overlap Evidence",
         "",
-        "The WRDS-validated bridge shows that public-cascade scores and detected-"
-        "misstatement benchmark labels are related but non-identical. The revision-frozen "
+        bridge_language["narrative"],
+        "The revision-frozen "
         "primary public-score-to-benchmark-positive row and reciprocal detected-"
         "misstatement-score-to-public-label row are the two directional diagnostics "
         "reported in Table 9 and Figure 5. "
-        f"The validation tier is `{validation_tier}`; this supports manuscript-grade "
-        "integrated overlap claims while preserving the related-but-non-identical "
-        "construct boundary.",
+        f"The validation tier is `{validation_tier}`.",
         "",
         "## Claim Boundary",
         "",
@@ -1432,6 +1506,7 @@ def main() -> None:
     manifest = _read_json(study_dir / "study_run_manifest.json")
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
     construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
+    bridge_language = _bridge_language(manifest, construct_manifest)
     public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
     public_task_status = _read_csv(study_dir / "public_cascade" / "public_cascade_task_status.csv")
     benchmark_metrics = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
@@ -1457,10 +1532,10 @@ def main() -> None:
     bridge_coverage = _bridge_coverage(study_dir / "bridge_probe" / "coverage_report.csv")
     construct_alignment = _construct_alignment(study_dir)
     bridge_overlap = _bridge_overlap_matrix(study_dir)
-    bridge_boundaries = _bridge_sample_boundaries(study_dir)
+    bridge_boundaries = _bridge_sample_boundaries(study_dir, bridge_language)
     selection_profile = _selection_profile_table()
     public_opacity_dml = _public_opacity_dml_table(study_dir)
-    component_status = _component_status(manifest)
+    component_status = _component_status(manifest, bridge_language)
 
     public_task_folds = _annual_fold_frame(public_primary_metrics, ["task"])
     feature_family_folds = _annual_fold_frame(public_metrics, ["feature_set"])
@@ -1597,7 +1672,7 @@ def main() -> None:
             stem="table_08_bridge_coverage",
             caption="Bridge coverage",
             label="tab:bridge-coverage",
-            note=BRIDGE_COVERAGE_NOTE,
+            note=bridge_language["coverage_note"],
         ),
         "table_09_construct_alignment": _write_table_bundle(
             construct_alignment,
@@ -1605,7 +1680,7 @@ def main() -> None:
             stem="table_09_construct_alignment",
             caption="Construct-overlap ranking alignment",
             label="tab:construct-alignment",
-            note=CONSTRUCT_LIFT_NOTE,
+            note=bridge_language["construct_lift_note"],
             display_df=_table_view(
                 construct_alignment,
                 [
@@ -1668,7 +1743,7 @@ def main() -> None:
             stem="table_15_bridge_overlap_matrix",
             caption="Bridge-gated public-label overlap matrix",
             label="tab:bridge-overlap-matrix",
-            note=BRIDGE_OVERLAP_NOTE,
+            note=bridge_language["overlap_note"],
         )
     if not bridge_boundaries.empty:
         table_manifest["table_16_bridge_sample_boundaries"] = _write_table_bundle(
@@ -1678,7 +1753,7 @@ def main() -> None:
             caption="Bridge-overlap sample boundaries",
             label="tab:bridge-sample-boundaries",
             note=(
-                BRIDGE_BOUNDARY_NOTE
+                bridge_language["boundary_note"]
                 + (
                     f" An additional {_fmt(bridge_boundaries.attrs['unmatched_raw_rows'])} "
                     "raw benchmark rows lack a usable public-side identifier and are "

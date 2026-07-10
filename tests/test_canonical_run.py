@@ -68,7 +68,10 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
                 "bridge_probe": {"status": "crosswalk_available"},
                 "peer_comparison": {"status": "complete"},
                 "public_peer_comparison": {"status": "complete"},
-                "construct_overlap": {"run_status": "complete"},
+                "construct_overlap": {
+                    "run_status": "complete",
+                    "validation_tier": "wrds_validated",
+                },
             },
             "claim_maturity": {
                 "public_prediction": "reportable",
@@ -101,6 +104,7 @@ def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
     _write_json(
         construct_path,
         {
+            "validation_tier": "wrds_validated",
             "interval_scope": "primary_plus_top_5_per_direction",
             "interval_seed": 42,
             "interval_reps": 1000,
@@ -327,6 +331,18 @@ def test_verify_canonical_run_accepts_clean_fixture(tmp_path: Path) -> None:
             "study/provenance commit identity",
         ),
         ("public", ("sample_attrition",), [], "sample attrition"),
+        (
+            "manifest",
+            ("components", "construct_overlap", "validation_tier"),
+            "candidate_external",
+            "construct component validation tier",
+        ),
+        (
+            "construct",
+            ("validation_tier",),
+            "candidate_external",
+            "construct manifest validation tier",
+        ),
         ("construct", ("interval_seed",), 7, "construct bootstrap seed"),
         (
             "construct",

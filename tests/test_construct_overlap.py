@@ -48,11 +48,27 @@ TEST_ALIGNMENT_CONFIG = {
 }
 
 
+def _valid_raw_bridge_row() -> dict[str, object]:
+    return {
+        "gvkey": "1000",
+        "data_year": 2018,
+        "issuer_cik": "0000320000",
+        "source": "wrds_sec_analytics_cik_gvkey:compustat_company",
+        "source_version": "WRDS SEC Analytics Suite / CIK-GVKEY Link Table.csv",
+        "match_method": "wrds_sec_analytics_cik_gvkey_intersection",
+        "match_score": "1.0",
+        "bridge_priority": "raw_primary",
+        "bridge_origin": "raw",
+        "raw_link_sources": "Compustat Company",
+        "raw_link_descs": "Valid CIK-GVKEY Link",
+    }
+
+
 def _write_toy_study(
     tmp_path: Path,
     *,
     with_opacity: bool = True,
-    crosswalk_source: str = "wrds_sec_analytics_cik_gvkey_link",
+    crosswalk_source: str = "wrds_sec_analytics_cik_gvkey:crsp_compustat_merged",
     match_method: str = "wrds_sec_analytics_cik_gvkey_intersection",
 ) -> tuple[Path, Path, Path]:
     study = tmp_path / "study"
@@ -97,7 +113,13 @@ def _write_toy_study(
                 "data_year": 2018,
                 "issuer_cik": cik,
                 "source": crosswalk_source,
+                "source_version": "WRDS SEC Analytics Suite / CIK-GVKEY Link Table.csv",
                 "match_method": match_method,
+                "match_score": "1.0",
+                "bridge_priority": "raw_primary",
+                "bridge_origin": "raw",
+                "raw_link_sources": "CRSP/Compustat Merged",
+                "raw_link_descs": "Valid CIK-GVKEY Link",
             }
         )
         public_rows.append(
@@ -165,7 +187,13 @@ def _write_toy_study(
                 "data_year": 2018,
                 "issuer_cik": cik,
                 "source": crosswalk_source,
+                "source_version": "WRDS SEC Analytics Suite / CIK-GVKEY Link Table.csv",
                 "match_method": match_method,
+                "match_score": "1.0",
+                "bridge_priority": "raw_primary",
+                "bridge_origin": "raw",
+                "raw_link_sources": "CRSP/Compustat Merged",
+                "raw_link_descs": "Valid CIK-GVKEY Link",
             }
         )
         public_rows.append(
@@ -209,7 +237,13 @@ def _write_toy_study(
             "data_year": 2018,
             "issuer_cik": "0000099999",
             "source": crosswalk_source,
+            "source_version": "WRDS SEC Analytics Suite / CIK-GVKEY Link Table.csv",
             "match_method": match_method,
+            "match_score": "1.0",
+            "bridge_priority": "raw_primary",
+            "bridge_origin": "raw",
+            "raw_link_sources": "CRSP/Compustat Merged",
+            "raw_link_descs": "Valid CIK-GVKEY Link",
         }
     )
 
@@ -440,7 +474,7 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
     }
 
 
-def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance(
+def test_construct_overlap_rejects_old_generic_wrds_provenance_before_overlap(
     tmp_path: Path,
 ) -> None:
     study, crosswalk, public_panel = _write_toy_study(
@@ -448,46 +482,162 @@ def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance
         crosswalk_source="wrds_compustat_cik_gvkey_link",
         match_method="wrds_cik_gvkey_link",
     )
-    result = run_construct_overlap(
-        study_dir=study,
-        crosswalk_path=crosswalk,
-        issuer_origin_panel_path=public_panel,
-        alignment_config=TEST_ALIGNMENT_CONFIG,
-    )
-    out = study / "construct_overlap"
 
-    assert result["run_status"] == "complete"
-    assert result["validation_tier"] == "wrds_validated"
-    assert result["bridge_source"] == "wrds_compustat_cik_gvkey_link"
-    assert result["bridge_provenance"]["source_values"] == ["wrds_compustat_cik_gvkey_link"]
-    ranking = pd.read_csv(out / "public_score_benchmark_ranking.csv")
-    assert set(ranking["bridge_source"]) == {"wrds_compustat_cik_gvkey_link"}
-    summary = (out / "construct_overlap_summary.md").read_text(encoding="utf-8")
-    assert "WRDS-validated bridge sample" in summary
-    study_manifest = json.loads((study / "study_run_manifest.json").read_text(encoding="utf-8"))
-    assert study_manifest["components"]["construct_overlap"]["validation_tier"] == "wrds_validated"
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        run_construct_overlap(
+            study_dir=study,
+            crosswalk_path=crosswalk,
+            issuer_origin_panel_path=public_panel,
+            alignment_config=TEST_ALIGNMENT_CONFIG,
+        )
 
 
 def test_raw_compustat_link_provenance_is_wrds_validated(
     tmp_path: Path,
 ) -> None:
     crosswalk = tmp_path / "raw_crosswalk.csv"
-    pd.DataFrame(
-        [
-            {
-                "gvkey": "1000",
-                "data_year": 2018,
-                "issuer_cik": "0000320000",
-                "source": "wrds_sec_analytics_cik_gvkey:compustat_company",
-                "match_method": "wrds_sec_analytics_cik_gvkey_intersection",
-            }
-        ]
-    ).to_csv(crosswalk, index=False)
+    pd.DataFrame([_valid_raw_bridge_row()]).to_csv(crosswalk, index=False)
 
     evidence = _bridge_evidence_from_crosswalk(crosswalk)
 
     assert evidence["bridge_source"] == "wrds_sec_analytics_cik_gvkey_link"
     assert evidence["validation_tier"] == "wrds_validated"
+
+
+def test_four_source_semicolon_aggregation_is_wrds_validated(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "raw_crosswalk.csv"
+    row = _valid_raw_bridge_row()
+    row["source"] = ";".join(
+        [
+            "wrds_sec_analytics_cik_gvkey:crsp_compustat_merged",
+            "wrds_sec_analytics_cik_gvkey:compustat_company",
+            "wrds_sec_analytics_cik_gvkey:compustat_security",
+            "wrds_sec_analytics_cik_gvkey:capital_iq",
+        ]
+    )
+    row["raw_link_sources"] = ";".join(
+        [
+            "CRSP/Compustat Merged",
+            "Compustat Company",
+            "Compustat Security",
+            "Capital IQ",
+        ]
+    )
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    evidence = _bridge_evidence_from_crosswalk(crosswalk)
+
+    assert evidence["validation_tier"] == "wrds_validated"
+    assert set(evidence["bridge_provenance"]["source_values"]) == set(
+        str(row["source"]).split(";")
+    )
+
+
+def test_mixed_raw_and_external_crosswalk_is_rejected(tmp_path: Path) -> None:
+    crosswalk = tmp_path / "mixed_crosswalk.csv"
+    external = {
+        **_valid_raw_bridge_row(),
+        "gvkey": "1001",
+        "issuer_cik": "0000320001",
+        "source": "external_cik_gvkey",
+        "source_version": "external 2026-05-01",
+        "match_method": "external_date_range",
+        "match_score": "",
+        "bridge_priority": "external_supplement",
+        "bridge_origin": "external",
+        "raw_link_sources": "",
+        "raw_link_descs": "",
+    }
+    pd.DataFrame([_valid_raw_bridge_row(), external]).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [list(_valid_raw_bridge_row()), ["gvkey", "data_year", "issuer_cik"]],
+    ids=["provenance-schema", "no-provenance-schema"],
+)
+def test_empty_crosswalk_is_rejected(tmp_path: Path, columns: list[str]) -> None:
+    crosswalk = tmp_path / "empty_crosswalk.csv"
+    pd.DataFrame(columns=columns).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="crosswalk is empty"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
+@pytest.mark.parametrize(
+    ("field", "raw_value"),
+    [("source", "raw_cik_gvkey"), ("source_version", "Raw CIK-GVKEY export")],
+)
+def test_raw_like_external_provenance_is_rejected(
+    tmp_path: Path,
+    field: str,
+    raw_value: str,
+) -> None:
+    crosswalk = tmp_path / "partial_raw_crosswalk.csv"
+    row = {
+        **_valid_raw_bridge_row(),
+        "source": "external_cik_gvkey",
+        "source_version": "external 2026-05-01",
+        "match_method": "external_date_range",
+        "match_score": "",
+        "bridge_priority": "external_supplement",
+        "bridge_origin": "external",
+        "raw_link_sources": "",
+        "raw_link_descs": "",
+    }
+    row[field] = raw_value
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("source", ""),
+        ("source_version", ""),
+        ("match_method", ""),
+        ("match_score", ""),
+        ("bridge_priority", ""),
+        ("bridge_origin", ""),
+        ("raw_link_sources", ""),
+        ("raw_link_descs", ""),
+        ("source", "wrds_sec_analytics_cik_gvkey:compustat_company:external"),
+        ("source", "wrds_compustat_cik_gvkey_link"),
+        ("source", "wrds_sec_analytics_cik_gvkey:compustat_company;external"),
+        ("source", "wrds_sec_analytics_cik_gvkey:compustat_company;"),
+    ],
+    ids=[
+        "missing-source",
+        "missing-source-version",
+        "missing-match-method",
+        "missing-match-score",
+        "missing-bridge-priority",
+        "missing-bridge-origin",
+        "missing-raw-link-source",
+        "missing-raw-link-description",
+        "forged-normalized-suffix",
+        "old-generic-wrds-source",
+        "additional-external-token",
+        "empty-token",
+    ],
+)
+def test_partial_or_forged_wrds_provenance_is_rejected(
+    tmp_path: Path,
+    field: str,
+    invalid_value: str,
+) -> None:
+    crosswalk = tmp_path / "invalid_raw_crosswalk.csv"
+    row = _valid_raw_bridge_row()
+    row[field] = invalid_value
+    pd.DataFrame([row]).to_csv(crosswalk, index=False)
+
+    with pytest.raises(ValueError, match="WRDS bridge provenance"):
+        _bridge_evidence_from_crosswalk(crosswalk)
 
 
 def test_external_crosswalk_without_wrds_provenance_reports_candidate_source(tmp_path: Path) -> None:
@@ -508,6 +658,38 @@ def test_external_crosswalk_without_wrds_provenance_reports_candidate_source(tmp
 
     assert evidence["bridge_source"] == "external_cik_gvkey"
     assert evidence["validation_tier"] == "candidate_external"
+
+
+def test_candidate_construct_summary_keeps_claim_deferred(tmp_path: Path) -> None:
+    study, crosswalk, public_panel = _write_toy_study(tmp_path)
+    frame = pd.read_csv(crosswalk)
+    frame = frame.assign(
+        source="external_cik_gvkey",
+        source_version="external 2026-05-01",
+        match_method="external_date_range",
+        match_score="",
+        bridge_priority="external_supplement",
+        bridge_origin="external",
+        raw_link_sources="",
+        raw_link_descs="",
+    )
+    frame.to_csv(crosswalk, index=False)
+
+    result = run_construct_overlap(
+        study_dir=study,
+        crosswalk_path=crosswalk,
+        issuer_origin_panel_path=public_panel,
+        alignment_config=TEST_ALIGNMENT_CONFIG,
+    )
+    summary = (study / "construct_overlap" / "construct_overlap_summary.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(summary.lower().split())
+
+    assert result["validation_tier"] == "candidate_external"
+    assert "diagnostic" in normalized
+    assert "deferred" in normalized
+    assert "consistent with related but non-identical constructs" not in normalized
 
 
 def test_construct_overlap_missing_opacity_writes_blocker_without_failing(tmp_path: Path) -> None:
