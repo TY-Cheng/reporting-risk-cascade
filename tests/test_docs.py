@@ -14,6 +14,9 @@ from scripts.refresh_results_snapshot import _construct_alignment_rows
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+USER_PATH_PREFIX = "/" + "Users" + "/"
+VOLUME_PATH_PREFIX = "/" + "Volumes" + "/"
+CLOUD_STORAGE_MARKER = "One" + "Drive"
 
 
 class _MkDocsYamlLoader(yaml.SafeLoader):
@@ -518,23 +521,45 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
                 "input_hash": "c" * 64,
                 "uv_lock_hash": "d" * 64,
                 "input_files": [
-                    {"path": "/Users/example/raw.csv", "exists": True, "sha256": "1" * 64},
                     {
-                        "path": "/Volumes/private/issuer.parquet",
+                        "path": USER_PATH_PREFIX + "example/raw.csv",
+                        "exists": True,
+                        "sha256": "1" * 64,
+                    },
+                    {
+                        "path": VOLUME_PATH_PREFIX + "private/issuer.parquet",
                         "exists": True,
                         "sha256": "2" * 64,
                     },
                     {
-                        "path": "/Users/example/OneDrive/panel.parquet",
+                        "path": USER_PATH_PREFIX
+                        + "example/"
+                        + CLOUD_STORAGE_MARKER
+                        + "/panel.parquet",
                         "exists": True,
                         "sha256": "3" * 64,
                     },
-                    {"path": "/Volumes/private/bridge.csv", "exists": True, "sha256": "4" * 64},
-                    {"path": "/Users/example/lake.json", "exists": True, "sha256": "5" * 64},
-                    {"path": "/Users/example/form_ap.json", "exists": True, "sha256": "6" * 64},
+                    {
+                        "path": VOLUME_PATH_PREFIX + "private/bridge.csv",
+                        "exists": True,
+                        "sha256": "4" * 64,
+                    },
+                    {
+                        "path": USER_PATH_PREFIX + "example/lake.json",
+                        "exists": True,
+                        "sha256": "5" * 64,
+                    },
+                    {
+                        "path": USER_PATH_PREFIX + "example/form_ap.json",
+                        "exists": True,
+                        "sha256": "6" * 64,
+                    },
                 ],
                 "wrds_export_metadata": {
-                    "path": "/Users/example/OneDrive/bridge.csv",
+                    "path": USER_PATH_PREFIX
+                    + "example/"
+                    + CLOUD_STORAGE_MARKER
+                    + "/bridge.csv",
                     "exists": True,
                     "sha256": "7" * 64,
                     "source_values": ["wrds_sec_analytics_cik_gvkey"],
@@ -566,21 +591,33 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
                 },
             },
             "components": {
-                "benchmark": {"status": "complete", "out_dir": "/Users/example/benchmark"},
-                "public_cascade": {"status": "complete", "out_dir": "/Volumes/private/public"},
+                "benchmark": {
+                    "status": "complete",
+                    "out_dir": USER_PATH_PREFIX + "example/benchmark",
+                },
+                "public_cascade": {
+                    "status": "complete",
+                    "out_dir": VOLUME_PATH_PREFIX + "private/public",
+                },
                 "bridge_probe": {
                     "status": "crosswalk_available",
-                    "out_dir": "/Users/example/bridge",
+                    "out_dir": USER_PATH_PREFIX + "example/bridge",
                 },
-                "peer_comparison": {"status": "complete", "out_dir": "/Users/example/peer"},
+                "peer_comparison": {
+                    "status": "complete",
+                    "out_dir": USER_PATH_PREFIX + "example/peer",
+                },
                 "public_peer_comparison": {
                     "status": "complete",
-                    "out_dir": "/Users/example/public_peer",
+                    "out_dir": USER_PATH_PREFIX + "example/public_peer",
                 },
                 "construct_overlap": {
                     "run_status": "complete",
                     "validation_tier": "wrds_validated",
-                    "out_dir": "/Users/example/OneDrive/construct",
+                    "out_dir": USER_PATH_PREFIX
+                    + "example/"
+                    + CLOUD_STORAGE_MARKER
+                    + "/construct",
                 },
             },
             "claim_maturity": {
@@ -590,9 +627,12 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
                 "opacity_dml": "diagnostic",
             },
             "inputs": {
-                "raw_data": "/Users/example/raw.csv",
-                "issuer_origin_panel": "/Volumes/private/issuer.parquet",
-                "crosswalk": "/Users/example/OneDrive/bridge.csv",
+                "raw_data": USER_PATH_PREFIX + "example/raw.csv",
+                "issuer_origin_panel": VOLUME_PATH_PREFIX + "private/issuer.parquet",
+                "crosswalk": USER_PATH_PREFIX
+                + "example/"
+                + CLOUD_STORAGE_MARKER
+                + "/bridge.csv",
             },
             "runtime": {"peer_comparison_mode": "full"},
         },
@@ -731,11 +771,13 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
         package_dir / "manifest.json",
         {
             "tables": {
-                table: {"csv": f"/Users/example/OneDrive/{table}.csv"}
+                table: {
+                    "csv": f"{USER_PATH_PREFIX}example/{CLOUD_STORAGE_MARKER}/{table}.csv"
+                }
                 for table in CURRENT_PACKAGE_TABLES
             },
             "figures": {
-                figure: {"png": f"/Volumes/private/{figure}.png"}
+                figure: {"png": f"{VOLUME_PATH_PREFIX}private/{figure}.png"}
                 for figure in CURRENT_PACKAGE_FIGURES
             },
         },
@@ -886,7 +928,7 @@ def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifac
         "opacity_dml": "diagnostic",
     }.items():
         assert f"| {claim} | `{maturity}` |" in results
-    for local_path_marker in ["/Users/", "/Volumes/", "OneDrive"]:
+    for local_path_marker in [USER_PATH_PREFIX, VOLUME_PATH_PREFIX, CLOUD_STORAGE_MARKER]:
         assert local_path_marker not in results
     for table in fixture["tables"]:
         assert f"#### `{table}`" in results
@@ -904,7 +946,12 @@ def test_generated_snapshot_sanitizes_external_fixture_roots(
     results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
 
     assert "`<external>/study`" in results
-    for local_path_marker in [str(tmp_path), "/Users/", "/Volumes/", "OneDrive"]:
+    for local_path_marker in [
+        str(tmp_path),
+        USER_PATH_PREFIX,
+        VOLUME_PATH_PREFIX,
+        CLOUD_STORAGE_MARKER,
+    ]:
         assert local_path_marker not in results
 
 

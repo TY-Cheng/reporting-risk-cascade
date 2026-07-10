@@ -524,5 +524,13 @@ verify-canonical study_dir="artifacts/full_with_peer" package_dir="artifacts/man
         --manuscript-package "$package_dir_arg" \
         --expected-as-of-date 2026-07-06
 
+reviewer-package study_dir="artifacts/full_with_peer" package_dir="artifacts/manuscript_package": _check-data-env
+    study_dir_arg="{{ study_dir }}"; study_dir_arg="${study_dir_arg#study_dir=}"; \
+    package_dir_arg="{{ package_dir }}"; package_dir_arg="${package_dir_arg#package_dir=}"; \
+    uv run python scripts/build_reviewer_package.py \
+        --study-dir "$study_dir_arg" \
+        --manuscript-package "$package_dir_arg" \
+        --output artifacts/reviewer_package/reporting-risk-cascade-reviewer.zip
+
 _docs-build: _check-env
     uv run --group docs mkdocs build --strict --clean

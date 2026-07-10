@@ -857,6 +857,7 @@ def test_runtime_surface_contains_only_current_analysis_modules() -> None:
         "fetch_public_data.py",
         "generate_sample_dataset.py",
         "build_manuscript_package.py",
+        "build_reviewer_package.py",
         "build_linkage_bridge.py",
         "monitor_public_lake.py",
         "prepare_gvkey_cik_crosswalk.py",
