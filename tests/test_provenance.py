@@ -1,8 +1,107 @@
 from __future__ import annotations
 
+from argparse import Namespace
+import json
 from pathlib import Path
+from typing import Any
 
-from src.provenance import input_provenance, wrds_export_metadata
+import pytest
+
+from scripts import run_study as run_study_script
+from scripts.run_study import _claim_maturity
+from src import public_cascade as public_cascade_module
+from src.provenance import (
+    input_provenance,
+    public_lake_provenance,
+    sha256_path,
+    wrds_export_metadata,
+)
+
+
+def _write_study_fixture(
+    tmp_path: Path,
+    *,
+    skip_public_cascade: bool,
+) -> tuple[Namespace, dict[str, Path]]:
+    paths = {
+        "config": tmp_path / "study.yaml",
+        "benchmark_config": tmp_path / "benchmark.yaml",
+        "public_cascade_config": tmp_path / "public_cascade.yaml",
+        "raw_data": tmp_path / "raw.parquet",
+        "issuer_dim": tmp_path / "issuer_dim.parquet",
+        "issuer_origin_panel": tmp_path / "issuer_origin_panel.parquet",
+        "crosswalk": tmp_path / "crosswalk.csv",
+        "public_lake_run_metadata": tmp_path / "public_lake_run_metadata.json",
+        "form_ap_source_metadata": tmp_path / "form_ap_source_metadata.json",
+        "out_dir": tmp_path / "study",
+    }
+    paths["issuer_origin_panel"].write_bytes(b"issuer-panel")
+    paths["public_lake_run_metadata"].write_text(
+        json.dumps(
+            {
+                "as_of_date": "2026-07-06",
+                "fresh_build": True,
+                "provenance": {
+                    "commit_sha": "lake-commit",
+                    "dirty": False,
+                    "config_hash": "lake-config-hash",
+                    "input_hash": "lake-input-hash",
+                    "uv_lock_hash": "lake-lock-hash",
+                    "input_files": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths["form_ap_source_metadata"].write_text(
+        json.dumps(
+            {
+                "source_kind": "verified_zip_member",
+                "archive_sha256": "archive-hash",
+                "member": "FirmFilings.csv",
+                "member_sha256": "member-hash",
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths["config"].write_text(
+        json.dumps(
+            {
+                "inputs": {
+                    "raw_data": str(paths["raw_data"]),
+                    "issuer_dim": str(paths["issuer_dim"]),
+                    "issuer_origin_panel": str(paths["issuer_origin_panel"]),
+                    "gvkey_cik_crosswalk": str(paths["crosswalk"]),
+                    "public_lake_run_metadata": str(paths["public_lake_run_metadata"]),
+                    "form_ap_source_metadata": str(paths["form_ap_source_metadata"]),
+                },
+                "peer_comparison": {"mode": "none", "target": "both"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = Namespace(
+        config=paths["config"],
+        benchmark_config=paths["benchmark_config"],
+        public_cascade_config=paths["public_cascade_config"],
+        raw_data=None,
+        raw_csv=None,
+        timing_csv=None,
+        issuer_origin_panel=None,
+        issuer_dim=None,
+        crosswalk=None,
+        out_dir=paths["out_dir"],
+        skip_benchmark=True,
+        skip_public_cascade=skip_public_cascade,
+        skip_bridge_probe=True,
+        skip_construct_overlap=True,
+        parallel_jobs=None,
+        model_threads=None,
+        seed_policy=None,
+        peer_comparison_mode=None,
+        peer_target=None,
+    )
+    return args, paths
 
 
 def test_wrds_export_metadata_summarizes_crosswalk_source(tmp_path: Path) -> None:
@@ -29,3 +128,211 @@ def test_wrds_export_metadata_summarizes_crosswalk_source(tmp_path: Path) -> Non
     ]
     assert metadata["sha256"] == inputs["input_files"][0]["sha256"]
     assert inputs["input_hash"]
+
+
+def test_public_lake_provenance_is_pathless_and_keeps_form_ap_hashes(tmp_path: Path) -> None:
+    run_metadata = tmp_path / "public_lake_run_metadata.json"
+    form_ap_metadata = tmp_path / "form_ap_source_metadata.json"
+    source_sidecar = tmp_path / "bronze" / "form-ap" / "FirmFilings.zip.meta.json"
+    source_sidecar.parent.mkdir(parents=True)
+    source_sidecar.write_text(
+        json.dumps(
+            {
+                "source_name": "form-ap",
+                "source_url": "https://example.invalid/FirmFilings.zip",
+                "downloaded_at_utc": "2026-07-06T00:00:00+00:00",
+                "sha256": "payload-hash",
+                "size_bytes": 123,
+                "parser_version": "public-lake-v1",
+                "schema_version": "public-lake-v1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_metadata.write_text(
+        json.dumps(
+            {
+                "as_of_date": "2026-07-06",
+                "fresh_build": True,
+                "provenance": {
+                    "commit_sha": "abc123",
+                    "dirty": False,
+                    "config_hash": "config-hash",
+                    "input_hash": "input-hash",
+                    "uv_lock_hash": "lock-hash",
+                    "input_files": [
+                        {
+                            "path": str(source_sidecar),
+                            "sha256": "sidecar-hash",
+                            "size_bytes": source_sidecar.stat().st_size,
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    form_ap_metadata.write_text(
+        json.dumps(
+            {
+                "source_kind": "verified_zip_member",
+                "archive_sha256": "archive-hash",
+                "member": "FirmFilings.csv",
+                "member_sha256": "member-hash",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reduced = public_lake_provenance(run_metadata, form_ap_metadata)
+
+    assert reduced["as_of_date"] == "2026-07-06"
+    assert reduced["git_dirty"] is False
+    assert reduced["form_ap"]["archive_sha256"] == "archive-hash"
+    assert reduced["source_metadata_inventory"] == [
+        {
+            "metadata_file": "form-ap/FirmFilings.zip.meta.json",
+            "metadata_sha256": "sidecar-hash",
+            "source_name": "form-ap",
+            "source_url": "https://example.invalid/FirmFilings.zip",
+            "downloaded_at_utc": "2026-07-06T00:00:00+00:00",
+            "payload_sha256": "payload-hash",
+            "payload_size_bytes": 123,
+            "parser_version": "public-lake-v1",
+            "schema_version": "public-lake-v1",
+        }
+    ]
+    assert str(tmp_path) not in json.dumps(reduced)
+
+
+def test_claim_maturity_is_controlled_by_component_status() -> None:
+    maturity = _claim_maturity(
+        {
+            "public_cascade": {"status": "complete"},
+            "construct_overlap": {"run_status": "complete"},
+        }
+    )
+
+    assert maturity == {
+        "public_prediction": "reportable",
+        "feature_and_window_sensitivity": "supporting",
+        "construct_alignment": "supporting",
+        "opacity_dml": "diagnostic",
+    }
+
+
+def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, paths = _write_study_fixture(tmp_path, skip_public_cascade=False)
+    calls: list[dict[str, Any]] = []
+    primary_specification = {
+        "feature_set": "actual-summary-feature-set",
+        "train_window": "actual-summary-window",
+    }
+
+    def fake_run_public_cascade(**kwargs: Any) -> dict[str, Path]:
+        calls.append(kwargs)
+        out_dir = Path(kwargs["out_dir"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        summary_json = out_dir / "public_cascade_summary.json"
+        sample_attrition_csv = out_dir / "public_sample_attrition.csv"
+        summary_json.write_text(
+            json.dumps({"primary_specification": primary_specification}),
+            encoding="utf-8",
+        )
+        sample_attrition_csv.write_text("stage,n_rows\nfinal,7\n", encoding="utf-8")
+        return {
+            "summary_json": summary_json,
+            "sample_attrition_csv": sample_attrition_csv,
+        }
+
+    monkeypatch.setattr(run_study_script, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        public_cascade_module,
+        "run_public_cascade",
+        fake_run_public_cascade,
+    )
+
+    run_study_script.main()
+
+    assert len(calls) == 1
+    manifest = json.loads(
+        (paths["out_dir"] / "study_run_manifest.json").read_text(encoding="utf-8")
+    )
+    component = manifest["components"]["public_cascade"]
+    assert component == {
+        "status": "complete",
+        "out_dir": str(paths["out_dir"] / "public_cascade"),
+        "summary_json": str(paths["out_dir"] / "public_cascade/public_cascade_summary.json"),
+        "sample_attrition_csv": str(
+            paths["out_dir"] / "public_cascade/public_sample_attrition.csv"
+        ),
+        "primary_specification": primary_specification,
+    }
+    assert manifest["public_lake_provenance"]["form_ap"]["member_sha256"] == "member-hash"
+    assert manifest["claim_maturity"]["public_prediction"] == "reportable"
+    input_records = {record["path"]: record for record in manifest["provenance"]["input_files"]}
+    for metadata_key in ["public_lake_run_metadata", "form_ap_source_metadata"]:
+        metadata_path = paths[metadata_key]
+        assert input_records[str(metadata_path)]["sha256"] == sha256_path(metadata_path)
+
+
+@pytest.mark.parametrize(
+    "missing_metadata_key",
+    ["public_lake_run_metadata", "form_ap_source_metadata"],
+)
+def test_run_study_fails_before_public_cascade_when_metadata_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_metadata_key: str,
+) -> None:
+    args, paths = _write_study_fixture(tmp_path, skip_public_cascade=False)
+    paths[missing_metadata_key].unlink()
+    calls = 0
+
+    def fake_run_public_cascade(**kwargs: Any) -> dict[str, Path]:
+        nonlocal calls
+        calls += 1
+        raise AssertionError(f"unexpected public cascade call: {kwargs}")
+
+    monkeypatch.setattr(run_study_script, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        public_cascade_module,
+        "run_public_cascade",
+        fake_run_public_cascade,
+    )
+
+    with pytest.raises(FileNotFoundError, match=paths[missing_metadata_key].name):
+        run_study_script.main()
+
+    assert calls == 0
+
+
+def test_run_study_skipped_public_cascade_omits_missing_lake_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, paths = _write_study_fixture(tmp_path, skip_public_cascade=True)
+    paths["public_lake_run_metadata"].unlink()
+    paths["form_ap_source_metadata"].unlink()
+
+    def fail_if_called(**kwargs: Any) -> dict[str, Path]:
+        raise AssertionError(f"unexpected public cascade call: {kwargs}")
+
+    monkeypatch.setattr(run_study_script, "parse_args", lambda: args)
+    monkeypatch.setattr(public_cascade_module, "run_public_cascade", fail_if_called)
+
+    run_study_script.main()
+
+    manifest = json.loads(
+        (paths["out_dir"] / "study_run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert "public_lake_provenance" not in manifest
+    assert manifest["claim_maturity"] == {
+        "public_prediction": "deferred",
+        "feature_and_window_sensitivity": "deferred",
+        "construct_alignment": "deferred",
+        "opacity_dml": "deferred",
+    }

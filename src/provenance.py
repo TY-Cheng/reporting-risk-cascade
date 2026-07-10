@@ -66,6 +66,62 @@ def input_provenance(paths: Iterable[Path]) -> dict[str, Any]:
     return {"input_hash": payload["hash"], "input_files": payload["files"]}
 
 
+def _source_metadata_inventory(input_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    inventory: list[dict[str, Any]] = []
+    for record in input_files:
+        path = Path(str(record.get("path", "")))
+        parts = path.parts
+        relative_name = path.name
+        if "bronze" in parts:
+            relative_name = "/".join(parts[parts.index("bronze") + 1 :])
+        item: dict[str, Any] = {
+            "metadata_file": relative_name,
+            "metadata_sha256": record.get("sha256"),
+        }
+        if path.name.endswith(".meta.json") and path.is_file():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            item.update(
+                {
+                    "source_name": payload.get("source_name"),
+                    "source_url": payload.get("source_url"),
+                    "downloaded_at_utc": payload.get("downloaded_at_utc"),
+                    "payload_sha256": payload.get("sha256"),
+                    "payload_size_bytes": payload.get("size_bytes"),
+                    "parser_version": payload.get("parser_version"),
+                    "schema_version": payload.get("schema_version"),
+                }
+            )
+        inventory.append(item)
+    return sorted(inventory, key=lambda item: str(item["metadata_file"]))
+
+
+def public_lake_provenance(
+    run_metadata_path: Path,
+    form_ap_metadata_path: Path,
+) -> dict[str, Any]:
+    run_metadata = json.loads(Path(run_metadata_path).read_text(encoding="utf-8"))
+    form_ap = json.loads(Path(form_ap_metadata_path).read_text(encoding="utf-8"))
+    provenance = dict(run_metadata.get("provenance", {}))
+    return {
+        "as_of_date": run_metadata.get("as_of_date"),
+        "fresh_build": bool(run_metadata.get("fresh_build")),
+        "commit_sha": provenance.get("commit_sha"),
+        "git_dirty": provenance.get("dirty"),
+        "config_hash": provenance.get("config_hash"),
+        "input_hash": provenance.get("input_hash"),
+        "uv_lock_hash": provenance.get("uv_lock_hash"),
+        "source_metadata_inventory": _source_metadata_inventory(
+            list(provenance.get("input_files", []))
+        ),
+        "form_ap": {
+            "source_kind": form_ap.get("source_kind"),
+            "archive_sha256": form_ap.get("archive_sha256"),
+            "member": form_ap.get("member"),
+            "member_sha256": form_ap.get("member_sha256"),
+        },
+    }
+
+
 def uv_lock_provenance(repo_root: Path | None = None) -> dict[str, Any]:
     record = path_record((repo_root or _repo_root()) / "uv.lock")
     return {"uv_lock_hash": record["sha256"], "uv_lock": record}

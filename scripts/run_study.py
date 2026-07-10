@@ -75,6 +75,19 @@ def _existing_or_skipped_component(
     return {"status": "skipped"}
 
 
+def _claim_maturity(components: dict[str, Any]) -> dict[str, str]:
+    public_complete = components.get("public_cascade", {}).get("status") == "complete"
+    construct_complete = (
+        components.get("construct_overlap", {}).get("run_status") == "complete"
+    )
+    return {
+        "public_prediction": "reportable" if public_complete else "deferred",
+        "feature_and_window_sensitivity": "supporting" if public_complete else "deferred",
+        "construct_alignment": "supporting" if construct_complete else "deferred",
+        "opacity_dml": "diagnostic" if public_complete else "deferred",
+    }
+
+
 def parse_args() -> argparse.Namespace:
     _bootstrap_repo_root()
 
@@ -269,6 +282,7 @@ def main() -> None:
         config_provenance,
         git_provenance,
         input_provenance,
+        public_lake_provenance,
         uv_lock_provenance,
         wrds_export_metadata,
     )
@@ -304,6 +318,18 @@ def main() -> None:
         data_dir=DATA_DIR,
         artifacts_dir=ARTIFACTS_DIR,
     )
+    public_lake_run_metadata = _resolve_project_path(
+        inputs.get("public_lake_run_metadata"),
+        default=LAKE_SILVER_DIR / "public_lake_run_metadata.json",
+        data_dir=DATA_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
+    )
+    form_ap_source_metadata = _resolve_project_path(
+        inputs.get("form_ap_source_metadata"),
+        default=LAKE_SILVER_DIR / "form_ap_source_metadata.json",
+        data_dir=DATA_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
+    )
     issuer_dim = _resolve_project_path(
         args.issuer_dim or inputs.get("issuer_dim"),
         default=LAKE_SILVER_DIR / "issuer_dim.parquet",
@@ -335,7 +361,16 @@ def main() -> None:
     provenance = {
         **git_provenance(REPO_ROOT),
         **config_provenance([args.config, args.benchmark_config, args.public_cascade_config]),
-        **input_provenance([raw_csv, issuer_dim, issuer_origin_panel, crosswalk]),
+        **input_provenance(
+            [
+                raw_csv,
+                issuer_dim,
+                issuer_origin_panel,
+                crosswalk,
+                public_lake_run_metadata,
+                form_ap_source_metadata,
+            ]
+        ),
         **uv_lock_provenance(REPO_ROOT),
         "wrds_export_metadata": wrds_export_metadata(crosswalk),
     }
@@ -425,7 +460,15 @@ def main() -> None:
                 "public cascade issuer_origin_panel not found. Build the public lake first or pass "
                 f"--issuer-origin-panel explicitly. Missing path: {issuer_origin_panel}"
             )
-        run_public_cascade(
+        if not public_lake_run_metadata.is_file():
+            raise FileNotFoundError(
+                f"public lake run metadata not found: {public_lake_run_metadata}"
+            )
+        if not form_ap_source_metadata.is_file():
+            raise FileNotFoundError(
+                f"Form AP source metadata not found: {form_ap_source_metadata}"
+            )
+        public_cascade_result = run_public_cascade(
             config_path=args.public_cascade_config,
             issuer_origin_panel_path=issuer_origin_panel,
             out_dir=public_cascade_out,
@@ -433,9 +476,15 @@ def main() -> None:
             model_threads=args.model_threads,
             seed_policy=args.seed_policy.replace("-", "_") if args.seed_policy else None,
         )
+        public_cascade_summary = json.loads(
+            Path(public_cascade_result["summary_json"]).read_text(encoding="utf-8")
+        )
         manifest["components"]["public_cascade"] = {
             "status": "complete",
             "out_dir": str(public_cascade_out),
+            "summary_json": str(public_cascade_result["summary_json"]),
+            "sample_attrition_csv": str(public_cascade_result["sample_attrition_csv"]),
+            "primary_specification": public_cascade_summary["primary_specification"],
         }
 
     if run_public_peer:
@@ -496,6 +545,15 @@ def main() -> None:
         "crosswalk_exists": crosswalk_exists,
         "probe_out_dir": str(bridge_probe_out),
     }
+    lake_metadata_available = (
+        public_lake_run_metadata.is_file() and form_ap_source_metadata.is_file()
+    )
+    if not args.skip_public_cascade or lake_metadata_available:
+        manifest["public_lake_provenance"] = public_lake_provenance(
+            public_lake_run_metadata,
+            form_ap_source_metadata,
+        )
+    manifest["claim_maturity"] = _claim_maturity(manifest["components"])
     (args.out_dir / "study_run_manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
