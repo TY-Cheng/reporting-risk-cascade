@@ -60,8 +60,8 @@ Working title:
 
 ### Our Contribution and Claim Boundary
 
-- **Sellable thesis.** The paper sells a measurement-and-ranking framework for public reporting-risk states. The contribution is a public, filing-origin outcome system and a transparent comparison to the detected-misstatement benchmark.
-- **Not the thesis.** The paper does not sell an unobserved-fraud detector, a causal enforcement model, or a same-estimand performance ranking against prior fraud-prediction papers.
+- **Contribution.** The paper develops a measurement-and-ranking framework for public reporting-risk states: a public, filing-origin outcome system and a transparent construct comparison with the detected-misstatement benchmark.
+- **Excluded claims.** The design is not an unobserved-fraud detector, a causal enforcement model, or a same-estimand performance ranking against prior fraud-prediction papers.
 - **Boundary for results.** Results should be interpreted as evidence about public review-and-correction risk rather than unobserved fraud occurrence, causal effects, or full SEC-review coverage.
 
 ## Materials and Methods
@@ -79,7 +79,7 @@ Working title:
     - `$DATA_DIR/raw/raw_dataset_misstatement.parquet` for the `gvkey x data_year` detected-misstatement benchmark.
     - `config/public_data.yaml` and `config/study.yaml` for public-source and study defaults.
     - `$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv` for bridge validation, generated only from the raw CIK-GVKEY link table.
-- **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-07-06`. The public modeling sample now runs through fiscal year 2024, while SEC FSDS and Notes source archives are fetched through the as-of year 2026 so fiscal-year 2024 annual filings are covered.
+- **Public-data contract.** The paper-facing public lake uses `storage_format=parquet`, `notes_mode=summary`, DuckDB, and the pinned literal `as_of_date=2026-07-06`. The public modeling sample is restricted to fiscal years 2011-2024; source archives may extend beyond the sample window only to establish complete forward outcome horizons.
 - **Peer and overlap run.** The peer-enabled study is a separate run so the default workflow stays bounded.
 
 ### Data Engineering and Preprocessing Overview
@@ -156,9 +156,10 @@ flowchart LR
 - **Silver.** Normalized issuer, filing, XBRL, Notes, comment-thread, correction, Form AP, and PCAOB inspection tables; large Silver tables are Parquet-first.
 - **Gold.** `issuer_origin_panel.parquet` and `filing_origin_panel.parquet`.
 - **DuckDB path.** The default DuckDB path uses SQL for XBRL core-tag pivoting, label-horizon joins, and Parquet output on the annual issuer-year modeling panel.
-- **Filing-origin provenance.** The full filing-origin panel is retained as a lightweight, year-sharded provenance panel rather than a fully labeled 20M-row modeling table.
+- **Filing-origin provenance.** The full filing-origin panel is retained as a lightweight, year-sharded provenance panel rather than expanded into a fully labeled modeling table.
 - **Required v1 sources.** SEC submissions, SEC Financial Statement Data Sets (FSDS), SEC `UPLOAD` and `CORRESP`, 10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, and PCAOB inspection datasets.
 - **Main public sample.** Domestic U.S. GAAP issuer-years from 2011-2024, with `2026-07-06` as the current reproducibility as-of date.
+- **Form AP provenance.** The archive-first Form AP source contract makes `FirmFilings.zip` authoritative when present. The build first verifies its metadata sidecar and requires exactly one `FirmFilings.csv` member. It extracts that member to a temporary file on the same filesystem and atomically replaces the derived CSV before normalization. An invalid archive, missing verified metadata sidecar, or missing member fails the build and must not fall back to an older CSV. Only when the archive is absent may a standalone `FirmFilings.csv` serve as an explicit compatibility fallback.
 - **Source-to-table mapping.**
     - SEC submissions and filing index data form `filing_dim.parquet`, `issuer_dim.parquet`, `filing_origin_panel.parquet`, and the annual `issuer_origin_panel.parquet`.
     - FSDS/XBRL `sub` and `num` files form `filing_xbrl_dim.parquet`, `xbrl_fact_summary.parquet`, and `xbrl_core_fact/`.
@@ -221,16 +222,23 @@ uv run python scripts/run_construct_overlap.py \
 
 - **Pretreatment target.** All preprocessing is designed to preserve the filing-origin information set: transform raw public-source tables into issuer-year features without introducing any post-`origin_date` information.
 - **Common sample rule.** Feature families use the same filtered issuer-year sample for fair ablations.
-- **Missing-value rule.** Tree models with native missing-value handling retain numeric `np.nan`; non-tree adapters use fold-internal imputation only when required.
+- **Missing-value rule.** The numeric columns are cast to float and retain NaN for XGBoost native missing-value handling; non-tree adapters use fold-internal imputation only when required.
 - **Excluded columns.** Label, censoring, identifier, source-availability, public-date, and vintage columns are excluded by default.
 - **Metadata.** SIC, form, SEC submissions `entityType`, filing size, XBRL flags, prior filing count, and days since prior filing.
 - **Filing friction and public history.** Current-cycle NT status and amendment friction, plus strictly pre-origin rolling counts and recency for prior NT filings, comment threads, amendments, and 8-K instability items. Rolling public-history features must use only events with `event_date < origin_date`.
 - **XBRL.** `xbrl_ratio_*` and `xbrl_coverage_*` features from controlled core tags, including size, leverage, profitability, working capital, receivables, inventory, cash, debt, operating cash flow, and year-over-year revenue/assets changes.
 - **Auditor and oversight.** PCAOB Form AP fields, engagement-partner exposure, and PCAOB inspection features in their public source windows.
 - **Note opacity.** Note count, note character count, note-tag coverage, and tag entropy as a disclosure breadth measure.
+- **Feature-family boundary.** The reported public families are metadata, XBRL, auditor, oversight, visibility/history, and all. The notes/disclosure-breadth variables enter `all`; there is no standalone text-family ablation.
 - **Leakage exclusions.** `source_available_*`, `public_date_*`, `vintage_*`, `as_of_date`, accession identifiers, CIK/GVKEY identifiers, labels, censoring flags, and direct event-date fields document provenance and timing but are not default predictors.
-- **Fold-local transformations.** Imputation, scaling, and any model-specific preprocessing are fit inside the training fold and then applied to the held-out fiscal year.
+- **Fold-local transformations.** The categoricals are fitted on training years only, constant-imputed to `__MISSING__`, and one-hot encoded with unknown test categories ignored. Scaling and any adapter-specific preprocessing are likewise fit inside the training fold and then applied to the held-out fiscal year.
 - **Deferred extensions.** Proxy-governance content, SEC insider-pressure features, macro-vintage controls, auditor-firm public-status fields, and broader security/attention layers are useful extensions, not required for the current v1 paper claim.
+
+#### Visibility/History Baseline
+
+- **Information set.** The `visibility_history` family is a compact visibility/history information set comprising filing size and type, XBRL flags, filing persistence, pre-origin filing friction, and one- and three-year histories of comment threads, amendments, and Items 3.01, 4.01, 4.02, and 5.02.
+- **Exclusions.** It excludes financial-statement values and ratios, notes/disclosure breadth, Form AP variables, PCAOB inspection variables, labels, censoring fields, identifiers, public dates, availability fields, and vintage fields.
+- **Interpretation.** Comparison with `all` asks whether broader public information adds ranking information beyond observable filing visibility and public-event history. It is an information-set comparison, not a causal selection correction, and makes no causal selection claim.
 
 ### Timing, Censoring, and Sample Rules
 
@@ -239,7 +247,8 @@ uv run python scripts/run_construct_overlap.py \
 - **Excluded coverage fields.** `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` document source availability and public vintages but are excluded from default predictors.
 - **Censoring.** Horizon-specific censoring flags remove issuer-years whose outcome window extends beyond the as-of date. Current public labels use 365-day censoring.
 - **Split design.** Prediction experiments use annual out-of-time evaluation, not random cross-validation.
-- **Training windows.** For a given test year, training uses earlier years only, with expanding or rolling 5-, 7-, and 10-year windows.
+- **Training windows.** For a given test year, training uses earlier years only, with expanding and rolling 5-, 7-, and 10-year windows.
+- **Sequential attrition.** Table 18 begins with source issuer-origin rows, then applies the fiscal years 2011-2024 restriction, the domestic U.S. GAAP proxy, the observable 365-day horizon, and task-specific exclusions. Each stage reports its parent-relative loss; task branches share the observable-horizon parent and are not subtracted sequentially from one another. Realized row counts belong in generated artifacts, not this design contract.
 
 ### Methods Including Models
 
@@ -267,10 +276,46 @@ uv run python scripts/run_construct_overlap.py \
 
 #### Model Selection and Skip Rules
 
-- **Primary public model.** The public cascade reports XGBoost by feature family and training window because tree models handle nonlinear interactions and native missingness while keeping feature-family ablations interpretable.
+- **Primary public analysis.** The revision-frozen `all + expanding` specification is the sole headline public analysis. Table 3 and Figure 1 report only its annual out-of-time task results; the feature-family and window grids remain sensitivity evidence rather than a search for the observed maximum.
+- **Primary public model.** The public cascade reports XGBoost by feature family and training window because tree models handle nonlinear interactions and native missingness while keeping feature-family ablations interpretable. The revision-frozen primary specification is method-driven and must not be described as preregistered.
+- **XGBoost specification.** `objective=binary:logistic`; `eval_metric=logloss`; `n_estimators=250`; `max_depth=4`; `learning_rate=0.05`; `subsample=0.8`; `colsample_bytree=0.8`; `min_child_weight=5.0`; `reg_lambda=1.0`; and `tree_method=hist`.
+- **Weighting.** Within every task/fold, `scale_pos_weight=max(1, training negatives/training positives)` is computed from the training labels only.
+- **Seeds and threads.** The model uses base seed=42 with task-isolated deterministic seeds. The configuration default `n_jobs=4` supports ordinary runs, while the canonical paper command overrides realized model threads to `2` and the run manifest must record `2`.
+- **Operational preprocessing contract.** Numeric columns cast to float and retain NaN for XGBoost native missing handling; categoricals are fitted on training years only, constant-imputed to `__MISSING__`, then one-hot encoded with unknown test categories ignored.
 - **Peer models.** Peer suites are included to place results in Dechow, Perols, Bao, and Bertomeu-style model-family language. They are not treated as exact replications unless the variable mapping and sample gates support that claim.
 - **Public peer mapping.** Public peer transfer reuses Dechow/Perols/Bao/Bertomeu model-family language. Dechow and Bao labels are reported as fixed, mapped, or inspired variants according to mapping quality; public Bao transfer uses `public_issuer_origin` input and is therefore `bao_inspired_tree_ensemble`, not a Bao raw-accounting-number replication.
-- **Skip rule.** Skip task/family/window fits with one-class train or test labels.
+- **Skip rule.** Fits with one-class train or test task/folds are skipped and reported, never silently scored.
+
+#### Construct-Alignment Specification
+
+The two directions use exactly one revision-frozen primary key set each.
+
+Public score to benchmark positives:
+
+```yaml
+model_id: public_cascade
+task: 8k_402
+feature_set: all
+train_window: expanding
+label_mode: benchmark_naive
+score_aggregation: mean
+bridge_tier: high_confidence
+```
+
+Benchmark score to public labels:
+
+```yaml
+model_id: benchmark_xgb
+target_public_label: label_8k_402_365
+feature_set: benchmark_all
+train_window: expanding
+label_mode: naive
+score_aggregation: benchmark_score
+bridge_tier: high_confidence
+```
+
+- **Selection contract.** A missing or duplicated primary row fails package generation. Table 9 and Figure 5 report these declared rows rather than an ex post maximum.
+- **Intervals and exploratory scope.** Construct-alignment intervals use seed 42 and 1,000 bootstrap draws over row-level percentile resamples. The interval scope is the primary plus the top five exploratory rows in each direction; exploratory maxima are labeled as such and remain outside the primary claim.
 
 ### Performance Metrics and Selection Criteria
 
@@ -286,11 +331,12 @@ uv run python scripts/run_construct_overlap.py \
 
 - **Predictive metrics.** PR-AUC, ROC-AUC, Brier score, Brier Skill Score, expected calibration error, top-50/100/200 precision, and Bao-style top-fraction metrics.
 - **Bao-style metrics.** Top-fraction precision, sensitivity, specificity, balanced accuracy, and binary-relevance NDCG@k.
-- **Calibration.** Calibration metrics are diagnostic under class imbalance and resampling.
+- **Calibration.** Brier score measures mean squared probability error; Brier Skill Score compares that error with the task-prevalence forecast; expected calibration error summarizes absolute bin-level probability miscalibration. These are calibration diagnostics, not substitutes for ranking evidence.
 - **Prevalence.** `Prevalence` is the positive-class rate in the evaluated sample and the natural random-ranking baseline for PR-AUC.
 - **PR-AUC interpretation.** When positives are rare, a numerically small PR-AUC can still represent meaningful lift over the base rate.
 - **ROC-AUC contrast.** ROC-AUC has a fixed random baseline near 0.5 and can look much larger than PR-AUC in rare-event settings.
 - **DML separation.** Cross-fitting appears separately in Double / Debiased Machine Learning (DML) opacity diagnostics; it is not the train/test split used for headline prediction tables.
+- **Excluding-2020 sensitivity.** Table 3 reports an excluding-2020 PR-AUC sensitivity and its delta from the full evaluation-period PR-AUC because the 2020 test fold is a designated regime sensitivity, not a second primary estimate.
 - **No absolute sufficiency threshold.** Prediction metrics are read relative to each task's prevalence; there is no absolute PR-AUC sufficiency threshold.
 
 ## Expected Experiments
@@ -306,7 +352,7 @@ uv run python scripts/run_construct_overlap.py \
 
 - **Purpose.** Estimate whether reporting-risk models trained in one regime remain useful in later regimes.
 - **Design.** Compare rolling and expanding windows over test years; track feature-family importance; report pre/post diagnostics around major regulatory and data-regime breakpoints.
-- **Outputs.** Annual metrics, window summaries, structural-break diagnostics, and feature-family importance.
+- **Outputs.** Annual metrics, window summaries, structural-break diagnostics, feature-family importance, and the full feature/window sensitivities in Table 4 and Table 14.
 - **Interpretation.** The experiment supports model shelf-life and retraining-window evidence; it does not establish structural causality from predictive drift alone.
 
 ### Experiment 3: Opacity and Public Review/Correction Risk
@@ -323,16 +369,16 @@ uv run python scripts/run_construct_overlap.py \
 
 - **Purpose.** Demonstrate that public data can support a defensible review-and-correction cascade.
 - **Design.** Build the public lake from SEC/PCAOB sources; construct labels from first public dates; report source coverage, event rates, censoring, and task readiness.
-- **Outputs.** Source coverage tables, event-rate tables, censoring summaries, public-lake metadata, and task-positive counts.
+- **Outputs.** Source coverage tables, event-rate tables, censoring summaries, public-lake metadata, and sequential sample attrition with task eligibility in Table 18.
 - **Interpretation.** This experiment validates the measurement surface for observable public review and correction states.
 
 ### Experiment 5: Public Cascade Prediction
 
 - **Purpose.** Estimate the pre-disclosure public reporting-risk state from public features.
-- **Design.** Use `issuer_origin_panel` to predict comment-thread scrutiny, broad amendment/friction, and 8-K Item 4.02 outcomes; run feature-family ablations over metadata, XBRL, auditor, oversight, and all-feature sets.
-- **Skip rule.** Skip task/family/window fits with one-class train or test labels.
-- **Outputs.** `public_cascade_metrics.csv`, `public_cascade_predictions.parquet`, `public_cascade_task_status.csv`, `public_cascade_summary.md`, and `public_opacity_dml.csv`.
-- **Interpretation.** Full public-cascade claims require non-metadata features; `metadata_baseline` is a readiness state, and `xbrl_ratio_baseline` is the first non-metadata empirical baseline.
+- **Design.** Use `issuer_origin_panel` to predict comment-thread scrutiny, broad amendment/friction, and 8-K Item 4.02 outcomes. The headline uses the revision-frozen `all + expanding` specification; metadata, XBRL, auditor, oversight, visibility/history, all-feature, and training-window grids are sensitivities.
+- **Skip rule.** Fits with one-class train or test labels are skipped and reported.
+- **Outputs.** Table 3 and Figure 1 for the primary task-level evidence; Table 4 and Table 14 for grid sensitivities; `public_cascade_metrics.csv`, `public_cascade_predictions.parquet`, `public_cascade_task_status.csv`, `public_cascade_summary.md`, and `public_opacity_dml.csv` for auditability.
+- **Interpretation.** The primary comparison is against task prevalence and the visibility/history information set. Alternative feature families and windows inform robustness, not headline selection.
 
 ### Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap
 
@@ -350,13 +396,14 @@ uv run python scripts/run_construct_overlap.py \
 - **Public-cascade expectation.** Public features should predict later public review-and-correction outcomes above each task's prevalence baseline, especially for comment-thread and amendment/friction labels.
 - **Feature-family expectation.** Metadata is a readiness baseline; XBRL, auditor, oversight, note-opacity, and all-feature models test whether non-metadata public information adds empirical value.
 - **Overlap expectation.** Detected-misstatement benchmark labels and public labels should show enrichment and reciprocal ranking alignment, but not one-to-one equivalence.
+- **Reporting ownership.** The primary analysis maps to Table 3/Figure 1 only; Table 4/Table 14 grid sensitivities retain alternative feature families and windows; Table 18 attrition owns realized sample construction; the canonical manifest gate precedes the reviewer archive.
 
 #### Connection to Results Snapshot
 
 - **Source of realized estimates.** Empirical numbers and realized interpretations live in `docs/results_snapshot.md` and `artifacts/manuscript_package`. This plan is the design contract and should not freeze stale PR-AUC values.
-- **Public sample.** The refreshed public-lake panel covers fiscal years 2011-2024, with nonzero positives for comment-thread, amendment, and 8-K Item 4.02 tasks.
-- **Detected-misstatement benchmark.** Benchmark outputs include non-empty rolling metrics, timing coverage, and missingness diagnostics.
-- **Bridge overlap.** Raw-only WRDS overlap is implemented. Construct-overlap outputs carry `validation_tier = wrds_validated` for the current raw-only bridge.
+- **Public sample.** Generated Table 18 is the sole paper-facing source for realized sample counts and task eligibility.
+- **Detected-misstatement benchmark.** The generated snapshot reports whether rolling metrics, timing coverage, and missingness diagnostics satisfy their evidence gates.
+- **Bridge overlap.** Construct-overlap interpretation requires `validation_tier = wrds_validated` in the canonical manifest; realized alignment estimates remain in generated Table 9 and Figure 5.
 
 #### Artifact Map
 
@@ -381,14 +428,15 @@ uv run python scripts/run_construct_overlap.py \
 
 #### Evidence Gates
 
-| Component | Current status | Gate before paper claim |
-| --- | --- | --- |
-| Benchmark timing | implemented as observability sensitivity | report `timing_coverage.csv`, retained positives, and imputed-lag scenarios; external timing required for paper-grade maturation |
-| Concept drift | implemented as rolling-window diagnostics | validate annual PR-AUC, Brier Skill Score, feature-importance drift, and breakpoint summaries |
-| Opacity | public-label DML implemented; refresh summary is separate from construct overlap | public-label PLR results must use `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` as primary outcomes |
-| Public lake | full public lake path implemented | refreshed source coverage, row counts, censoring, and reproducibility metadata |
-| Public cascade | current full-run state is `xbrl_ratio_baseline` | non-degenerate comment-thread, amendment, and 8-K Item 4.02 tasks |
-| Bridge overlap | raw-only WRDS overlap implemented | coverage, multiplicity, reciprocal alignment, and no silent many-to-many joins before final integrated claims |
+| Component | Gate before paper claim |
+| --- | --- |
+| Benchmark timing | Report `timing_coverage.csv`, retained positives, and imputed-lag scenarios; validated external timing is required for paper-grade maturation. |
+| Concept drift | Validate annual PR-AUC, Brier Skill Score, feature-importance drift, and breakpoint summaries. |
+| Opacity | The public-label PLR spec must use `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365` as primary outcomes and retain an adjusted-association interpretation. |
+| Public lake | Verify source hashes, Form AP archive provenance, the pinned vintage, censoring, and Table 18 against the clean run. |
+| Public cascade | Require the frozen primary rows, task eligibility, excluding-2020 sensitivity, and reported one-class skips. |
+| Bridge overlap | Require coverage, multiplicity, reciprocal alignment, declared primary counts, and no silent many-to-many joins. |
+| Reporting and archive | Pass the canonical manifest gate before manuscript finalization, then build and inspect the anonymized reviewer archive. |
 
 - **Data integrity gates.**
     - No post-`origin_date` event enters predictors.
@@ -408,6 +456,7 @@ uv run python scripts/run_construct_overlap.py \
     - Comment letters are described as public scrutiny, not complete SEC review.
     - Bridge validation is mandatory for the integrated old-benchmark/public-cascade paper claim.
     - WRDS-validated raw-only overlap can support a related-but-non-identical construct argument, but not causal fraud-occurrence claims.
+    - Table 3/Figure 1 remain primary; Table 4/Table 14 are grid sensitivities; Table 18 owns realized attrition; and the reviewer archive is released only after the canonical manifest gate passes.
 
 ## Reproducibility and Execution Contract
 
@@ -420,22 +469,18 @@ uv run python scripts/run_construct_overlap.py \
 just check
 ```
 
-- **Paper-facing core run.**
+- **Canonical paper run.** Rebuild the data layer once from cached inputs, then execute one peer-enabled study. This nonduplicating sequence avoids running the core study before the peer study.
 
 ```bash
-just full mode=full dataset=raw
-```
-
-- **Peer-compatible model-family transfer.**
-
-```bash
+just data full fresh
 just task study raw artifacts/full_with_peer \
   extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
-just snapshot
-just manuscript
+just snapshot study_dir=artifacts/full_with_peer
+just verify-canonical study_dir=artifacts/full_with_peer package_dir=artifacts/manuscript_package
+just reviewer-package study_dir=artifacts/full_with_peer package_dir=artifacts/manuscript_package
 ```
 
 ### Command Boundary
 
-- **Command boundary.** `just check` is the local quality gate; `just full mode=full dataset=raw` is the paper-facing core run for data engineering and core experiments; `full_with_peer` adds the detected-misstatement and public-label peer model-family transfer suites; `just snapshot` refreshes the results snapshot from `artifacts/full_with_peer` and then runs `just check`; `just manuscript` builds paper-facing tables, figures, and result prose in `artifacts/manuscript_package`. Use `--peer-target public` when only the public-label peer transfer needs to be refreshed.
+- **Command boundary.** `just check` is the local quality gate. `just data full fresh` plus the single peer-enabled `just task study` invocation is the canonical paper run. `just snapshot` first builds the manuscript package from `artifacts/full_with_peer`, then refreshes the artifact-backed results page and runs the quality gate. `just verify-canonical` checks the manifest and generated reporting contract before `just reviewer-package` creates the anonymized reviewer archive. `just full mode=full dataset=raw` remains a convenience workflow, not the canonical paper run. Use `--peer-target public` only for a bounded public-label peer refresh, not for the canonical both-target study.
 - **Detailed operations.** Component-level reruns and public-lake operational details are documented in [the repository home page](index.md), which includes the root `README.md`.
