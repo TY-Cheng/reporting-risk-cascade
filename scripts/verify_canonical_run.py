@@ -99,6 +99,10 @@ def _is_hex(value: object, length: int) -> bool:
     return isinstance(value, str) and re.fullmatch(rf"[0-9a-fA-F]{{{length}}}", value) is not None
 
 
+def _is_exact_one(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == 1
+
+
 def _nonnegative_integer(value: object) -> int | None:
     if isinstance(value, bool):
         return None
@@ -616,8 +620,12 @@ def verify_canonical_run(
         "public-to-benchmark primary keys": primary.get("public_to_benchmark") == PUBLIC_PRIMARY,
         "benchmark-to-public primary keys": primary.get("benchmark_to_public")
         == RECIPROCAL_PRIMARY,
-        "public-to-benchmark primary count": primary.get("public_to_benchmark_count") == 1,
-        "benchmark-to-public primary count": primary.get("benchmark_to_public_count") == 1,
+        "public-to-benchmark primary count": _is_exact_one(
+            primary.get("public_to_benchmark_count")
+        ),
+        "benchmark-to-public primary count": _is_exact_one(
+            primary.get("benchmark_to_public_count")
+        ),
         "DML CSV/meta/Table 12 consistency": _dml_matches(dml, dml_meta, table_12),
         "Table 3 primary metrics": _table_03_matches(table_03, package_manifest),
         "Table 9 primary metrics and intervals": _alignment_evidence_matches(
@@ -645,7 +653,8 @@ def verify_canonical_run(
         "Table 18": len(table_18) >= 7,
         "benchmark component": benchmark_component.get("status") == "complete",
         "public-cascade component": public_component.get("status") == "complete",
-        "bridge component": bridge_component.get("status") in {"crosswalk_available", "complete"},
+        "bridge component": isinstance(bridge_component.get("status"), str)
+        and bridge_component.get("status") in {"crosswalk_available", "complete"},
         "benchmark peer component": benchmark_peer_component.get("status") == "complete",
         "public peer component": public_peer_component.get("status") == "complete",
         "construct component": construct_component.get("run_status") == "complete",

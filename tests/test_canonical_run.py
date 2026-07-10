@@ -489,6 +489,60 @@ def test_verify_canonical_run_aggregates_nested_and_semantic_failures(tmp_path: 
 
 
 @pytest.mark.parametrize(
+    "replacement",
+    [["crosswalk_available"], {"value": "crosswalk_available"}],
+)
+def test_verify_canonical_run_rejects_non_string_bridge_status_without_raising(
+    tmp_path: Path,
+    replacement: object,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    manifest["components"]["bridge_probe"]["status"] = replacement
+    _write_json(fixture["manifest"], manifest)
+    construct = json.loads(fixture["construct"].read_text(encoding="utf-8"))
+    construct["interval_seed"] = 7
+    _write_json(fixture["construct"], construct)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert "bridge component" in errors
+    assert "construct bootstrap seed" in errors
+
+
+@pytest.mark.parametrize(
+    ("count_key", "replacement", "message"),
+    [
+        ("public_to_benchmark_count", True, "public-to-benchmark primary count"),
+        ("benchmark_to_public_count", True, "benchmark-to-public primary count"),
+        ("public_to_benchmark_count", 1.0, "public-to-benchmark primary count"),
+    ],
+)
+def test_verify_canonical_run_rejects_non_integer_primary_count(
+    tmp_path: Path,
+    count_key: str,
+    replacement: object,
+    message: str,
+) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    construct = json.loads(fixture["construct"].read_text(encoding="utf-8"))
+    construct["primary_alignment"][count_key] = replacement
+    _write_json(fixture["construct"], construct)
+
+    errors = verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        expected_as_of_date="2026-07-06",
+    )
+
+    assert message in errors
+
+
+@pytest.mark.parametrize(
     ("column", "values"),
     [
         (
@@ -823,4 +877,30 @@ def test_cli_never_verifies_invalid_canonical_fixture(
     assert completed.returncode == 1
     assert "CANONICAL RUN VERIFIED" not in completed.stdout
     assert "FAILED:" in completed.stdout
+    assert "Traceback" not in completed.stderr
+
+
+def test_cli_rejects_non_string_bridge_status_without_traceback(tmp_path: Path) -> None:
+    fixture = _write_canonical_fixture(tmp_path)
+    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    payload["components"]["bridge_probe"]["status"] = []
+    _write_json(fixture["manifest"], payload)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/verify_canonical_run.py",
+            "--study-dir",
+            str(fixture["study_dir"]),
+            "--manuscript-package",
+            str(fixture["package_dir"]),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "FAILED: bridge component" in completed.stdout
+    assert "CANONICAL RUN VERIFIED" not in completed.stdout
     assert "Traceback" not in completed.stderr
