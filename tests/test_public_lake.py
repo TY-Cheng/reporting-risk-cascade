@@ -1069,6 +1069,77 @@ def test_form_ap_materialization_rejects_verified_corrupt_zip_without_touching_s
     assert not (tmp_path / "silver" / "form_ap_source_metadata.json").exists()
 
 
+def test_form_ap_materialization_cleans_temp_after_verified_member_crc_failure(
+    tmp_path: Path,
+) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    silver_dir = tmp_path / "silver"
+    form_ap_dir.mkdir(parents=True)
+    stale = form_ap_dir / "FirmFilings.csv"
+    stale_contents = "Form Filing ID\nold\n"
+    stale.write_text(stale_contents, encoding="utf-8")
+
+    archive = form_ap_dir / "FirmFilings.zip"
+    payload = b"Form Filing ID\nnew\n"
+    damaged_payload = b"Form Filing ID\nbad\n"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("FirmFilings.csv", payload)
+    archive_bytes = archive.read_bytes()
+    assert archive_bytes.count(payload) == 1
+    archive.write_bytes(archive_bytes.replace(payload, damaged_payload, 1))
+    public_lake._write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
+
+    with pytest.raises(zipfile.BadZipFile, match="Bad CRC-32"):
+        public_lake._materialize_form_ap_csv(
+            form_ap_dir=form_ap_dir,
+            silver_dir=silver_dir,
+        )
+
+    assert stale.read_text(encoding="utf-8") == stale_contents
+    assert not public_lake._metadata_path(stale).exists()
+    assert not (silver_dir / "form_ap_source_metadata.json").exists()
+    assert list(form_ap_dir.glob("FirmFilings.*.tmp")) == []
+
+
+def test_form_ap_materialization_rejects_duplicate_basename_members_before_mutation(
+    tmp_path: Path,
+) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    silver_dir = tmp_path / "silver"
+    form_ap_dir.mkdir(parents=True)
+    stale = form_ap_dir / "FirmFilings.csv"
+    stale_contents = "Form Filing ID\nold\n"
+    stale.write_text(stale_contents, encoding="utf-8")
+
+    archive = form_ap_dir / "FirmFilings.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("FirmFilings.csv", "Form Filing ID\nroot\n")
+        zf.writestr("nested/FirmFilings.csv", "Form Filing ID\nnested\n")
+    public_lake._write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"exactly one FirmFilings\.csv member; found 2",
+    ):
+        public_lake._materialize_form_ap_csv(
+            form_ap_dir=form_ap_dir,
+            silver_dir=silver_dir,
+        )
+
+    assert stale.read_text(encoding="utf-8") == stale_contents
+    assert not public_lake._metadata_path(stale).exists()
+    assert not (silver_dir / "form_ap_source_metadata.json").exists()
+    assert list(form_ap_dir.glob("FirmFilings.*.tmp")) == []
+
+
 def test_form_ap_and_pcaob_inspection_normalizers_standardize_fields(tmp_path: Path) -> None:
     silver = tmp_path / "silver"
     form_ap_csv = tmp_path / "FirmFilings.csv"

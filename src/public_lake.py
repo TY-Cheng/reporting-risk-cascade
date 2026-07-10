@@ -375,8 +375,8 @@ def _materialize_form_ap_csv(
                         delete=False,
                     ) as target,
                 ):
-                    shutil.copyfileobj(source, target)
                     temp_path = Path(target.name)
+                    shutil.copyfileobj(source, target)
             temp_path.replace(csv_path)
         finally:
             if temp_path is not None and temp_path.exists():
