@@ -922,6 +922,153 @@ def test_archive_normalizers_raise_clear_errors_on_missing_required_members(
         )
 
 
+def test_form_ap_materialization_replaces_stale_csv_from_verified_zip(tmp_path: Path) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    silver_dir = tmp_path / "silver"
+    form_ap_dir.mkdir(parents=True)
+    stale = form_ap_dir / "FirmFilings.csv"
+    stale.write_text("Form Filing ID\nold\n", encoding="utf-8")
+
+    archive = form_ap_dir / "FirmFilings.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("FirmFilings.csv", "Form Filing ID\nnew\n")
+    public_lake._write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
+
+    csv_path, metadata_path = public_lake._materialize_form_ap_csv(
+        form_ap_dir=form_ap_dir,
+        silver_dir=silver_dir,
+    )
+
+    assert csv_path == stale
+    assert stale.read_text(encoding="utf-8") == "Form Filing ID\nnew\n"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["source_kind"] == "verified_zip_member"
+    assert metadata["member"] == "FirmFilings.csv"
+    assert metadata["archive_sha256"] == public_lake._hash_file(archive)
+    assert metadata["member_sha256"] == public_lake._hash_file(stale)
+    assert public_lake._verify_metadata_hash(stale) is True
+
+    event_path = public_lake.normalize_form_ap_csv(
+        form_ap_csv=csv_path,
+        silver_dir=silver_dir,
+    )
+    event = read_table(event_path)
+    assert set(event["form_filing_id"].astype(str)) == {"new"}
+    assert "old" not in set(event["form_filing_id"].astype(str))
+
+
+def test_form_ap_materialization_fails_when_verified_zip_lacks_member(tmp_path: Path) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    form_ap_dir.mkdir(parents=True)
+    archive = form_ap_dir / "FirmFilings.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("other.csv", "id\n1\n")
+    public_lake._write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
+
+    with pytest.raises(ValueError, match="FirmFilings.csv"):
+        public_lake._materialize_form_ap_csv(
+            form_ap_dir=form_ap_dir,
+            silver_dir=tmp_path / "silver",
+        )
+
+
+def test_form_ap_materialization_rejects_archive_hash_mismatch(tmp_path: Path) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    form_ap_dir.mkdir(parents=True)
+    archive = form_ap_dir / "FirmFilings.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("FirmFilings.csv", "filingId\nnew\n")
+    public_lake._write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
+    archive.write_bytes(archive.read_bytes() + b"drift")
+
+    with pytest.raises(ValueError, match="Hash mismatch"):
+        public_lake._materialize_form_ap_csv(
+            form_ap_dir=form_ap_dir,
+            silver_dir=tmp_path / "silver",
+        )
+
+
+def test_form_ap_materialization_accepts_standalone_csv_without_sidecar(
+    tmp_path: Path,
+) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    form_ap_dir.mkdir(parents=True)
+    csv_path = form_ap_dir / "FirmFilings.csv"
+    csv_path.write_text("filingId\nstandalone\n", encoding="utf-8")
+
+    selected, metadata_path = public_lake._materialize_form_ap_csv(
+        form_ap_dir=form_ap_dir,
+        silver_dir=tmp_path / "silver",
+    )
+
+    assert selected == csv_path
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["source_kind"] == "standalone_csv_fallback"
+    assert metadata["archive_sha256"] is None
+    assert metadata["member_sha256"] == public_lake._hash_file(csv_path)
+
+
+def test_form_ap_materialization_rejects_zip_without_verified_sidecar(
+    tmp_path: Path,
+) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    form_ap_dir.mkdir(parents=True)
+    stale = form_ap_dir / "FirmFilings.csv"
+    stale_contents = "Form Filing ID\nold\n"
+    stale.write_text(stale_contents, encoding="utf-8")
+    archive = form_ap_dir / "FirmFilings.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("FirmFilings.csv", "Form Filing ID\nnew\n")
+
+    with pytest.raises(ValueError, match="Missing verified metadata sidecar"):
+        public_lake._materialize_form_ap_csv(
+            form_ap_dir=form_ap_dir,
+            silver_dir=tmp_path / "silver",
+        )
+
+    assert stale.read_text(encoding="utf-8") == stale_contents
+    assert not (tmp_path / "silver" / "form_ap_source_metadata.json").exists()
+
+
+def test_form_ap_materialization_rejects_verified_corrupt_zip_without_touching_stale_csv(
+    tmp_path: Path,
+) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    form_ap_dir.mkdir(parents=True)
+    stale = form_ap_dir / "FirmFilings.csv"
+    stale_contents = "Form Filing ID\nold\n"
+    stale.write_text(stale_contents, encoding="utf-8")
+    archive = form_ap_dir / "FirmFilings.zip"
+    archive.write_bytes(b"")
+    public_lake._write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
+
+    with pytest.raises(zipfile.BadZipFile):
+        public_lake._materialize_form_ap_csv(
+            form_ap_dir=form_ap_dir,
+            silver_dir=tmp_path / "silver",
+        )
+
+    assert stale.read_text(encoding="utf-8") == stale_contents
+    assert not public_lake._metadata_path(stale).exists()
+    assert not (tmp_path / "silver" / "form_ap_source_metadata.json").exists()
+
+
 def test_form_ap_and_pcaob_inspection_normalizers_standardize_fields(tmp_path: Path) -> None:
     silver = tmp_path / "silver"
     form_ap_csv = tmp_path / "FirmFilings.csv"
@@ -2236,8 +2383,14 @@ def test_build_public_lake_csv_gz_path_extracts_form_ap_and_inspection_sources(
             }
         ]
     )
-    with zipfile.ZipFile(form_ap_dir / "FirmFilings.zip", "w") as zf:
+    archive = form_ap_dir / "FirmFilings.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("FirmFilings.csv", firm_filings.to_csv(index=False))
+    _write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
 
     inspection_dir = bronze / "pcaob-inspections"
     inspection_dir.mkdir(parents=True)
@@ -2267,6 +2420,7 @@ def test_build_public_lake_csv_gz_path_extracts_form_ap_and_inspection_sources(
     )
 
     assert outputs["form_ap_event"].exists()
+    assert outputs["form_ap_source_metadata"].exists()
     assert outputs["pcaob_inspection_event"].exists()
     assert (gold / "issuer_origin_panel.parquet").exists()
 

@@ -12,7 +12,7 @@ if [[ -f ".env" ]]; then
 fi
 
 MODE="${MODE:-full}"
-AS_OF_DATE="${AS_OF_DATE:-2026-05-26}"
+AS_OF_DATE="${AS_OF_DATE:-2026-07-06}"
 SUBMISSIONS_MAX_CIKS="${SUBMISSIONS_MAX_CIKS:-}"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE="${FORCE:-0}"
@@ -39,7 +39,7 @@ Usage: bash scripts/run_public_lake_full.sh [options]
 
 Options:
   --mode full|smoke              Run against DATA_DIR/public_lake or DATA_DIR/public_lake_smoke.
-  --as-of-date YYYY-MM-DD        Censoring date for gold panels. Default: 2026-05-26.
+  --as-of-date YYYY-MM-DD        Censoring date for gold panels. Default: 2026-07-06.
   --submissions-max-ciks N       Optional cap for submissions.zip normalization.
   --dry-run                      Print commands without executing them.
   --force                        Re-download source files even when cached.

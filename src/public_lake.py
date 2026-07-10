@@ -336,6 +336,89 @@ def _verify_metadata_hash(path: Path) -> bool:
     return True
 
 
+def _materialize_form_ap_csv(
+    *,
+    form_ap_dir: Path,
+    silver_dir: Path,
+) -> tuple[Path | None, Path | None]:
+    csv_path = form_ap_dir / "FirmFilings.csv"
+    archive_path = form_ap_dir / "FirmFilings.zip"
+    metadata_path = silver_dir / "form_ap_source_metadata.json"
+
+    if archive_path.exists():
+        if not _verify_metadata_hash(archive_path):
+            raise ValueError(f"Missing verified metadata sidecar for {archive_path}")
+        form_ap_dir.mkdir(parents=True, exist_ok=True)
+        temp_path: Path | None = None
+        archive_metadata = json.loads(_metadata_path(archive_path).read_text(encoding="utf-8"))
+        member_name = ""
+        try:
+            with zipfile.ZipFile(archive_path) as zf:
+                members = [
+                    info
+                    for info in zf.infolist()
+                    if not info.is_dir() and Path(info.filename).name == "FirmFilings.csv"
+                ]
+                if len(members) != 1:
+                    raise ValueError(
+                        f"{archive_path} must contain exactly one FirmFilings.csv member; "
+                        f"found {len(members)}"
+                    )
+                member_name = members[0].filename
+                with (
+                    zf.open(members[0]) as source,
+                    tempfile.NamedTemporaryFile(
+                        mode="wb",
+                        dir=form_ap_dir,
+                        prefix="FirmFilings.",
+                        suffix=".tmp",
+                        delete=False,
+                    ) as target,
+                ):
+                    shutil.copyfileobj(source, target)
+                    temp_path = Path(target.name)
+            temp_path.replace(csv_path)
+        finally:
+            if temp_path is not None and temp_path.exists():
+                temp_path.unlink()
+        source_kind = "verified_zip_member"
+        archive_sha256 = _hash_file(archive_path)
+        _write_metadata(
+            path=csv_path,
+            source_url=str(archive_metadata.get("source_url") or PCAOB_FORM_AP_ZIP_URL),
+            source_name="form-ap-derived",
+            extra={
+                "derived_from": archive_path.name,
+                "derived_from_sha256": archive_sha256,
+                "zip_member": member_name,
+            },
+        )
+    elif csv_path.exists():
+        if _metadata_path(csv_path).exists() and not _verify_metadata_hash(csv_path):
+            raise ValueError(f"Incomplete metadata sidecar for {csv_path}")
+        source_kind = "standalone_csv_fallback"
+        archive_sha256 = None
+        member_name = csv_path.name
+    else:
+        return None, None
+
+    silver_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "source_kind": source_kind,
+                "archive_sha256": archive_sha256,
+                "member": member_name,
+                "member_sha256": _hash_file(csv_path),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return csv_path, metadata_path
+
+
 def _download_file(
     url: str,
     dest: Path,
@@ -4750,19 +4833,18 @@ def build_public_lake(
         )
 
     def normalize_form_ap_task() -> Dict[str, Path]:
-        form_ap_csv = bronze_dir / "form-ap" / "FirmFilings.csv"
-        if not form_ap_csv.exists():
-            extracted = bronze_dir / "form-ap" / "FirmFilings.zip"
-            if extracted.exists():
-                _verify_metadata_hash(extracted)
-                with zipfile.ZipFile(extracted) as zf:
-                    if "FirmFilings.csv" in zf.namelist():
-                        zf.extract("FirmFilings.csv", path=bronze_dir / "form-ap")
-        if not form_ap_csv.exists():
+        form_ap_csv, source_metadata = _materialize_form_ap_csv(
+            form_ap_dir=bronze_dir / "form-ap",
+            silver_dir=silver_dir,
+        )
+        if form_ap_csv is None or source_metadata is None:
             return {}
-        _verify_metadata_hash(form_ap_csv)
         return {
-            "form_ap_event": normalize_form_ap_csv(form_ap_csv=form_ap_csv, silver_dir=silver_dir)
+            "form_ap_event": normalize_form_ap_csv(
+                form_ap_csv=form_ap_csv,
+                silver_dir=silver_dir,
+            ),
+            "form_ap_source_metadata": source_metadata,
         }
 
     def normalize_inspections_task() -> Dict[str, Path]:

@@ -287,7 +287,7 @@ data mode="full" strategy="fresh": _check-data-env
     echo "Data engineering complete: raw dataset parquet plus public lake {{ mode }}."
 
 full *args: _check-data-env
-    @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-05-26"; source_end_year=""; fetch_workers="2"; model_jobs="4"; model_threads="2"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="400GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
+    @mode="smoke"; dataset="sample"; out_dir=""; as_of_date="2026-07-06"; source_end_year=""; fetch_workers="2"; model_jobs="4"; model_threads="2"; engine="duckdb"; storage_format="parquet"; notes_mode="summary"; fresh_build="0"; force_fetch="0"; resume="0"; duckdb_memory_limit="10GB"; duckdb_temp_directory=""; duckdb_max_temp_size="400GB"; fsds_batch_size="4"; notes_batch_size="2"; pos=1; \
     raw_dataset_path="${RAW_DATASET_PATH:-${DATA_DIR}/raw/raw_dataset_misstatement.parquet}"; \
     sample_dataset_path="${SAMPLE_DATASET_PATH:-${ARTIFACTS_DIR}/sample_dataset_misstatement.parquet}"; \
     public_lake_dir="${PUBLIC_LAKE_DIR:-${DATA_DIR}/public_lake}"; \

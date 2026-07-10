@@ -79,7 +79,7 @@ Working title:
     - `$DATA_DIR/raw/raw_dataset_misstatement.parquet` for the `gvkey x data_year` detected-misstatement benchmark.
     - `config/public_data.yaml` and `config/study.yaml` for public-source and study defaults.
     - `$DATA_DIR/linkage/raw_only/gvkey_cik_year.csv` for bridge validation, generated only from the raw CIK-GVKEY link table.
-- **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-05-26`. The public modeling sample now runs through fiscal year 2024, while SEC FSDS and Notes source archives are fetched through the as-of year 2026 so fiscal-year 2024 annual filings are covered.
+- **Public-data run.** The current paper-facing public lake is built with `storage_format=parquet`, `notes_mode=summary`, DuckDB, and as-of date `2026-07-06`. The public modeling sample now runs through fiscal year 2024, while SEC FSDS and Notes source archives are fetched through the as-of year 2026 so fiscal-year 2024 annual filings are covered.
 - **Peer and overlap run.** The peer-enabled study is a separate run so the default workflow stays bounded.
 
 ### Data Engineering and Preprocessing Overview
@@ -102,7 +102,7 @@ flowchart LR
     end
 
     subgraph PUBLIC["Public filing-origin cascade: SEC/PCAOB public information set"]
-        P0["Public inputs<br/>EDGAR filings, FSDS/XBRL, Notes summaries,<br/>comment letters, amendments, 8-K Item 4.02,<br/>PCAOB Form AP, PCAOB inspections<br/>public sample 2011-2024, as-of 2026-05-26"]
+        P0["Public inputs<br/>EDGAR filings, FSDS/XBRL, Notes summaries,<br/>comment letters, amendments, 8-K Item 4.02,<br/>PCAOB Form AP, PCAOB inspections<br/>public sample 2011-2024, as-of 2026-07-06"]
         P1["Parquet public lake<br/>Bronze source cache<br/>Silver normalized event and fact tables<br/>Gold filing_origin_panel and issuer_origin_panel"]
         P2["Public modeling grain<br/>issuer_cik x fiscal_year<br/>origin_date is selected annual filing date<br/>features visible at or before origin_date"]
         P3["Public X<br/>metadata, XBRL ratios, auditor, oversight, all<br/>rolling public history requires event_date < origin_date<br/>exclude source_available_*, public_date_*, vintage_* fields"]
@@ -158,7 +158,7 @@ flowchart LR
 - **DuckDB path.** The default DuckDB path uses SQL for XBRL core-tag pivoting, label-horizon joins, and Parquet output on the annual issuer-year modeling panel.
 - **Filing-origin provenance.** The full filing-origin panel is retained as a lightweight, year-sharded provenance panel rather than a fully labeled 20M-row modeling table.
 - **Required v1 sources.** SEC submissions, SEC Financial Statement Data Sets (FSDS), SEC `UPLOAD` and `CORRESP`, 10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, and PCAOB inspection datasets.
-- **Main public sample.** Domestic U.S. GAAP issuer-years from 2011-2024, with `2026-05-26` as the current reproducibility as-of date.
+- **Main public sample.** Domestic U.S. GAAP issuer-years from 2011-2024, with `2026-07-06` as the current reproducibility as-of date.
 - **Source-to-table mapping.**
     - SEC submissions and filing index data form `filing_dim.parquet`, `issuer_dim.parquet`, `filing_origin_panel.parquet`, and the annual `issuer_origin_panel.parquet`.
     - FSDS/XBRL `sub` and `num` files form `filing_xbrl_dim.parquet`, `xbrl_fact_summary.parquet`, and `xbrl_core_fact/`.

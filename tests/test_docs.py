@@ -238,6 +238,19 @@ def test_public_lake_full_sources_env_before_cli_parse() -> None:
         assert f'require_outside_repo "{guarded_name}"' in script
 
 
+def test_public_data_vintage_is_pinned_across_entry_points_and_docs() -> None:
+    paths = [
+        "config/public_data.yaml",
+        "justfile",
+        "scripts/run_public_lake_full.sh",
+        "docs/paper_plan.md",
+    ]
+    for path in paths:
+        text = _read(path)
+        assert "2026-07-06" in text, path
+        assert "2026-05-26" not in text, path
+
+
 def test_just_env_guards_use_physical_paths_for_external_data() -> None:
     justfile = _read("justfile")
 
