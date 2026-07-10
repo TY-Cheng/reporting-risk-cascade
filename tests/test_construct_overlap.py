@@ -192,23 +192,39 @@ def _write_toy_study(
     if with_opacity:
         pd.DataFrame(
             {
-                "outcome": ["comment_thread"],
-                "label_col": ["label_comment_thread_365"],
-                "censor_col": ["censored_365"],
-                "treatment": ["missingness_density_score"],
-                "n_obs": [40],
-                "prevalence": [0.5],
-                "mean_treatment": [0.2],
-                "n_controls": [3],
-                "n_opacity_components": [2],
-                "status": ["fit"],
-                "coef": [0.1],
-                "std_err": [0.2],
-                "p_value": [0.6],
+                "outcome": ["comment_thread", "amendment"],
+                "label_col": ["label_comment_thread_365", "label_amendment_365"],
+                "censor_col": ["censored_365", "censored_365"],
+                "treatment": ["missingness_density_score", "missingness_density_score"],
+                "n_obs": [40, 40],
+                "prevalence": [0.5, 0.3],
+                "mean_treatment": [0.2, 0.2],
+                "n_raw_controls": [60, 60],
+                "n_encoded_controls": [64, 63],
+                "n_controls": [64, 63],
+                "n_controls_definition": [
+                    "encoded_nuisance_columns",
+                    "encoded_nuisance_columns",
+                ],
+                "n_opacity_components": [17, 17],
+                "status": ["fit", "fit"],
+                "coef": [0.1, 0.2],
+                "std_err": [0.2, 0.3],
+                "p_value": [0.6, 0.5],
             }
         ).to_csv(cascade / "public_opacity_dml.csv", index=False)
         (cascade / "public_opacity_dml_meta.json").write_text(
-            json.dumps({"n_opacity_components": 2, "n_controls": 3}),
+            json.dumps(
+                {
+                    "n_raw_controls": 60,
+                    "n_encoded_controls_by_outcome": {
+                        "comment_thread": 64,
+                        "amendment": 63,
+                    },
+                    "n_opacity_components": 17,
+                    "n_controls_definition": "encoded_nuisance_columns",
+                }
+            ),
             encoding="utf-8",
         )
     (study / "study_run_manifest.json").write_text(
@@ -338,6 +354,19 @@ def test_construct_overlap_end_to_end_writes_validation_artifacts(
     summary = (out / "construct_overlap_summary.md").read_text(encoding="utf-8")
     assert "related but non-identical constructs" in summary
     assert "WRDS/Compustat provenance" in summary
+
+    refreshed = pd.read_csv(
+        study / "opacity_validation_refresh" / "opacity_diagnostics_summary.csv"
+    ).set_index("outcome")
+    assert set(refreshed["n_raw_controls_meta"]) == {60}
+    assert refreshed["n_encoded_controls_meta"].to_dict() == {
+        "comment_thread": 64,
+        "amendment": 63,
+    }
+    assert set(refreshed["n_opacity_components_meta"]) == {17}
+    assert set(refreshed["n_controls_definition_meta"]) == {
+        "encoded_nuisance_columns"
+    }
 
 
 def test_construct_overlap_infers_wrds_validation_tier_from_crosswalk_provenance(

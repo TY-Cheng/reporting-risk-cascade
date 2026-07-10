@@ -141,6 +141,57 @@ def _filter_main_sample(
     return work.reset_index(drop=True)
 
 
+def _sample_attrition(
+    panel: pd.DataFrame,
+    *,
+    start_year: int,
+    end_year: int,
+    domestic_only: bool,
+) -> pd.DataFrame:
+    work = panel.copy()
+    rows = [{"stage": "source_issuer_origin", "n_rows": int(len(work)), "task": "all"}]
+    fiscal_year = pd.to_numeric(work["fiscal_year"], errors="coerce")
+    work = work.loc[fiscal_year.between(start_year, end_year)].copy()
+    rows.append(
+        {
+            "stage": f"fiscal_year_{start_year}_{end_year}",
+            "n_rows": int(len(work)),
+            "task": "all",
+        }
+    )
+    if domestic_only and "is_domestic_us_gaap_proxy" in work:
+        work = work.loc[
+            pd.to_numeric(work["is_domestic_us_gaap_proxy"], errors="coerce").eq(1)
+        ].copy()
+    rows.append(
+        {"stage": "domestic_us_gaap_proxy", "n_rows": int(len(work)), "task": "all"}
+    )
+    observable = work.loc[
+        pd.to_numeric(work["censored_365"], errors="coerce").fillna(1).eq(0)
+    ].copy()
+    rows.append(
+        {
+            "stage": "observable_365_day_horizon",
+            "n_rows": int(len(observable)),
+            "task": "all",
+        }
+    )
+    for task_name, meta in TASKS.items():
+        excluded = _task_exclusion_mask(
+            observable,
+            task_name=task_name,
+            label_col=str(meta["label"]),
+        )
+        rows.append(
+            {
+                "stage": f"eligible_{task_name}",
+                "n_rows": int((~excluded).sum()),
+                "task": task_name,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _sort_panel_for_model(panel: pd.DataFrame) -> pd.DataFrame:
     sort_cols = [
         col for col in ["issuer_cik", "fiscal_year", "origin_date", "accession"] if col in panel
@@ -465,6 +516,7 @@ def fit_public_opacity_dml(
         opacity_component_names=opacity_components,
     )
     rows: List[Dict[str, object]] = []
+    encoded_counts: Dict[str, int] = {}
     for outcome in outcomes:
         if outcome not in TASKS:
             rows.append(
@@ -480,7 +532,10 @@ def fit_public_opacity_dml(
                     "coef": np.nan,
                     "std_err": np.nan,
                     "p_value": np.nan,
-                    "n_controls": int(len(controls)),
+                    "n_raw_controls": int(len(controls)),
+                    "n_encoded_controls": np.nan,
+                    "n_controls": np.nan,
+                    "n_controls_definition": "encoded_nuisance_columns",
                     "n_opacity_components": int(len(opacity_components)),
                 }
             )
@@ -501,12 +556,15 @@ def fit_public_opacity_dml(
                     "coef": np.nan,
                     "std_err": np.nan,
                     "p_value": np.nan,
-                    "n_controls": int(len(controls)),
+                    "n_raw_controls": int(len(controls)),
+                    "n_encoded_controls": np.nan,
+                    "n_controls": np.nan,
+                    "n_controls_definition": "encoded_nuisance_columns",
                     "n_opacity_components": int(len(opacity_components)),
                 }
             )
             continue
-        uncensored = pd.to_numeric(panel_with_score[censor_col], errors="coerce").fillna(0).eq(0)
+        uncensored = pd.to_numeric(panel_with_score[censor_col], errors="coerce").eq(0)
         work = panel_with_score.loc[uncensored].copy()
         work = work.dropna(subset=[label_col, "missingness_density_score"])
         y = pd.to_numeric(work[label_col], errors="coerce").fillna(0).astype(int).to_numpy()
@@ -519,7 +577,10 @@ def fit_public_opacity_dml(
             "n_obs": int(len(work)),
             "prevalence": float(np.mean(y)) if len(y) else np.nan,
             "mean_treatment": float(np.mean(t)) if len(t) else np.nan,
-            "n_controls": int(len(controls)),
+            "n_raw_controls": int(len(controls)),
+            "n_encoded_controls": np.nan,
+            "n_controls": np.nan,
+            "n_controls_definition": "encoded_nuisance_columns",
             "n_opacity_components": int(len(opacity_components)),
         }
         if len(opacity_components) == 0:
@@ -532,9 +593,16 @@ def fit_public_opacity_dml(
             rows.append({**base_row, "status": "skipped_constant_treatment", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
             continue
         X, used_controls = _public_dml_matrix(work, controls)
+        n_encoded_controls = int(len(used_controls))
+        encoded_counts[outcome] = n_encoded_controls
+        post_matrix_row = {
+            **base_row,
+            "n_encoded_controls": n_encoded_controls,
+            "n_controls": n_encoded_controls,
+        }
         splits = min(int(n_splits), len(work))
         if splits < 2:
-            rows.append({**base_row, "status": "skipped_insufficient_folds", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            rows.append({**post_matrix_row, "status": "skipped_insufficient_folds", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
             continue
         y_hat = np.zeros(len(work), dtype=float)
         t_hat = np.zeros(len(work), dtype=float)
@@ -561,17 +629,20 @@ def fit_public_opacity_dml(
         y_res = y - y_hat
         t_res = t - t_hat
         if float(np.nanstd(t_res)) == 0:
-            rows.append({**base_row, "status": "skipped_constant_residual_treatment", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            rows.append({**post_matrix_row, "status": "skipped_constant_residual_treatment", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
             continue
         fitted = sm.OLS(y_res, sm.add_constant(t_res)).fit(cov_type="HC3")
         rows.append(
             {
-                **base_row,
+                **post_matrix_row,
                 "status": "fit",
                 "coef": float(fitted.params[1]),
                 "std_err": float(fitted.bse[1]),
                 "p_value": float(fitted.pvalues[1]),
-                "n_controls": int(len(used_controls)),
+                "n_raw_controls": int(len(controls)),
+                "n_encoded_controls": n_encoded_controls,
+                "n_controls": n_encoded_controls,
+                "n_controls_definition": "encoded_nuisance_columns",
             }
         )
     meta = {
@@ -579,7 +650,11 @@ def fit_public_opacity_dml(
         "opacity_components": opacity_components,
         "control_columns": controls,
         "n_opacity_components": int(len(opacity_components)),
-        "n_controls": int(len(controls)),
+        "n_raw_controls": int(len(controls)),
+        "n_encoded_controls_by_outcome": encoded_counts,
+        "n_controls": max(encoded_counts.values(), default=0),
+        "n_controls_definition": "encoded_nuisance_columns",
+        "control_columns_definition": "raw_controls_before_encoding",
     }
     return pd.DataFrame(rows), meta
 
@@ -799,12 +874,25 @@ def run_public_cascade(
     model_cfg = config.get("model", {})
     analysis_cfg = config.get("analysis", {})
 
+    start_year = int(sample_cfg.get("start_year", 2011))
+    end_year = int(sample_cfg.get("end_year", 2023))
+    domestic_only = bool(sample_cfg.get("domestic_only", True))
+    sample_attrition_df = _sample_attrition(
+        panel,
+        start_year=start_year,
+        end_year=end_year,
+        domestic_only=domestic_only,
+    )
     panel = _filter_main_sample(
         panel,
-        start_year=int(sample_cfg.get("start_year", 2011)),
-        end_year=int(sample_cfg.get("end_year", 2023)),
-        domestic_only=bool(sample_cfg.get("domestic_only", True)),
+        start_year=start_year,
+        end_year=end_year,
+        domestic_only=domestic_only,
     )
+    panel = panel.loc[
+        pd.to_numeric(panel["censored_365"], errors="coerce").eq(0)
+    ].copy()
+    panel = panel.reset_index(drop=True)
     panel = _sort_panel_for_model(panel)
     families = _infer_feature_families(panel)
     metadata_family = set(families.get("metadata", []))
@@ -1022,6 +1110,7 @@ def run_public_cascade(
     )
     summary: Dict[str, object] = {
         "n_rows": int(len(panel)),
+        "sample_attrition": sample_attrition_df.to_dict(orient="records"),
         "sample_years": [
             int(panel["fiscal_year"].min()),
             int(panel["fiscal_year"].max()),
@@ -1096,7 +1185,11 @@ def run_public_cascade(
             "opacity_components": [],
             "control_columns": [],
             "n_opacity_components": 0,
+            "n_raw_controls": 0,
+            "n_encoded_controls_by_outcome": {},
             "n_controls": 0,
+            "n_controls_definition": "encoded_nuisance_columns",
+            "control_columns_definition": "raw_controls_before_encoding",
             "status": "disabled",
         }
     summary["public_opacity_dml_status_counts"] = (
@@ -1115,6 +1208,7 @@ def run_public_cascade(
     metrics_path = out_dir / "public_cascade_metrics.csv"
     predictions_path = out_dir / "public_cascade_predictions.parquet"
     task_status_path = out_dir / "public_cascade_task_status.csv"
+    sample_attrition_path = out_dir / "public_sample_attrition.csv"
     opacity_dml_path = out_dir / "public_opacity_dml.csv"
     opacity_dml_meta_path = out_dir / "public_opacity_dml_meta.json"
     summary_path = out_dir / "public_cascade_summary.json"
@@ -1123,6 +1217,7 @@ def run_public_cascade(
     metrics_df.to_csv(metrics_path, index=False)
     write_table(predictions_df, predictions_path)
     task_status_df.to_csv(task_status_path, index=False)
+    sample_attrition_df.to_csv(sample_attrition_path, index=False)
     opacity_dml_df.to_csv(opacity_dml_path, index=False)
     opacity_dml_meta_path.write_text(json.dumps(opacity_dml_meta, indent=2), encoding="utf-8")
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -1169,6 +1264,7 @@ def run_public_cascade(
         "predictions_table": predictions_path,
         "predictions_csv": predictions_path,
         "task_status_csv": task_status_path,
+        "sample_attrition_csv": sample_attrition_path,
         "public_opacity_dml_csv": opacity_dml_path,
         "public_opacity_dml_meta_json": opacity_dml_meta_path,
         "summary_json": summary_path,

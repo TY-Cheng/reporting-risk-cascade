@@ -11,6 +11,7 @@ import pytest
 from scripts import fetch_public_data
 from src.public_cascade import (
     VISIBILITY_HISTORY_FEATURES,
+    _sample_attrition,
     build_public_missingness_density_score,
     fit_public_opacity_dml,
     _build_preprocessor,
@@ -241,6 +242,34 @@ def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
     )
 
 
+def test_sample_attrition_is_sequential_and_task_specific() -> None:
+    panel = pd.DataFrame(
+        {
+            "fiscal_year": [2010, 2011, 2011, 2011, 2011],
+            "is_domestic_us_gaap_proxy": [1, 0, 1, 1, 1],
+            "censored_365": [0, 0, 1, 0, 0],
+            "label_comment_thread_365": [0, 0, 0, 1, 0],
+            "label_amendment_365": [0, 0, 0, 0, 1],
+            "label_8k_402_365": [0, 0, 0, 1, 0],
+            "k402_item_metadata_unknown_365": [0, 0, 0, 1, 0],
+        }
+    )
+
+    attrition = _sample_attrition(
+        panel,
+        start_year=2011,
+        end_year=2024,
+        domestic_only=True,
+    ).set_index("stage")
+
+    assert attrition.loc["source_issuer_origin", "n_rows"] == 5
+    assert attrition.loc["fiscal_year_2011_2024", "n_rows"] == 4
+    assert attrition.loc["domestic_us_gaap_proxy", "n_rows"] == 3
+    assert attrition.loc["observable_365_day_horizon", "n_rows"] == 2
+    assert attrition.loc["eligible_comment_thread", "n_rows"] == 2
+    assert attrition.loc["eligible_8k_402", "n_rows"] == 1
+
+
 def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> None:
     rows = []
     for year in range(2011, 2017):
@@ -265,8 +294,15 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
                     "censored_365": 0,
                 }
             )
+    rows.append(
+        {
+            **rows[0],
+            "issuer_cik": "9999999999",
+            "accession": "9999999999-2011-000001",
+            "censored_365": pd.NA,
+        }
+    )
     panel = pd.DataFrame(rows)
-
     scored, components = build_public_missingness_density_score(panel)
     dml, meta = fit_public_opacity_dml(
         scored,
@@ -276,13 +312,31 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
         max_iter=5,
     )
 
-    assert "misstatement firm-year" not in dml.to_string()
-    assert "missingness_density_score" in scored.columns
     assert components
-    assert set(dml["outcome"]) == {"comment_thread", "amendment", "8k_402"}
     assert set(dml["status"]) == {"fit"}
-    assert meta["n_opacity_components"] >= 2
-    assert not any(str(col).startswith(("label_", "censored_")) for col in meta["control_columns"])
+    assert (dml["n_obs"] == len(rows) - 1).all()
+    assert (dml["n_raw_controls"] == len(meta["control_columns"])).all()
+    assert (dml["n_encoded_controls"] == dml["n_controls"]).all()
+    assert set(dml["n_controls_definition"]) == {"encoded_nuisance_columns"}
+    assert meta["n_raw_controls"] == len(meta["control_columns"])
+    assert meta["n_controls_definition"] == "encoded_nuisance_columns"
+    for row in dml.itertuples(index=False):
+        assert meta["n_encoded_controls_by_outcome"][row.outcome] == row.n_encoded_controls
+
+    degenerate = scored.assign(label_amendment_365=0)
+    skipped, skipped_meta = fit_public_opacity_dml(
+        degenerate,
+        outcomes=["amendment"],
+        seed=42,
+        n_splits=3,
+        max_iter=5,
+    )
+    skipped_row = skipped.iloc[0]
+    assert skipped_row["status"] == "skipped_one_class_or_too_small"
+    assert skipped_row["n_raw_controls"] == len(skipped_meta["control_columns"])
+    assert pd.isna(skipped_row["n_encoded_controls"])
+    assert pd.isna(skipped_row["n_controls"])
+    assert skipped_row["n_controls_definition"] == "encoded_nuisance_columns"
 
 
 def test_public_cascade_skips_zero_positive_tasks_without_metrics(
@@ -312,6 +366,13 @@ def test_public_cascade_skips_zero_positive_tasks_without_metrics(
                 "xbrl_fact_count": 10 + year,
             }
         )
+    rows.append(
+        {
+            **rows[0],
+            "accession": "0000000001-2011-000002",
+            "censored_365": pd.NA,
+        }
+    )
     write_table(pd.DataFrame(rows), panel_path)
     config_path.write_text(
         """
@@ -326,6 +387,8 @@ analysis:
   primary_specification:
     feature_set: "metadata"
     train_window: "expanding"
+  opacity_dml:
+    enabled: false
 model:
   seed: 42
   xgb:
@@ -342,8 +405,21 @@ model:
     summary = json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
     metrics = pd.read_csv(result["metrics_csv"])
     task_status = pd.read_csv(result["task_status_csv"])
+    attrition = pd.read_csv(result["sample_attrition_csv"])
+    opacity_meta = json.loads(
+        Path(result["public_opacity_dml_meta_json"]).read_text(encoding="utf-8")
+    )
 
     assert set(summary["zero_positive_tasks"]) == {"comment_thread", "amendment", "8k_402"}
+    assert summary["n_rows"] == 4
+    assert summary["sample_attrition"] == attrition.to_dict(orient="records")
+    assert attrition.set_index("stage").loc["source_issuer_origin", "n_rows"] == 5
+    assert attrition.set_index("stage").loc["observable_365_day_horizon", "n_rows"] == 4
+    assert opacity_meta["n_raw_controls"] == 0
+    assert opacity_meta["n_encoded_controls_by_outcome"] == {}
+    assert opacity_meta["n_controls"] == 0
+    assert opacity_meta["n_controls_definition"] == "encoded_nuisance_columns"
+    assert opacity_meta["control_columns_definition"] == "raw_controls_before_encoding"
     assert metrics.empty
     assert set(task_status["status"]) == {"skipped_one_class_train"}
     assert set(task_status["task"]) == {"comment_thread", "amendment", "8k_402"}

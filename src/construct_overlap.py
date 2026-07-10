@@ -1062,8 +1062,11 @@ def _opacity_refresh(study_dir: Path, out_dir: Path) -> dict[str, Any]:
         return {"run_status": "blocked_missing_artifacts", "blockers": blockers}
     dml = pd.read_csv(dml_path)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    encoded_by_outcome = dict(meta.get("n_encoded_controls_by_outcome", {}))
+    dml["n_raw_controls_meta"] = int(meta.get("n_raw_controls", 0))
+    dml["n_encoded_controls_meta"] = dml["outcome"].map(encoded_by_outcome)
     dml["n_opacity_components_meta"] = int(meta.get("n_opacity_components", 0))
-    dml["n_controls_meta"] = int(meta.get("n_controls", 0))
+    dml["n_controls_definition_meta"] = meta.get("n_controls_definition")
     dml["interpretation"] = "adjusted_association_not_causal"
     _write_csv(dml, opacity_dir / "opacity_diagnostics_summary.csv")
     _write_json({"blockers": []}, opacity_dir / "opacity_validation_blockers.json")
