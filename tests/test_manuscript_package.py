@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 
 import scripts.build_manuscript_package as manuscript_module
-from scripts.build_reviewer_package import _declared_package_files
 from scripts.build_manuscript_package import (
     DML_INTERVAL_NOTE,
     MIN_VALID_FOLDS_FOR_CI,
@@ -380,7 +379,7 @@ def test_validated_bridge_package_retains_wrds_claim_language() -> None:
     assert "manuscript-grade" in language["narrative"]
 
 
-def test_external_manifest_paths_are_private_and_basename_resolvable(
+def test_external_manifest_paths_are_private(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "repo"
@@ -399,11 +398,6 @@ def test_external_manifest_paths_are_private_and_basename_resolvable(
     assert package_manifest["tables"]["table_03"]["csv"] == "<external>/table_03.csv"
     assert package_manifest["figures"]["figure_01"]["png"] == "<external>/figure_01.png"
     assert str(tmp_path) not in str(package_manifest)
-    assert _declared_package_files(package_manifest) == {
-        "results_narrative.md",
-        "tables/table_03.csv",
-        "figures/figure_01.png",
-    }
     assert _rel(repo_root / "artifacts" / "table.csv") == "artifacts/table.csv"
 
 

@@ -1,13 +1,62 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
+import os
 import re
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.build_manuscript_package import (  # noqa: E402
+    _bound_public_lake_inputs,
+    _construct_alignment,
+    _public_opacity_dml_table,
+    _public_sample_attrition_table,
+    _public_task_metrics,
+    _select_primary_public_metrics,
+    _validate_package_tree,
+)
+from src.provenance import (  # noqa: E402
+    path_record,
+    path_set_provenance,
+    public_lake_provenance,
+    sha256_path,
+)
+
+
+ATTESTATION_SCHEMA = "canonical-attestation-v1"
+VERIFIER_VERSION = "4"
+RUNTIME_CONTRACT = {
+    "parallel_jobs": 4,
+    "model_threads": 2,
+    "seed_policy": "task-isolated",
+    "peer_comparison_mode": "full",
+    "peer_target": "both",
+    "peer_parallel_jobs": 4,
+    "peer_model_threads": 2,
+}
+RAW_RECONSTRUCTION_OWNERS = (
+    "public_cascade/public_cascade_summary.json",
+    "public_cascade/public_cascade_metrics.csv",
+    "public_cascade/public_cascade_task_status.csv",
+    "construct_overlap/public_score_benchmark_ranking.csv",
+    "construct_overlap/reciprocal_alignment.csv",
+    "public_cascade/public_opacity_dml.csv",
+    "public_cascade/public_opacity_dml_meta.json",
+    "construct_overlap/construct_overlap_manifest.json",
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -23,26 +72,6 @@ def _read_csv(path: Path) -> pd.DataFrame:
     if not path.is_file():
         raise FileNotFoundError(path)
     return pd.read_csv(path)
-
-
-def _package_artifacts_exist(
-    manuscript_package: Path,
-    package_manifest: dict[str, Any],
-) -> bool:
-    checked = 0
-    for group in ("tables", "figures"):
-        records = package_manifest.get(group, {})
-        if not isinstance(records, dict):
-            return False
-        for formats in records.values():
-            if not isinstance(formats, dict):
-                return False
-            for recorded_path in formats.values():
-                checked += 1
-                candidate = manuscript_package / group / Path(str(recorded_path)).name
-                if not candidate.is_file():
-                    return False
-    return checked > 0
 
 
 PUBLIC_PRIMARY = {
@@ -573,7 +602,453 @@ def _alignment_evidence_matches(
     return True
 
 
-def verify_canonical_run(
+def _git(repo_root: Path, *args: str) -> str:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() or exc.stdout.strip() or "git command failed"
+        raise ValueError(detail) from exc
+
+
+def _full_commit(value: object, context: str) -> str:
+    if type(value) is not str or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise ValueError(f"{context} must be a full lowercase 40-hex commit")
+    return value
+
+
+def _validate_recorded_path_set(
+    provenance: dict[str, Any],
+    *,
+    files_field: str,
+    hash_field: str,
+    context: str,
+) -> str:
+    records = provenance.get(files_field)
+    if type(records) is not list or not records:
+        raise ValueError(f"recomputed {context}: {files_field} must be a nonempty array")
+    paths: list[Path] = []
+    for index, record in enumerate(records):
+        if type(record) is not dict or type(record.get("path")) is not str:
+            raise ValueError(f"recomputed {context}: malformed {files_field}[{index}]")
+        path = Path(record["path"])
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(
+                f"recomputed {context}: {files_field}[{index}] must be an existing regular file"
+            )
+        paths.append(path)
+    recomputed = path_set_provenance(paths)
+    if recomputed["files"] != records or provenance.get(hash_field) != recomputed["hash"]:
+        raise ValueError(f"recomputed {context}")
+    return str(recomputed["hash"])
+
+
+def _validate_recorded_lock(
+    provenance: dict[str, Any],
+    *,
+    repo_root: Path,
+    context: str,
+) -> str:
+    raw_path = repo_root / "uv.lock"
+    if raw_path.is_symlink() or not raw_path.is_file():
+        raise ValueError(f"recomputed {context}: uv.lock must be an existing regular file")
+    expected_path = raw_path.resolve()
+    recorded = provenance.get("uv_lock")
+    if type(recorded) is not dict or type(recorded.get("path")) is not str:
+        raise ValueError(f"recomputed {context}: malformed uv.lock record")
+    recorded_path = Path(recorded["path"])
+    if recorded_path.resolve() != expected_path:
+        raise ValueError(f"recomputed {context}: uv.lock path is not repository uv.lock")
+    current = path_record(recorded_path)
+    if recorded != current or provenance.get("uv_lock_hash") != current.get("sha256"):
+        raise ValueError(f"recomputed {context}")
+    return str(current["sha256"])
+
+
+def _derive_bronze_root(
+    run_provenance: dict[str, Any],
+    source_inventory: object,
+    override: Path | None,
+) -> Path:
+    raw_records = run_provenance.get("input_files")
+    if type(raw_records) is not list or type(source_inventory) is not list:
+        raise ValueError("cannot derive Bronze root from malformed source records")
+    candidates: set[Path] = set()
+    for inventory_record in source_inventory:
+        if type(inventory_record) is not dict:
+            continue
+        relative_value = inventory_record.get("metadata_file")
+        metadata_hash = inventory_record.get("metadata_sha256")
+        if type(relative_value) is not str or type(metadata_hash) is not str:
+            continue
+        relative = Path(relative_value)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("source inventory metadata_file must be a pathless relative path")
+        for raw_record in raw_records:
+            if (
+                type(raw_record) is not dict
+                or raw_record.get("sha256") != metadata_hash
+                or type(raw_record.get("path")) is not str
+            ):
+                continue
+            raw_path = Path(raw_record["path"]).resolve()
+            if tuple(raw_path.parts[-len(relative.parts) :]) != relative.parts:
+                continue
+            candidate = raw_path
+            for _ in relative.parts:
+                candidate = candidate.parent
+            candidates.add(candidate)
+    resolved_override = override.resolve() if override is not None else None
+    if len(candidates) == 1:
+        derived = next(iter(candidates))
+        if resolved_override is not None and resolved_override != derived:
+            raise ValueError("Bronze root override does not match the derived Bronze root")
+        return derived
+    if resolved_override is not None and (not candidates or resolved_override in candidates):
+        return resolved_override
+    raise ValueError("cannot uniquely derive Bronze root; pass --bronze-root")
+
+
+def _validate_runtime(manifest: dict[str, Any]) -> dict[str, Any]:
+    runtime = manifest.get("runtime")
+    if type(runtime) is not dict:
+        raise ValueError("runtime must be an object")
+    for field, expected in RUNTIME_CONTRACT.items():
+        actual = runtime.get(field)
+        if type(actual) is not type(expected) or actual != expected:
+            raise ValueError(f"runtime {field}")
+    if set(runtime) != set(RUNTIME_CONTRACT):
+        raise ValueError("runtime fields must be exact")
+    return dict(RUNTIME_CONTRACT)
+
+
+def _package_artifact_inventory(package_manifest: dict[str, Any]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for group in ("tables", "figures"):
+        for formats in package_manifest[group].values():
+            for record in formats.values():
+                records.append({"path": record["path"], "sha256": record["sha256"]})
+    narrative = package_manifest["narrative"]
+    records.append({"path": narrative["path"], "sha256": narrative["sha256"]})
+    return sorted(records, key=lambda record: record["path"])
+
+
+def _report_surface(
+    repo_root: Path,
+    package_manifest: dict[str, Any],
+) -> list[dict[str, str]]:
+    asset_root = repo_root / "docs" / "assets" / "results_snapshot"
+    snapshot = repo_root / "docs" / "results_snapshot.md"
+    if snapshot.is_symlink() or not snapshot.is_file():
+        raise ValueError("report surface requires a regular docs/results_snapshot.md")
+    png_records = [
+        (
+            Path(package_manifest["figures"][key]["png"]["path"]).name,
+            package_manifest["figures"][key]["png"]["sha256"],
+        )
+        for key in sorted(package_manifest["figures"])
+    ]
+    png_names = [name for name, _ in png_records]
+    if len(png_names) != 5 or len(set(png_names)) != 5:
+        raise ValueError("report surface requires five unique declared PNG basenames")
+    if asset_root.is_symlink() or not asset_root.is_dir():
+        raise ValueError("results-snapshot asset tree is missing or symlinked")
+    entries = list(asset_root.rglob("*"))
+    if any(path.is_symlink() or not path.is_file() for path in entries):
+        raise ValueError("results-snapshot asset tree must contain only regular declared files")
+    expected_assets = {asset_root / name for name in png_names}
+    if set(entries) != expected_assets:
+        raise ValueError("results-snapshot asset tree does not match declared PNG set")
+    for name, expected_hash in png_records:
+        if sha256_path(asset_root / name) != expected_hash:
+            raise ValueError(f"report surface PNG does not match package PNG: {name}")
+    paths = [snapshot, *sorted(expected_assets)]
+    return sorted(
+        [
+            {
+                "path": path.relative_to(repo_root).as_posix(),
+                "sha256": str(sha256_path(path)),
+            }
+            for path in paths
+        ],
+        key=lambda record: record["path"],
+    )
+
+
+def _working_tree_records(repo_root: Path) -> tuple[list[tuple[str, str]], bool]:
+    raw = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    parts = raw.split(b"\0")
+    records: list[tuple[str, str]] = []
+    renamed = False
+    index = 0
+    while index < len(parts) and parts[index]:
+        record = parts[index]
+        if len(record) < 4:
+            raise ValueError("malformed git status record")
+        status = record[:2].decode("ascii")
+        path = record[3:].decode("utf-8", errors="surrogateescape")
+        records.append((status, path))
+        index += 1
+        if "R" in status or "C" in status:
+            renamed = True
+            if index < len(parts) and parts[index]:
+                records.append((status, parts[index].decode("utf-8", errors="surrogateescape")))
+                index += 1
+    return records, renamed
+
+
+def _validate_precommit_git(
+    repo_root: Path,
+    study_commit: str,
+    report_surface: list[dict[str, str]],
+) -> None:
+    if _git(repo_root, "rev-parse", "HEAD") != study_commit:
+        raise ValueError("source HEAD does not equal the recorded study commit")
+    status, renamed = _working_tree_records(repo_root)
+    allowed = {record["path"] for record in report_surface}
+    dirty = {path for _, path in status}
+    unmerged = {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}
+    if any(code in unmerged for code, _ in status):
+        raise ValueError("working tree report surface contains an unmerged path")
+    if renamed or not dirty <= allowed:
+        raise ValueError("working tree report surface contains forbidden dirty paths or rename")
+
+
+def _roundtrip_csv(frame: pd.DataFrame) -> pd.DataFrame:
+    buffer = io.StringIO()
+    frame.to_csv(buffer, index=False)
+    return pd.read_csv(io.StringIO(buffer.getvalue()), low_memory=False)
+
+
+def _reconstructed_tables(study_dir: Path) -> dict[str, pd.DataFrame]:
+    summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
+    metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
+    task_status = _read_csv(study_dir / "public_cascade" / "public_cascade_task_status.csv")
+    return {
+        "table_03": _public_task_metrics(
+            _select_primary_public_metrics(metrics, summary),
+            task_status,
+            summary,
+        ),
+        "table_09": _construct_alignment(study_dir),
+        "table_12": _public_opacity_dml_table(study_dir),
+        "table_18": _public_sample_attrition_table(summary),
+    }
+
+
+def _validate_reconstructed_tables(
+    study_dir: Path,
+    manuscript_package: Path,
+    package_manifest: dict[str, Any],
+) -> None:
+    for key, expected in _reconstructed_tables(study_dir).items():
+        relative = package_manifest["tables"][key]["csv"]["path"]
+        actual = pd.read_csv(manuscript_package / relative, low_memory=False)
+        try:
+            pd.testing.assert_frame_equal(
+                actual,
+                _roundtrip_csv(expected),
+                check_dtype=True,
+                check_exact=True,
+            )
+        except AssertionError as exc:
+            raise ValueError(f"{key} deterministic reconstruction") from exc
+
+
+def collect_canonical_evidence(
+    *,
+    repo_root: Path,
+    study_dir: Path,
+    manuscript_package: Path,
+    expected_as_of_date: str,
+    bronze_root: Path | None = None,
+    check_precommit: bool = True,
+) -> dict[str, Any]:
+    repo_root = repo_root.resolve()
+    study_dir = study_dir.resolve()
+    manuscript_package = manuscript_package.absolute()
+    study_manifest_path = study_dir / "study_run_manifest.json"
+    manifest = _read_json(study_manifest_path)
+    provenance = manifest.get("provenance")
+    public_lake = manifest.get("public_lake_provenance")
+    if type(provenance) is not dict or type(public_lake) is not dict:
+        raise ValueError("study and public-lake provenance must be objects")
+    study_commit = _full_commit(manifest.get("repo_commit"), "study commit")
+    provenance_commit = _full_commit(provenance.get("commit_sha"), "provenance commit")
+    lake_commit = _full_commit(public_lake.get("commit_sha"), "public-lake commit")
+    if study_commit != provenance_commit or study_commit != lake_commit:
+        raise ValueError("study, provenance, and public-lake commits must agree")
+    resolved_commit = _git(repo_root, "rev-parse", "--verify", f"{study_commit}^{{commit}}")
+    if resolved_commit != study_commit:
+        raise ValueError("study commit does not resolve to the exact recorded commit")
+    if manifest.get("git_dirty") is not False or provenance.get("dirty") is not False:
+        raise ValueError("study provenance must record a clean run")
+    if public_lake.get("git_dirty") is not False:
+        raise ValueError("public-lake provenance must record a clean run")
+
+    runtime = _validate_runtime(manifest)
+    study_config_hash = _validate_recorded_path_set(
+        provenance,
+        files_field="config_files",
+        hash_field="config_hash",
+        context="study provenance",
+    )
+    study_input_hash = _validate_recorded_path_set(
+        provenance,
+        files_field="input_files",
+        hash_field="input_hash",
+        context="study provenance",
+    )
+    study_lock_hash = _validate_recorded_lock(
+        provenance,
+        repo_root=repo_root,
+        context="study provenance",
+    )
+
+    bound_inputs = _bound_public_lake_inputs(
+        manifest,
+        study_manifest_path=study_manifest_path,
+    )
+    run_metadata = _read_json(bound_inputs["public_lake_run_metadata"])
+    run_provenance = run_metadata.get("provenance")
+    if type(run_provenance) is not dict:
+        raise ValueError("public lake run metadata provenance must be an object")
+    lake_config_hash = _validate_recorded_path_set(
+        run_provenance,
+        files_field="config_files",
+        hash_field="config_hash",
+        context="public-lake provenance",
+    )
+    lake_input_hash = _validate_recorded_path_set(
+        run_provenance,
+        files_field="input_files",
+        hash_field="input_hash",
+        context="public-lake provenance",
+    )
+    lake_lock_hash = _validate_recorded_lock(
+        run_provenance,
+        repo_root=repo_root,
+        context="public-lake provenance",
+    )
+    derived_bronze = _derive_bronze_root(
+        run_provenance,
+        public_lake.get("source_metadata_inventory"),
+        bronze_root,
+    )
+    recomputed_lake = public_lake_provenance(
+        bound_inputs["public_lake_run_metadata"],
+        bound_inputs["form_ap_source_metadata"],
+        bronze_root=derived_bronze,
+    )
+    if recomputed_lake != public_lake:
+        raise ValueError("recomputed public-lake provenance")
+    if public_lake.get("as_of_date") != expected_as_of_date:
+        raise ValueError("public-data as-of date")
+
+    package_manifest = _validate_package_tree(manuscript_package, study_manifest_path)
+    _validate_reconstructed_tables(study_dir, manuscript_package, package_manifest)
+    owners = []
+    for relative in RAW_RECONSTRUCTION_OWNERS:
+        owner = study_dir / relative
+        if owner.is_symlink() or not owner.is_file():
+            raise ValueError(f"raw reconstruction owner is missing or symlinked: {relative}")
+        owners.append({"path": relative, "sha256": str(sha256_path(owner))})
+    owners.sort(key=lambda record: record["path"])
+    report_surface = _report_surface(repo_root, package_manifest)
+    if check_precommit:
+        _validate_precommit_git(repo_root, study_commit, report_surface)
+
+    components = manifest.get("components")
+    if type(components) is not dict:
+        raise ValueError("components must be an object")
+    component = components.get("construct_overlap", {})
+    if type(component) is not dict:
+        raise ValueError("construct component must be an object")
+    construct_manifest = _read_json(
+        study_dir / "construct_overlap" / "construct_overlap_manifest.json"
+    )
+    paired_tier = (
+        "wrds_validated"
+        if component.get("validation_tier")
+        == construct_manifest.get("validation_tier")
+        == "wrds_validated"
+        else "invalid"
+    )
+    if paired_tier == "invalid":
+        raise ValueError("paired bridge tier must be wrds_validated in both owning manifests")
+    semantic_errors = _semantic_errors(
+        study_dir,
+        manuscript_package,
+        expected_as_of_date=expected_as_of_date,
+    )
+    if semantic_errors:
+        raise ValueError(semantic_errors[0])
+    public_input_hashes = {
+        key: manifest["public_lake_inputs"][key]["sha256"]
+        for key in sorted(manifest["public_lake_inputs"])
+    }
+    return {
+        "study_commit": study_commit,
+        "expected_as_of_date": expected_as_of_date,
+        "paired_bridge_tier": paired_tier,
+        "runtime": runtime,
+        "study_manifest_sha256": str(sha256_path(study_manifest_path)),
+        "study_config_hash": study_config_hash,
+        "study_input_hash": study_input_hash,
+        "study_uv_lock_hash": study_lock_hash,
+        "public_lake_inputs": public_input_hashes,
+        "public_lake_config_hash": lake_config_hash,
+        "public_lake_input_hash": lake_input_hash,
+        "public_lake_uv_lock_hash": lake_lock_hash,
+        "package_manifest_sha256": str(sha256_path(manuscript_package / "manifest.json")),
+        "package_study_manifest_sha256": package_manifest["study_manifest_sha256"],
+        "package_artifacts": _package_artifact_inventory(package_manifest),
+        "raw_reconstruction_owners": owners,
+        "report_surface": report_surface,
+    }
+
+
+def _write_attestation(path: Path, evidence: dict[str, Any]) -> None:
+    payload = {
+        "schema_version": ATTESTATION_SCHEMA,
+        "verifier_version": VERIFIER_VERSION,
+        "verified_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **evidence,
+    }
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def _semantic_errors(
     study_dir: Path,
     manuscript_package: Path,
     *,
@@ -743,26 +1218,70 @@ def verify_canonical_run(
         == "wrds_validated",
         "construct manifest validation tier": construct_manifest.get("validation_tier")
         == "wrds_validated",
-        "package manifest files": _package_artifacts_exist(manuscript_package, package_manifest),
     }
     errors.extend(name for name, passed in checks.items() if not passed)
     return errors
 
 
+def verify_canonical_run(
+    study_dir: Path,
+    manuscript_package: Path,
+    *,
+    repo_root: Path,
+    expected_as_of_date: str,
+    bronze_root: Path | None = None,
+    check_precommit: bool = True,
+) -> list[str]:
+    try:
+        collect_canonical_evidence(
+            repo_root=repo_root,
+            study_dir=study_dir,
+            manuscript_package=manuscript_package,
+            expected_as_of_date=expected_as_of_date,
+            bronze_root=bronze_root,
+            check_precommit=check_precommit,
+        )
+    except (
+        FileNotFoundError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        pd.errors.ParserError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        return [str(exc)]
+    return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--bronze-root", type=Path, default=None)
     parser.add_argument("--study-dir", type=Path, required=True)
     parser.add_argument("--manuscript-package", type=Path, required=True)
     parser.add_argument("--expected-as-of-date", default="2026-07-06")
+    parser.add_argument("--attestation-output", type=Path, required=True)
     args = parser.parse_args()
-    errors = verify_canonical_run(
-        args.study_dir,
-        args.manuscript_package,
-        expected_as_of_date=args.expected_as_of_date,
-    )
-    if errors:
-        for error in errors:
-            print(f"FAILED: {error}")
+    try:
+        evidence = collect_canonical_evidence(
+            repo_root=args.repo_root,
+            study_dir=args.study_dir,
+            manuscript_package=args.manuscript_package,
+            expected_as_of_date=args.expected_as_of_date,
+            bronze_root=args.bronze_root,
+        )
+        _write_attestation(args.attestation_output, evidence)
+    except (
+        FileNotFoundError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        pd.errors.ParserError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        print(f"FAILED: {exc}")
         return 1
     print("CANONICAL RUN VERIFIED")
     return 0

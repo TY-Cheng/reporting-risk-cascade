@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import subprocess
+import sys
+import tempfile
 import tomllib
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.verify_canonical_run import (  # noqa: E402
+    ATTESTATION_SCHEMA,
+    VERIFIER_VERSION,
+    collect_canonical_evidence,
+)
 
 
 ALLOWED_ROOT_FILES = {
@@ -28,8 +44,6 @@ EXCLUDED_PREFIXES = (
     "docs/assets/results_snapshot/",
 )
 EXCLUDED_FILES = {"docs/results_snapshot.md"}
-REPORT_FILES = {"docs/results_snapshot.md"}
-REPORT_PREFIXES = ("docs/assets/results_snapshot/",)
 FORBIDDEN_SUFFIXES = (".parquet", ".pkl")
 FORBIDDEN_PARTS = {".env", ".serena", ".venv", "site", "__pycache__"}
 BINARY_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg"}
@@ -93,10 +107,6 @@ def _source_allowed(path: str) -> bool:
     return path in ALLOWED_ROOT_FILES or any(
         path.startswith(prefix) for prefix in ALLOWED_PREFIXES
     )
-
-
-def _report_allowed(path: str) -> bool:
-    return path in REPORT_FILES or any(path.startswith(prefix) for prefix in REPORT_PREFIXES)
 
 
 def _sanitize(value: Any) -> Any:
@@ -218,20 +228,6 @@ def _redact_entries(
     return redacted
 
 
-def _declared_package_files(package_manifest: dict[str, Any]) -> set[str]:
-    declared = {"results_narrative.md"}
-    for group in ("tables", "figures"):
-        records = package_manifest.get(group, {})
-        if not isinstance(records, dict):
-            raise ValueError(f"invalid package manifest group: {group}")
-        for formats in records.values():
-            if not isinstance(formats, dict):
-                raise ValueError(f"invalid package manifest format map: {group}")
-            for recorded_path in formats.values():
-                declared.add(f"{group}/{Path(str(recorded_path)).name}")
-    return declared
-
-
 def _validated_package_root(manuscript_package: Path) -> Path:
     package_root = manuscript_package.expanduser().absolute()
     for candidate in (package_root, *package_root.parents):
@@ -278,74 +274,192 @@ def _validate_entries(
                 raise ValueError(f"original identity marker in archive entry: {name}")
 
 
+def _load_attestation(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("canonical attestation is not valid JSON") from exc
+    if type(payload) is not dict:
+        raise ValueError("canonical attestation must be a JSON object")
+    if payload.get("schema_version") != ATTESTATION_SCHEMA:
+        raise ValueError(f"canonical attestation schema must be {ATTESTATION_SCHEMA}")
+    if payload.get("verifier_version") != VERIFIER_VERSION:
+        raise ValueError("canonical attestation verifier version does not match")
+    timestamp = payload.get("verified_at_utc")
+    try:
+        parsed_timestamp = datetime.fromisoformat(timestamp) if type(timestamp) is str else None
+    except ValueError:
+        parsed_timestamp = None
+    if (
+        parsed_timestamp is None
+        or parsed_timestamp.tzinfo is None
+        or parsed_timestamp.utcoffset() != timedelta(0)
+    ):
+        raise ValueError("canonical attestation verified_at_utc must be an ISO-8601 UTC timestamp")
+    return payload
+
+
+def _attested_report_records(attestation: dict[str, Any]) -> list[dict[str, str]]:
+    records = attestation.get("report_surface")
+    if type(records) is not list or len(records) != 6:
+        raise ValueError("canonical attestation must declare exactly six report paths")
+    validated: list[dict[str, str]] = []
+    for record in records:
+        if type(record) is not dict or set(record) != {"path", "sha256"}:
+            raise ValueError("canonical attestation report records are malformed")
+        path = record["path"]
+        digest = record["sha256"]
+        pure = PurePosixPath(path) if type(path) is str else PurePosixPath("/")
+        if (
+            type(path) is not str
+            or pure.is_absolute()
+            or ".." in pure.parts
+            or type(digest) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise ValueError("canonical attestation report records are malformed")
+        validated.append({"path": path, "sha256": digest})
+    if validated != sorted(validated, key=lambda record: record["path"]):
+        raise ValueError("canonical attestation report records must be sorted")
+    if len({record["path"] for record in validated}) != len(validated):
+        raise ValueError("canonical attestation report paths must be unique")
+    return validated
+
+
+def _validate_report_commit(
+    repo_root: Path,
+    attestation: dict[str, Any],
+) -> tuple[str, str, list[dict[str, str]]]:
+    study_commit = attestation.get("study_commit")
+    if type(study_commit) is not str or re.fullmatch(r"[0-9a-f]{40}", study_commit) is None:
+        raise ValueError("attested study commit must be a full 40-hex lowercase SHA")
+    report_commit = _git_bytes(repo_root, "rev-parse", "--verify", "HEAD").decode().strip()
+    parents = (
+        _git_bytes(repo_root, "rev-list", "--parents", "-n", "1", report_commit).decode().split()
+    )
+    if len(parents) != 2 or parents[0] != report_commit or parents[1] != study_commit:
+        raise ValueError(
+            "report commit must be the exact direct child of the attested study commit"
+        )
+    report_records = _attested_report_records(attestation)
+    allowed = {record["path"] for record in report_records}
+    raw_delta = _git_bytes(repo_root, "diff", "--name-only", "-z", study_commit, report_commit)
+    delta = {item.decode("utf-8") for item in raw_delta.split(b"\0") if item}
+    if not delta:
+        raise ValueError("report-commit delta must be nonempty")
+    if not delta <= allowed:
+        raise ValueError("report-commit delta contains paths outside the attested report surface")
+    for record in report_records:
+        try:
+            payload = _git_bytes(repo_root, "show", f"{report_commit}:{record['path']}")
+        except subprocess.CalledProcessError as exc:
+            raise ValueError(f"attested report blob is missing: {record['path']}") from exc
+        if hashlib.sha256(payload).hexdigest() != record["sha256"]:
+            raise ValueError(f"attested report blob hash mismatch: {record['path']}")
+    return study_commit, report_commit, report_records
+
+
+def _validated_current_evidence(
+    *,
+    repo_root: Path,
+    study_dir: Path,
+    manuscript_package: Path,
+    attestation: dict[str, Any],
+) -> dict[str, Any]:
+    as_of_date = attestation.get("expected_as_of_date")
+    if type(as_of_date) is not str or not as_of_date:
+        raise ValueError("canonical attestation expected_as_of_date is missing")
+    try:
+        evidence = collect_canonical_evidence(
+            repo_root=repo_root,
+            study_dir=study_dir,
+            manuscript_package=manuscript_package,
+            expected_as_of_date=as_of_date,
+            check_precommit=False,
+        )
+    except Exception as exc:
+        raise ValueError(f"current evidence does not match attestation: {exc}") from exc
+    deterministic = {
+        key: value
+        for key, value in attestation.items()
+        if key not in {"schema_version", "verifier_version", "verified_at_utc"}
+    }
+    if deterministic != evidence:
+        raise ValueError("current evidence does not exactly match canonical attestation")
+    return evidence
+
+
+def _write_zip_atomic(output: Path, entries: dict[str, bytes]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name in sorted(entries):
+                archive.writestr(name, entries[name])
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        temporary.replace(output)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
 def build_reviewer_package(
     *,
     repo_root: Path,
     study_dir: Path,
     manuscript_package: Path,
+    attestation: Path,
     output: Path,
 ) -> Path:
+    repo_root = repo_root.resolve()
+    study_dir = study_dir.resolve()
+    manuscript_package = _validated_package_root(manuscript_package)
+    attestation_payload = _load_attestation(attestation)
+    study_commit, report_commit, report_records = _validate_report_commit(
+        repo_root,
+        attestation_payload,
+    )
+    evidence = _validated_current_evidence(
+        repo_root=repo_root,
+        study_dir=study_dir,
+        manuscript_package=manuscript_package,
+        attestation=attestation_payload,
+    )
     study_manifest = json.loads(
         (study_dir / "study_run_manifest.json").read_text(encoding="utf-8")
     )
-    if not isinstance(study_manifest, dict):
-        raise ValueError("study manifest must be a JSON object")
-    public_lake = study_manifest.get("public_lake_provenance", {})
-    if not isinstance(public_lake, dict):
-        raise ValueError("public-lake provenance must be a JSON object")
-    if study_manifest.get("git_dirty") is not False or public_lake.get("git_dirty") is not False:
-        raise ValueError("dirty study or public-lake manifest")
-    source_inventory = public_lake.get("source_metadata_inventory", [])
-    if not isinstance(source_inventory, list) or any(
-        not isinstance(item, dict) for item in source_inventory
-    ):
-        raise ValueError("source metadata inventory must be a JSON array of objects")
-    if not source_inventory:
-        raise ValueError("public source metadata inventory is missing")
-    study_commit = study_manifest.get("repo_commit")
-    if not isinstance(study_commit, str) or re.fullmatch(r"[0-9a-f]{40}", study_commit) is None:
-        raise ValueError("study commit must be a full 40-hex lowercase SHA")
-    try:
-        _git_bytes(repo_root, "cat-file", "-e", f"{study_commit}^{{commit}}")
-    except subprocess.CalledProcessError as exc:
-        raise ValueError(f"cannot resolve study commit: {study_commit}") from exc
-    resolved_commit = (
-        _git_bytes(repo_root, "rev-parse", "--verify", f"{study_commit}^{{commit}}")
-        .decode("utf-8")
-        .strip()
-    )
-    if resolved_commit != study_commit:
-        raise ValueError("study commit is not the canonical full commit SHA")
-    report_commit = _git_bytes(repo_root, "rev-parse", "--verify", "HEAD").decode("utf-8").strip()
+    public_lake = study_manifest["public_lake_provenance"]
+    source_inventory = public_lake["source_metadata_inventory"]
 
     entries: dict[str, bytes] = {}
     for path in _tracked_paths(repo_root, study_commit):
         if _source_allowed(path):
             entries[f"source/{path}"] = _git_bytes(repo_root, "show", f"{study_commit}:{path}")
     redactions = _derive_identity_redactions(entries)
-    for path in _tracked_paths(repo_root, report_commit):
-        if _report_allowed(path):
-            payload = _git_bytes(repo_root, "show", f"{report_commit}:{path}")
-            entries[f"report/{path}"] = payload
-            entries[f"source/{path}"] = payload
+    for record in report_records:
+        path = record["path"]
+        payload = _git_bytes(repo_root, "show", f"{report_commit}:{path}")
+        entries[f"report/{path}"] = payload
+        entries[f"source/{path}"] = payload
 
-    manuscript_package = _validated_package_root(manuscript_package)
     package_manifest = json.loads(
         (manuscript_package / "manifest.json").read_text(encoding="utf-8")
     )
-    if not isinstance(package_manifest, dict):
-        raise ValueError("package manifest must be a JSON object")
-    declared_package_files = _declared_package_files(package_manifest)
-    for relative in declared_package_files:
-        if not (manuscript_package / relative).is_file():
-            raise ValueError(f"declared package artifact is missing: {relative}")
-    for candidate in sorted(path for path in manuscript_package.rglob("*") if path.is_file()):
-        relative = candidate.relative_to(manuscript_package).as_posix()
+    for record in evidence["package_artifacts"]:
+        relative = record["path"]
         if _path_forbidden(relative):
             raise ValueError(f"forbidden generated package entry: {relative}")
-        if relative not in declared_package_files:
-            continue
-        entries[f"generated/manuscript_package/{relative}"] = candidate.read_bytes()
+        entries[f"generated/manuscript_package/{relative}"] = (
+            manuscript_package / relative
+        ).read_bytes()
 
     entries["generated/manuscript_package/manifest.json"] = _json_bytes(
         _sanitize(package_manifest)
@@ -355,20 +469,27 @@ def build_reviewer_package(
     )
     entries["provenance/public_lake_provenance.json"] = _json_bytes(_sanitize(public_lake))
     entries["provenance/public_source_inventory.json"] = _json_bytes(_sanitize(source_inventory))
+    attestation_name = "provenance/canonical_attestation.sanitized.json"
+    entries[attestation_name] = _json_bytes(_sanitize(attestation_payload))
     entries["REPLICATION_README.md"] = REPLICATION_README.encode("utf-8")
+    entries = _redact_entries(entries, redactions)
+    archived_attestation_sha256 = hashlib.sha256(entries[attestation_name]).hexdigest()
     entries["provenance/package_manifest.json"] = _json_bytes(
         {
             "study_commit": study_commit,
             "report_commit": report_commit,
+            "upstream_study_commit": study_commit,
+            "upstream_report_commit": report_commit,
             "source_namespace": "source/",
             "report_namespace": "report/",
             "generated_namespace": "generated/manuscript_package/",
             "report_overlay": {
                 "policy": "report_commit_overlays_source",
-                "paths": [
-                    "docs/results_snapshot.md",
-                    "docs/assets/results_snapshot/",
-                ],
+                "paths": [record["path"] for record in report_records],
+            },
+            "canonical_attestation": {
+                "path": attestation_name,
+                "sha256": archived_attestation_sha256,
             },
             "identity_redaction": {
                 "policy": "derived_from_study_source",
@@ -376,12 +497,8 @@ def build_reviewer_package(
             },
         }
     )
-    entries = _redact_entries(entries, redactions)
     _validate_entries(entries, identity_needles=[needle for needle, _, _ in redactions])
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in sorted(entries):
-            archive.writestr(name, entries[name])
+    _write_zip_atomic(output, entries)
     return output
 
 
@@ -390,12 +507,14 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--study-dir", type=Path, required=True)
     parser.add_argument("--manuscript-package", type=Path, required=True)
+    parser.add_argument("--attestation", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     output = build_reviewer_package(
         repo_root=args.repo_root,
         study_dir=args.study_dir,
         manuscript_package=args.manuscript_package,
+        attestation=args.attestation,
         output=args.output,
     )
     print(output)

@@ -1,1247 +1,662 @@
+from __future__ import annotations
+
 import json
 import subprocess
 import sys
+import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import pytest
 
-from scripts.verify_canonical_run import verify_canonical_run
+import scripts.verify_canonical_run as canonical_module
+from scripts.build_manuscript_package import _validate_package_tree
+from scripts.verify_canonical_run import (
+    RAW_RECONSTRUCTION_OWNERS,
+    _write_attestation,
+    verify_canonical_run,
+)
+from src.provenance import input_provenance, path_record, path_set_provenance, sha256_path
+from tests.canonical_fixture import canonical_fixture, git, write_json
+
+
+def _verify(fixture: dict[str, Any], *, bronze_root: Path | None = None) -> list[str]:
+    return verify_canonical_run(
+        fixture["study_dir"],
+        fixture["package_dir"],
+        repo_root=fixture["repo"],
+        expected_as_of_date="2026-07-06",
+        bronze_root=bronze_root,
+    )
+
+
+def _run_cli(
+    fixture: dict[str, Any], *, output: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "scripts/verify_canonical_run.py",
+            "--repo-root",
+            str(fixture["repo"]),
+            "--study-dir",
+            str(fixture["study_dir"]),
+            "--manuscript-package",
+            str(fixture["package_dir"]),
+            "--expected-as-of-date",
+            "2026-07-06",
+            "--attestation-output",
+            str(output or fixture["attestation"]),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    write_json(path, payload)
 
 
-def _write_canonical_fixture(tmp_path: Path) -> dict[str, Path]:
-    study_dir = tmp_path / "study"
-    package_dir = tmp_path / "package"
-    manifest_path = study_dir / "study_run_manifest.json"
-    public_path = study_dir / "public_cascade" / "public_cascade_summary.json"
-    construct_path = study_dir / "construct_overlap" / "construct_overlap_manifest.json"
-    dml_path = study_dir / "public_cascade" / "public_opacity_dml.csv"
-
-    _write_json(
-        manifest_path,
-        {
-            "repo_commit": "a" * 40,
-            "git_dirty": False,
-            "provenance": {
-                "commit_sha": "a" * 40,
-                "dirty": False,
-                "config_hash": "b" * 64,
-                "input_hash": "c" * 64,
-                "uv_lock_hash": "d" * 64,
-            },
-            "public_lake_provenance": {
-                "as_of_date": "2026-07-06",
-                "fresh_build": True,
-                "git_dirty": False,
-                "commit_sha": "a" * 40,
-                "config_hash": "6" * 64,
-                "input_hash": "7" * 64,
-                "uv_lock_hash": "8" * 64,
-                "source_metadata_inventory": [
-                    {
-                        "metadata_file": "form-ap/FirmFilings.zip.meta.json",
-                        "metadata_sha256": "1" * 64,
-                        "source_name": "FINRA Firm Filings",
-                        "source_url": "https://example.invalid/FirmFilings.zip",
-                        "downloaded_at_utc": "2026-07-06T00:00:00Z",
-                        "payload_sha256": "2" * 64,
-                        "payload_size_bytes": 123,
-                        "parser_version": "1",
-                        "schema_version": "1",
-                    }
-                ],
-                "form_ap": {
-                    "source_kind": "verified_zip_member",
-                    "archive_sha256": "e" * 64,
-                    "member_sha256": "f" * 64,
-                },
-            },
-            "components": {
-                "benchmark": {"status": "complete"},
-                "public_cascade": {"status": "complete"},
-                "bridge_probe": {"status": "crosswalk_available"},
-                "peer_comparison": {"status": "complete"},
-                "public_peer_comparison": {"status": "complete"},
-                "construct_overlap": {
-                    "run_status": "complete",
-                    "validation_tier": "wrds_validated",
-                },
-            },
-            "claim_maturity": {
-                "public_prediction": "reportable",
-                "feature_and_window_sensitivity": "supporting",
-                "construct_alignment": "supporting",
-                "opacity_dml": "diagnostic",
-            },
-        },
-    )
-    _write_json(
-        public_path,
-        {
-            "primary_specification": {
-                "feature_set": "all",
-                "train_window": "expanding",
-            },
-            "primary_specification_status": "revision_frozen",
-            "feature_family_summary": {"visibility_history": {"n_features": 24}},
-            "sample_attrition": [
-                {"stage": "source_issuer_origin", "n_rows": 205652, "task": "all"},
-                {"stage": "fiscal_year_2011_2024", "n_rows": 97027, "task": "all"},
-                {"stage": "domestic_us_gaap_proxy", "n_rows": 96827, "task": "all"},
-                {"stage": "observable_365_day_horizon", "n_rows": 96733, "task": "all"},
-                {"stage": "eligible_comment_thread", "n_rows": 96733, "task": "comment_thread"},
-                {"stage": "eligible_amendment", "n_rows": 96733, "task": "amendment"},
-                {"stage": "eligible_8k_402", "n_rows": 96733, "task": "8k_402"},
-            ],
-        },
-    )
-    _write_json(
-        construct_path,
-        {
-            "validation_tier": "wrds_validated",
-            "interval_scope": "primary_plus_top_5_per_direction",
-            "interval_seed": 42,
-            "interval_reps": 1000,
-            "primary_alignment": {
-                "public_to_benchmark": {
-                    "model_id": "public_cascade",
-                    "task": "8k_402",
-                    "feature_set": "all",
-                    "train_window": "expanding",
-                    "label_mode": "benchmark_naive",
-                    "score_aggregation": "mean",
-                    "bridge_tier": "high_confidence",
-                },
-                "benchmark_to_public": {
-                    "model_id": "benchmark_xgb",
-                    "target_public_label": "label_8k_402_365",
-                    "feature_set": "benchmark_all",
-                    "train_window": "expanding",
-                    "label_mode": "naive",
-                    "score_aggregation": "benchmark_score",
-                    "bridge_tier": "high_confidence",
-                },
-                "public_to_benchmark_count": 1,
-                "benchmark_to_public_count": 1,
-            },
-            "primary_alignment_evidence": {
-                "public_to_benchmark": {
-                    "metric_status": "fit",
-                    "top_decile_lift": 2.0,
-                    "ci_low": 1.2,
-                    "ci_high": 2.8,
-                },
-                "benchmark_to_public": {
-                    "metric_status": "fit",
-                    "top_decile_lift": 1.8,
-                    "ci_low": 1.1,
-                    "ci_high": 2.5,
-                },
-            },
-            "exploratory_maxima": {
-                "public_to_benchmark": {
-                    "keys": {"train_window": "rolling_7y"},
-                    "top_decile_lift": 2.4,
-                    "primary_lift": 2.0,
-                    "lift_minus_primary": 0.4,
-                },
-                "benchmark_to_public": {
-                    "keys": {"train_window": "rolling_7y"},
-                    "top_decile_lift": 2.1,
-                    "primary_lift": 1.8,
-                    "lift_minus_primary": 0.3,
-                },
-            },
-        },
-    )
-    dml_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(
-        {
-            "outcome": ["comment_thread", "amendment"],
-            "n_raw_controls": [60, 60],
-            "n_encoded_controls": [64, float("nan")],
-            "n_controls": [64, float("nan")],
-            "n_effective_nuisance_folds": [3, float("nan")],
-            "n_controls_definition": [
-                "maximum_fold_local_encoded_nuisance_columns",
-                "maximum_fold_local_encoded_nuisance_columns",
-            ],
-            "n_opacity_components": [17, 17],
-            "status": ["fit", "skipped_one_class_or_too_small"],
-        }
-    ).to_csv(dml_path, index=False)
-    _write_json(
-        study_dir / "public_cascade" / "public_opacity_dml_meta.json",
-        {
-            "n_raw_controls": 60,
-            "n_encoded_controls_by_outcome": {"comment_thread": 64},
-            "n_encoded_controls_by_fold": {
-                "comment_thread": [
-                    {"fold_id": 1, "n_encoded_controls": 64},
-                    {"fold_id": 2, "n_encoded_controls": 64},
-                    {"fold_id": 3, "n_encoded_controls": 64},
-                ]
-            },
-            "n_effective_nuisance_folds_by_outcome": {"comment_thread": 3},
-            "n_opacity_components": 17,
-            "n_controls_definition": "maximum_fold_local_encoded_nuisance_columns",
-        },
-    )
-    tables = package_dir / "tables"
-    tables.mkdir(parents=True)
-    pd.DataFrame(
-        {
-            "Task": ["comment_thread", "amendment", "8k_402"],
-            "Panel_Positives": [100, 80, 20],
-            "Mean_Prevalence": [0.02, 0.015, 0.004],
-            "Mean_PR_AUC": [0.2, 0.15, 0.05],
-            "PR_AUC_Dispersion": [
-                "[0.1800, 0.2200]",
-                "[0.1300, 0.1700]",
-                "[0.0400, 0.0600]",
-            ],
-            "Mean_ROC_AUC": [0.7, 0.68, 0.65],
-            "Mean_Brier": [0.018, 0.014, 0.004],
-            "Mean_Brier_Skill": [0.08, 0.06, 0.03],
-            "Mean_ECE": [0.01, 0.009, 0.003],
-            "Excluding_2020_PR_AUC": [0.21, 0.16, 0.055],
-            "Excluding_2020_Delta": [0.01, 0.01, 0.005],
-        }
-    ).to_csv(tables / "table_03_public_task_metrics.csv", index=False)
-    pd.DataFrame(
-        {
-            "Outcome": ["comment_thread", "amendment"],
-            "Raw_Controls": [60, 60],
-            "Encoded_Controls": [64, float("nan")],
-            "Opacity_Components": [17, 17],
-        }
-    ).to_csv(tables / "table_12_public_opacity_dml.csv", index=False)
-    pd.DataFrame(
-        {
-            "Direction": [
-                "Public score to benchmark positives",
-                "Detected-misstatement score to public labels",
-            ],
-            "Model": ["public_cascade", "benchmark_xgb"],
-            "Target": ["Item 4.02", "Item 4.02"],
-            "Feature_Set": ["all", "benchmark_all"],
-            "Window": ["expanding", "expanding"],
-            "Bridge_Tier": ["high_confidence", "high_confidence"],
-            "PR_AUC": [0.04, 0.03],
-            "ROC_AUC": [0.70, 0.60],
-            "Top_10pct_Precision": [0.06, 0.05],
-            "Top_10pct_FDR": [0.94, 0.95],
-            "Top_Decile_Lift": [2.0, 1.8],
-            "Lift_Bootstrap_Interval": ["[1.2000, 2.8000]", "[1.1000, 2.5000]"],
-        }
-    ).to_csv(tables / "table_09_construct_alignment.csv", index=False)
-    pd.DataFrame(
-        {
-            "Scope": ["sequential"] * 4 + ["task"] * 3,
-            "Stage": [
-                "source_issuer_origin",
-                "fiscal_year_2011_2024",
-                "domestic_us_gaap_proxy",
-                "observable_365_day_horizon",
-                "eligible_comment_thread",
-                "eligible_amendment",
-                "eligible_8k_402",
-            ],
-            "Task": ["all", "all", "all", "all", "comment_thread", "amendment", "8k_402"],
-            "Rows": [205652, 97027, 96827, 96733, 96733, 96733, 96733],
-            "Dropped_From_Parent": [0, 108625, 200, 94, 0, 0, 0],
-        }
-    ).to_csv(tables / "table_18_public_sample_attrition.csv", index=False)
-    _write_json(
-        package_dir / "manifest.json",
-        {
-            "primary_public_specification": {
-                "feature_set": "all",
-                "train_window": "expanding",
-            },
-            "tables": {
-                "table_03_public_task_metrics": {
-                    "csv": str(tables / "table_03_public_task_metrics.csv")
-                },
-                "table_09_construct_alignment": {
-                    "csv": str(tables / "table_09_construct_alignment.csv")
-                },
-                "table_12_public_opacity_dml": {
-                    "csv": str(tables / "table_12_public_opacity_dml.csv")
-                },
-                "table_18_public_sample_attrition": {
-                    "csv": str(tables / "table_18_public_sample_attrition.csv")
-                },
-            },
-            "figures": {},
-        },
-    )
-    return {
-        "study_dir": study_dir,
-        "package_dir": package_dir,
-        "manifest": manifest_path,
-        "public": public_path,
-        "construct": construct_path,
-        "table_09": tables / "table_09_construct_alignment.csv",
-    }
+def _refresh_package_artifact(fixture: dict[str, Any], table_key: str) -> None:
+    manifest = json.loads(fixture["package_manifest"].read_text(encoding="utf-8"))
+    manifest["tables"][table_key]["csv"]["sha256"] = sha256_path(fixture[table_key])
+    _write_json(fixture["package_manifest"], manifest)
 
 
-def test_verify_canonical_run_accepts_clean_fixture(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-    assert errors == []
+def _refresh_package_study_digest(fixture: dict[str, Any]) -> None:
+    manifest = json.loads(fixture["package_manifest"].read_text(encoding="utf-8"))
+    manifest["study_manifest_sha256"] = sha256_path(fixture["manifest"])
+    _write_json(fixture["package_manifest"], manifest)
+
+
+def test_r4_exact_precommit_surface_is_a_valid_r3_fixture(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+
+    package = _validate_package_tree(fixture["package_dir"], fixture["manifest"])
+    assert len(package["tables"]) == 16
+    assert len(package["figures"]) == 5
+    assert len(fixture["report_paths"]) == 6
+    assert _verify(fixture) == []
+
+
+def test_canonical_suite_is_in_core_gate_exactly_once() -> None:
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text(encoding="utf-8")
+    core = justfile.split("\n_test-core:\n", 1)[1].split("\n_test-public-lake:", 1)[0]
+    assert core.count("tests/test_canonical_run.py") == 1
+
+
+def test_verify_recipe_writes_the_canonical_attestation_path() -> None:
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text(encoding="utf-8")
+    recipe = justfile.split("\nverify-canonical ", 1)[1].split("\nreviewer-package ", 1)[0]
+    assert (
+        '--attestation-output "${ARTIFACTS_DIR}/canonical_validation/canonical_attestation.json"'
+    ) in recipe
 
 
 @pytest.mark.parametrize(
-    ("target", "key_path", "replacement", "message"),
+    ("field", "replacement"),
     [
-        ("manifest", ("git_dirty",), True, "study git_dirty"),
+        ("parallel_jobs", 999),
+        ("parallel_jobs", True),
+        ("parallel_jobs", 4.0),
+        ("model_threads", True),
+        ("model_threads", 2.0),
+        ("seed_policy", "shared"),
+        ("peer_comparison_mode", "none"),
+        ("peer_target", "benchmark"),
+        ("peer_parallel_jobs", 999),
+        ("peer_parallel_jobs", True),
+        ("peer_parallel_jobs", 4.0),
+        ("peer_model_threads", True),
+        ("peer_model_threads", 2.0),
+    ],
+)
+def test_r4_rejects_noncanonical_runtime_values_and_integer_impostors(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    manifest["runtime"][field] = replacement
+    _write_json(fixture["manifest"], manifest)
+
+    assert f"runtime {field}" in _verify(fixture)
+
+
+@pytest.mark.parametrize("target", ["config", "input", "lock"])
+def test_r4_rejects_changed_study_provenance_bytes(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    path = fixture[target]
+    path.write_bytes(path.read_bytes() + b"\nforged")
+    assert "recomputed study provenance" in _verify(fixture)
+
+
+@pytest.mark.parametrize("target", ["lake_config", "sidecar", "payload"])
+def test_r4_rejects_changed_public_lake_provenance_bytes(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    path = fixture[target]
+    path.write_bytes(path.read_bytes() + b"\nforged")
+    assert any("public-lake" in error or "payload" in error for error in _verify(fixture))
+
+
+@pytest.mark.parametrize("target", ["run_metadata", "form_ap", "panel", "final_report"])
+def test_r4_rejects_changed_frozen_public_lake_input(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    path = fixture[target]
+    path.write_bytes(path.read_bytes() + b"\nforged")
+    assert _verify(fixture)
+
+
+def test_r4_rejects_changed_form_ap_member_after_outer_hashes_are_refreshed(
+    tmp_path: Path,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    with zipfile.ZipFile(fixture["payload"], "w") as archive:
+        archive.writestr("FirmFilings.csv", b"firm_id,filing_date\n9,2026-07-01\n")
+
+    sidecar = json.loads(fixture["sidecar"].read_text(encoding="utf-8"))
+    sidecar["sha256"] = sha256_path(fixture["payload"])
+    sidecar["size_bytes"] = fixture["payload"].stat().st_size
+    _write_json(fixture["sidecar"], sidecar)
+
+    run_metadata = json.loads(fixture["run_metadata"].read_text(encoding="utf-8"))
+    run_inputs = input_provenance([fixture["sidecar"]])
+    run_metadata["provenance"].update(run_inputs)
+    _write_json(fixture["run_metadata"], run_metadata)
+
+    form_ap = json.loads(fixture["form_ap"].read_text(encoding="utf-8"))
+    form_ap["archive_sha256"] = sha256_path(fixture["payload"])
+    _write_json(fixture["form_ap"], form_ap)
+
+    final_report = json.loads(fixture["final_report"].read_text(encoding="utf-8"))
+    final_report["public_lake_run_metadata_sha256"] = sha256_path(fixture["run_metadata"])
+    _write_json(fixture["final_report"], final_report)
+
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    for key, target in (
+        ("public_lake_final_report", "final_report"),
+        ("public_lake_run_metadata", "run_metadata"),
+        ("form_ap_source_metadata", "form_ap"),
+    ):
+        manifest["public_lake_inputs"][key] = path_record(fixture[target])
+    input_paths = [Path(record["path"]) for record in manifest["provenance"]["input_files"]]
+    manifest["provenance"].update(input_provenance(input_paths))
+    inventory = manifest["public_lake_provenance"]["source_metadata_inventory"][0]
+    inventory["metadata_sha256"] = sha256_path(fixture["sidecar"])
+    inventory["payload_sha256"] = sha256_path(fixture["payload"])
+    inventory["payload_size_bytes"] = fixture["payload"].stat().st_size
+    manifest["public_lake_provenance"]["input_hash"] = run_inputs["input_hash"]
+    manifest["public_lake_provenance"]["form_ap"]["archive_sha256"] = sha256_path(
+        fixture["payload"]
+    )
+    _write_json(fixture["manifest"], manifest)
+    _refresh_package_study_digest(fixture)
+
+    assert "member_sha256" in _verify(fixture)[0]
+
+
+def test_r4_accepts_equivalent_resolved_uv_lock_path_spelling(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    lock_path = str(fixture["lock"])
+    if not lock_path.startswith("/private/var/"):
+        pytest.skip("macOS /var alias is unavailable")
+    alias = "/var/" + lock_path.removeprefix("/private/var/")
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    manifest["provenance"]["uv_lock"]["path"] = alias
+    _write_json(fixture["manifest"], manifest)
+    _refresh_package_study_digest(fixture)
+    assert _verify(fixture) == []
+
+
+def test_r4_derives_arbitrary_bronze_root_and_rejects_wrong_override(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    assert _verify(fixture) == []
+    assert "Bronze root override" in _verify(fixture, bronze_root=tmp_path / "wrong")[0]
+
+
+def test_r4_rejects_unresolvable_recorded_commit(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    for owner in (manifest, manifest["provenance"], manifest["public_lake_provenance"]):
+        owner["repo_commit" if owner is manifest else "commit_sha"] = "0" * 40
+    _write_json(fixture["manifest"], manifest)
+    assert _verify(fixture)
+
+
+def test_r4_rejects_wrong_live_head(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    (fixture["repo"] / "src" / "example.py").write_text("CHANGED = True\n", encoding="utf-8")
+    git(fixture["repo"], "add", "src/example.py")
+    git(fixture["repo"], "commit", "-m", "wrong head")
+    assert "source HEAD" in _verify(fixture)[0]
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["unstaged-source", "staged-test", "dirty-verifier", "rename", "untracked"],
+)
+def test_r4_rejects_nonreport_working_tree_state(tmp_path: Path, mode: str) -> None:
+    fixture = canonical_fixture(tmp_path)
+    repo = fixture["repo"]
+    if mode == "unstaged-source":
+        (repo / "src" / "example.py").write_text("CHANGED = True\n", encoding="utf-8")
+    elif mode == "staged-test":
+        (repo / "tests" / "test_example.py").write_text("def test_no(): assert False\n")
+        git(repo, "add", "tests/test_example.py")
+    elif mode == "dirty-verifier":
+        (repo / "scripts" / "verify_canonical_run.py").write_text("VERIFIER_VERSION = 'x'\n")
+    elif mode == "rename":
+        git(repo, "mv", "src/example.py", "src/renamed.py")
+    else:
+        (repo / "scripts" / "untracked.py").write_text("print('x')\n")
+    assert "working tree report surface" in _verify(fixture)[0]
+
+
+@pytest.mark.parametrize("status", ["DD", "AU", "UD", "UA", "DU", "AA", "UU"])
+def test_r4_rejects_unmerged_report_surface_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    report_path = fixture["report_paths"][0].relative_to(fixture["repo"]).as_posix()
+    monkeypatch.setattr(
+        canonical_module,
+        "_working_tree_records",
+        lambda _repo: ([(status, report_path)], False),
+    )
+    assert "unmerged" in _verify(fixture)[0]
+
+
+@pytest.mark.parametrize("mode", ["grandchild", "merge"])
+def test_r4_rejects_explicit_nonstudy_precommit_head(tmp_path: Path, mode: str) -> None:
+    fixture = canonical_fixture(tmp_path)
+    repo = fixture["repo"]
+    if mode == "grandchild":
+        git(repo, "commit", "--allow-empty", "-m", "child")
+        git(repo, "commit", "--allow-empty", "-m", "grandchild")
+    else:
+        main_branch = git(repo, "branch", "--show-current")
+        git(repo, "checkout", "-b", "side")
+        git(repo, "commit", "--allow-empty", "-m", "side")
+        git(repo, "checkout", main_branch)
+        git(repo, "commit", "--allow-empty", "-m", "main")
+        git(repo, "merge", "--no-ff", "side", "-m", "merge")
+    assert "source HEAD" in _verify(fixture)[0]
+
+
+def test_r4_rejects_dirty_recorded_config(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    fixture["config"].write_text("study: dirty\n", encoding="utf-8")
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    config_paths = [Path(record["path"]) for record in manifest["provenance"]["config_files"]]
+    refreshed = path_set_provenance(config_paths)
+    manifest["provenance"]["config_files"] = refreshed["files"]
+    manifest["provenance"]["config_hash"] = refreshed["hash"]
+    _write_json(fixture["manifest"], manifest)
+    _refresh_package_study_digest(fixture)
+    assert "working tree report surface" in _verify(fixture)[0]
+
+
+@pytest.mark.parametrize("mode", ["extra", "missing", "symlink", "snapshot-symlink"])
+def test_r4_rejects_nonexact_report_surface(tmp_path: Path, mode: str) -> None:
+    fixture = canonical_fixture(tmp_path)
+    asset_root = fixture["repo"] / "docs" / "assets" / "results_snapshot"
+    if mode == "extra":
+        (asset_root / "stale.png").write_bytes(b"stale")
+    elif mode == "missing":
+        fixture["report_paths"][-1].unlink()
+    elif mode == "symlink":
+        target = fixture["report_paths"][-1]
+        target.unlink()
+        try:
+            target.symlink_to(tmp_path / "outside.png")
+        except OSError as exc:
+            pytest.skip(f"symlink unavailable: {exc}")
+    else:
+        target = fixture["report_paths"][0]
+        target.unlink()
+        try:
+            target.symlink_to(tmp_path / "outside.md")
+        except OSError as exc:
+            pytest.skip(f"symlink unavailable: {exc}")
+    assert "report" in _verify(fixture)[0] or "asset" in _verify(fixture)[0]
+
+
+def test_r4_rejects_report_png_that_no_longer_matches_package_png(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    fixture["report_paths"][-1].write_bytes(b"\x89PNG\r\nforged")
+    assert "package PNG" in _verify(fixture)[0]
+
+
+@pytest.mark.parametrize(
+    ("files_field", "hash_field"),
+    [("config_files", "config_hash"), ("input_files", "input_hash")],
+)
+def test_r4_rejects_recomputed_missing_path_record(
+    tmp_path: Path,
+    files_field: str,
+    hash_field: str,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    provenance = path_set_provenance([tmp_path / "missing-input"])
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    manifest["provenance"][files_field] = provenance["files"]
+    manifest["provenance"][hash_field] = provenance["hash"]
+    _write_json(fixture["manifest"], manifest)
+    _refresh_package_study_digest(fixture)
+    assert "existing regular file" in _verify(fixture)[0]
+
+
+def test_r4_malformed_components_returns_failure_instead_of_raising(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    manifest["components"] = []
+    _write_json(fixture["manifest"], manifest)
+    _refresh_package_study_digest(fixture)
+    assert "components must be an object" in _verify(fixture)[0]
+
+
+def test_r4_rejects_symlink_package_root(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    link = tmp_path / "package-link"
+    try:
+        link.symlink_to(fixture["package_dir"], target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+    fixture["package_dir"] = link
+    assert "package root must not be a symlink" in _verify(fixture)[0]
+
+
+@pytest.mark.parametrize(
+    ("table_key", "column", "replacement"),
+    [
+        ("table_03", "Mean_PR_AUC", 0.999),
+        ("table_09", "PR_AUC", 0.999),
+        ("table_12", "Coef", 0.999),
+        ("table_12", "Coef", float("nan")),
+        ("table_18", "Stage", "forged_stage"),
+    ],
+)
+def test_r4_rejects_refreshed_hash_table_cell_substitution(
+    tmp_path: Path,
+    table_key: str,
+    column: str,
+    replacement: object,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    table = pd.read_csv(fixture[table_key])
+    table.loc[0, column] = replacement
+    table.to_csv(fixture[table_key], index=False)
+    _refresh_package_artifact(fixture, table_key)
+    _validate_package_tree(fixture["package_dir"], fixture["manifest"])
+    assert f"{table_key} deterministic reconstruction" in _verify(fixture)
+
+
+def test_r4_rejects_one_file_package_even_when_the_file_exists(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    manifest = json.loads(fixture["package_manifest"].read_text(encoding="utf-8"))
+    manifest["tables"] = {"table_03": manifest["tables"]["table_03"]}
+    manifest["figures"] = {}
+    _write_json(fixture["package_manifest"], manifest)
+    assert "package tables keys must be exactly" in _verify(fixture)[0]
+
+
+@pytest.mark.parametrize("table_key", ["table_03", "table_09", "table_12", "table_18"])
+def test_r4_rejects_every_refreshed_hash_displayed_cell(
+    tmp_path: Path,
+    table_key: str,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    table_path = fixture[table_key]
+    original_table = table_path.read_bytes()
+    original_manifest = fixture["package_manifest"].read_bytes()
+    for column in pd.read_csv(table_path).columns:
+        table = pd.read_csv(table_path)
+        value = table.loc[0, column]
+        if pd.isna(value):
+            replacement: object = 0.123
+        elif isinstance(value, bool):
+            replacement = not value
+        elif pd.api.types.is_number(value):
+            replacement = float(value) + 0.123
+        else:
+            replacement = f"{value}__forged"
+        table[column] = table[column].astype(object)
+        table.loc[0, column] = replacement
+        table.to_csv(table_path, index=False)
+        _refresh_package_artifact(fixture, table_key)
+        assert f"{table_key} deterministic reconstruction" in _verify(fixture), column
+        table_path.write_bytes(original_table)
+        fixture["package_manifest"].write_bytes(original_manifest)
+
+
+@pytest.mark.parametrize("table_key", ["table_03", "table_09", "table_12", "table_18"])
+@pytest.mark.parametrize("mode", ["rows", "columns"])
+def test_r4_rejects_refreshed_hash_table_order_mutation(
+    tmp_path: Path,
+    table_key: str,
+    mode: str,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    table = pd.read_csv(fixture[table_key])
+    table = table.iloc[::-1].reset_index(drop=True) if mode == "rows" else table.iloc[:, ::-1]
+    table.to_csv(fixture[table_key], index=False)
+    _refresh_package_artifact(fixture, table_key)
+    assert f"{table_key} deterministic reconstruction" in _verify(fixture)
+
+
+@pytest.mark.parametrize(
+    ("target", "path", "replacement", "message"),
+    [
+        ("manifest", ("components", "benchmark", "status"), "pending", "benchmark component"),
         (
             "manifest",
-            ("public_lake_provenance", "as_of_date"),
-            "2026-07-05",
-            "public-data as-of date",
+            ("claim_maturity", "public_prediction"),
+            "diagnostic",
+            "claim maturity",
         ),
-        (
-            "manifest",
-            ("public_lake_provenance", "fresh_build"),
-            False,
-            "public-lake fresh build",
-        ),
+        ("construct", ("interval_seed",), 7, "construct bootstrap seed"),
         (
             "construct",
             ("primary_alignment", "public_to_benchmark_count"),
             0,
             "public-to-benchmark primary count",
         ),
+        ("public", ("primary_specification_status",), "mutable", "public primary status"),
         (
-            "manifest",
-            ("provenance", "commit_sha"),
-            "9" * 40,
-            "study/provenance commit identity",
-        ),
-        ("public", ("sample_attrition",), [], "sample attrition"),
-        (
-            "manifest",
-            ("components", "construct_overlap", "validation_tier"),
-            "candidate_external",
-            "construct component validation tier",
-        ),
-        (
-            "construct",
-            ("validation_tier",),
-            "candidate_external",
-            "construct manifest validation tier",
-        ),
-        ("construct", ("interval_seed",), 7, "construct bootstrap seed"),
-        (
-            "construct",
-            ("primary_alignment", "public_to_benchmark", "train_window"),
-            "rolling_7y",
-            "public-to-benchmark primary keys",
+            "dml_meta",
+            ("n_encoded_controls_by_fold", "comment_thread", 0, "fold_id"),
+            2,
+            "DML CSV/meta/Table 12 consistency",
         ),
     ],
 )
-def test_verify_canonical_run_rejects_broken_json_contracts(
+def test_r4_shared_collector_preserves_research_semantic_gates(
     tmp_path: Path,
     target: str,
-    key_path: tuple[str, ...],
+    path: tuple[object, ...],
     replacement: object,
     message: str,
 ) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    path = fixture[target]
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    cursor = payload
-    for key in key_path[:-1]:
-        cursor = cursor[key]
-    cursor[key_path[-1]] = replacement
-    _write_json(path, payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any(message in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_one_row_table_09(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    pd.DataFrame({"Direction": ["public"]}).to_csv(fixture["table_09"], index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("Table 9" in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_table_09_without_interval(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    table = pd.read_csv(fixture["table_09"])
-    table = table.drop(columns=["Lift_Bootstrap_Interval"])
-    table.to_csv(fixture["table_09"], index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("Table 9 primary metrics and intervals" in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_incomplete_table_03(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    path = fixture["package_dir"] / "tables" / "table_03_public_task_metrics.csv"
-    table = pd.read_csv(path).drop(columns=["Mean_ECE"])
-    table.to_csv(path, index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("Table 3 primary metrics" in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_wrong_dml_dimensions(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    pd.DataFrame(
-        {
-            "n_raw_controls": [60],
-            "n_encoded_controls": [65],
-            "n_controls": [65],
-            "n_controls_definition": ["maximum_fold_local_encoded_nuisance_columns"],
-        }
-    ).to_csv(
-        fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv",
-        index=False,
-    )
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
-
-
-def test_verify_canonical_run_accepts_fold_local_dml_width_contract(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
-    dml = pd.read_csv(dml_path)
-    dml["n_controls_definition"] = "maximum_fold_local_encoded_nuisance_columns"
-    dml.to_csv(dml_path, index=False)
-    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["n_controls_definition"] = "maximum_fold_local_encoded_nuisance_columns"
-    meta["n_encoded_controls_by_fold"] = {
-        "comment_thread": [
-            {"fold_id": 1, "n_encoded_controls": 63},
-            {"fold_id": 2, "n_encoded_controls": 64},
-            {"fold_id": 3, "n_encoded_controls": 64},
-        ]
-    }
-    _write_json(meta_path, meta)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert errors == []
-
-
-@pytest.mark.parametrize(
-    "fold_widths",
-    [
-        [
-            {"fold_id": 1, "n_encoded_controls": 64},
-            {"fold_id": 1, "n_encoded_controls": 64},
-            {"fold_id": 3, "n_encoded_controls": 64},
-        ],
-        [
-            {"fold_id": 1, "n_encoded_controls": 63},
-            {"fold_id": 2, "n_encoded_controls": 65},
-            {"fold_id": 3, "n_encoded_controls": 63},
-        ],
-    ],
-    ids=["nonsequential-fold-ids", "wrong-maximum"],
-)
-def test_verify_canonical_run_rejects_invalid_fold_local_dml_widths(
-    tmp_path: Path,
-    fold_widths: list[dict[str, int]],
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
-    dml = pd.read_csv(dml_path)
-    dml["n_controls_definition"] = "maximum_fold_local_encoded_nuisance_columns"
-    dml.to_csv(dml_path, index=False)
-    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["n_controls_definition"] = "maximum_fold_local_encoded_nuisance_columns"
-    meta["n_encoded_controls_by_fold"] = {"comment_thread": fold_widths}
-    _write_json(meta_path, meta)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_truncated_fold_width_tail(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["n_encoded_controls_by_fold"]["comment_thread"] = meta["n_encoded_controls_by_fold"][
-        "comment_thread"
-    ][:-1]
-    _write_json(meta_path, meta)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
-
-
-@pytest.mark.parametrize("with_effective_count", [True, False], ids=["complete", "missing"])
-def test_verify_canonical_run_enforces_effective_fold_count_for_post_encoding_skip(
-    tmp_path: Path,
-    with_effective_count: bool,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
-    dml = pd.read_csv(dml_path)
-    dml.loc[1, ["status", "n_encoded_controls", "n_controls"]] = [
-        "skipped_constant_residual_treatment",
-        63,
-        63,
-    ]
-    if with_effective_count:
-        dml.loc[1, "n_effective_nuisance_folds"] = 2
-    dml.to_csv(dml_path, index=False)
-    meta_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml_meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["n_encoded_controls_by_outcome"]["amendment"] = 63
-    meta["n_encoded_controls_by_fold"]["amendment"] = [
-        {"fold_id": 1, "n_encoded_controls": 63},
-        {"fold_id": 2, "n_encoded_controls": 63},
-    ]
-    if with_effective_count:
-        meta["n_effective_nuisance_folds_by_outcome"]["amendment"] = 2
-    _write_json(meta_path, meta)
-    table_path = fixture["package_dir"] / "tables" / "table_12_public_opacity_dml.csv"
-    table = pd.read_csv(table_path)
-    table.loc[1, "Encoded_Controls"] = 63
-    table.to_csv(table_path, index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    if with_effective_count:
-        assert errors == []
-    else:
-        assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_wrong_attrition_drop(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    path = fixture["package_dir"] / "tables" / "table_18_public_sample_attrition.csv"
-    table = pd.read_csv(path)
-    table.loc[1, "Dropped_From_Parent"] = 999
-    table.to_csv(path, index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("sample attrition/table 18 consistency" in error for error in errors)
-
-
-@pytest.mark.parametrize(
-    ("key_path", "replacement", "message"),
-    [
-        (("public_lake_provenance",), None, "public-lake provenance object"),
-        (("components", "benchmark"), [], "benchmark component object"),
-        (
-            ("claim_maturity",),
-            [
-                ["public_prediction", "reportable"],
-                ["feature_and_window_sensitivity", "supporting"],
-                ["construct_alignment", "supporting"],
-                ["opacity_dml", "diagnostic"],
-            ],
-            "claim maturity object",
-        ),
-    ],
-)
-def test_verify_canonical_run_rejects_malformed_nested_json_without_raising(
-    tmp_path: Path,
-    key_path: tuple[str, ...],
-    replacement: object,
-    message: str,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    cursor = payload
-    for key in key_path[:-1]:
-        cursor = cursor[key]
-    cursor[key_path[-1]] = replacement
-    _write_json(fixture["manifest"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any(message in error for error in errors)
-
-
-def test_verify_canonical_run_aggregates_nested_and_semantic_failures(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    manifest["public_lake_provenance"] = None
-    _write_json(fixture["manifest"], manifest)
-    construct = json.loads(fixture["construct"].read_text(encoding="utf-8"))
-    construct["interval_seed"] = 7
-    _write_json(fixture["construct"], construct)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("public-lake provenance object" in error for error in errors)
-    assert any("construct bootstrap seed" in error for error in errors)
-
-
-@pytest.mark.parametrize(
-    "replacement",
-    [["crosswalk_available"], {"value": "crosswalk_available"}],
-)
-def test_verify_canonical_run_rejects_non_string_bridge_status_without_raising(
-    tmp_path: Path,
-    replacement: object,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    manifest["components"]["bridge_probe"]["status"] = replacement
-    _write_json(fixture["manifest"], manifest)
-    construct = json.loads(fixture["construct"].read_text(encoding="utf-8"))
-    construct["interval_seed"] = 7
-    _write_json(fixture["construct"], construct)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert "bridge component" in errors
-    assert "construct bootstrap seed" in errors
-
-
-@pytest.mark.parametrize(
-    ("count_key", "replacement", "message"),
-    [
-        ("public_to_benchmark_count", True, "public-to-benchmark primary count"),
-        ("benchmark_to_public_count", True, "benchmark-to-public primary count"),
-        ("public_to_benchmark_count", 1.0, "public-to-benchmark primary count"),
-    ],
-)
-def test_verify_canonical_run_rejects_non_integer_primary_count(
-    tmp_path: Path,
-    count_key: str,
-    replacement: object,
-    message: str,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    construct = json.loads(fixture["construct"].read_text(encoding="utf-8"))
-    construct["primary_alignment"][count_key] = replacement
-    _write_json(fixture["construct"], construct)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert message in errors
-
-
-@pytest.mark.parametrize(
-    ("column", "values"),
-    [
-        (
-            "Direction",
-            [
-                "Detected-misstatement score to public labels",
-                "Public score to benchmark positives",
-            ],
-        ),
-        ("Target", ["Item 4.02", "label_8k_402_365"]),
-    ],
-)
-def test_verify_canonical_run_rejects_wrong_table_09_display_identity(
-    tmp_path: Path,
-    column: str,
-    values: list[str],
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    table = pd.read_csv(fixture["table_09"])
-    table[column] = values
-    table.to_csv(fixture["table_09"], index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("Table 9 primary rows" in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_fit_dml_row_with_nan_encoded_controls(
-    tmp_path: Path,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
-    dml = pd.read_csv(path)
-    dml.loc[1, "status"] = "fit"
-    dml.to_csv(path, index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("DML CSV/meta/Table 12 consistency" in error for error in errors)
-
-
-def test_verify_canonical_run_accepts_insufficient_folds_without_dimensions(
-    tmp_path: Path,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    dml_path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
-    dml = pd.read_csv(dml_path)
-    dml.loc[1, "status"] = "skipped_insufficient_folds"
-    dml.to_csv(dml_path, index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert errors == []
-
-
-@pytest.mark.parametrize(
-    ("column", "replacement"),
-    [
-        ("Mean_PR_AUC", float("inf")),
-        ("Panel_Positives", 100.5),
-        ("Panel_Positives", -1),
-    ],
-)
-def test_verify_canonical_run_rejects_invalid_table_03_numbers(
-    tmp_path: Path,
-    column: str,
-    replacement: float,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    path = fixture["package_dir"] / "tables" / "table_03_public_task_metrics.csv"
-    table = pd.read_csv(path)
-    table[column] = table[column].astype(float)
-    table.loc[0, column] = replacement
-    table.to_csv(path, index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("Table 3 primary metrics" in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_fractional_summary_attrition_count(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["public"].read_text(encoding="utf-8"))
-    payload["sample_attrition"][0]["n_rows"] = 205652.5
-    _write_json(fixture["public"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("sample attrition/table 18 consistency" in error for error in errors)
-
-
-@pytest.mark.parametrize(
-    ("column", "row", "replacement"),
-    [
-        ("Rows", 0, 205652.5),
-        ("Dropped_From_Parent", 1, 108625.5),
-        ("Rows", 0, float("inf")),
-        ("Dropped_From_Parent", 1, float("inf")),
-    ],
-)
-def test_verify_canonical_run_rejects_invalid_table_18_counts_without_raising(
-    tmp_path: Path,
-    column: str,
-    row: int,
-    replacement: float,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    path = fixture["package_dir"] / "tables" / "table_18_public_sample_attrition.csv"
-    table = pd.read_csv(path)
-    table[column] = table[column].astype(float)
-    table.loc[row, column] = replacement
-    table.to_csv(path, index=False)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("sample attrition/table 18 consistency" in error for error in errors)
-
-
-def test_verify_canonical_run_rejects_dirty_provenance(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    payload["provenance"]["dirty"] = True
-    _write_json(fixture["manifest"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("provenance dirty" in error for error in errors)
-
-
-@pytest.mark.parametrize(
-    ("key_path", "replacement", "message"),
-    [
-        (("provenance", "config_hash"), "b" * 63, "config hash"),
-        (("provenance", "input_hash"), "not-hex" * 10, "input hash"),
-        (("provenance", "uv_lock_hash"), 123, "uv.lock hash"),
-        (
-            ("public_lake_provenance", "config_hash"),
-            "6" * 63,
-            "public-lake config hash",
-        ),
-        (
-            ("public_lake_provenance", "input_hash"),
-            "not-hex",
-            "public-lake input hash",
-        ),
-        (
-            ("public_lake_provenance", "uv_lock_hash"),
-            None,
-            "public-lake uv.lock hash",
-        ),
-        (
-            ("public_lake_provenance", "form_ap", "archive_sha256"),
-            "e" * 63,
-            "Form AP archive hash",
-        ),
-        (
-            ("public_lake_provenance", "form_ap", "member_sha256"),
-            "z" * 64,
-            "Form AP member hash",
-        ),
-        (
-            ("public_lake_provenance", "source_metadata_inventory", 0, "metadata_sha256"),
-            "1" * 63,
-            "public source inventory",
-        ),
-        (
-            ("public_lake_provenance", "source_metadata_inventory", 0, "payload_sha256"),
-            "x" * 64,
-            "public source inventory",
-        ),
-    ],
-)
-def test_verify_canonical_run_rejects_malformed_sha256_values(
-    tmp_path: Path,
-    key_path: tuple[object, ...],
-    replacement: object,
-    message: str,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    fixture = canonical_fixture(tmp_path)
+    target_path = fixture["raw"][target] if target in fixture["raw"] else fixture[target]
+    payload = json.loads(target_path.read_text(encoding="utf-8"))
     cursor: Any = payload
-    for key in key_path[:-1]:
+    for key in path[:-1]:
         cursor = cursor[key]
-    cursor[key_path[-1]] = replacement
-    _write_json(fixture["manifest"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any(message in error for error in errors)
+    cursor[path[-1]] = replacement
+    _write_json(target_path, payload)
+    if target == "manifest":
+        _refresh_package_study_digest(fixture)
+    assert message in _verify(fixture)
 
 
-@pytest.mark.parametrize(
-    ("key_path", "message"),
-    [
-        (("repo_commit",), "study commit"),
-        (("provenance", "commit_sha"), "provenance commit"),
-        (("public_lake_provenance", "commit_sha"), "public-lake commit"),
-    ],
-)
-def test_verify_canonical_run_rejects_malformed_commit_shape(
-    tmp_path: Path,
-    key_path: tuple[str, ...],
-    message: str,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    cursor = payload
-    for key in key_path[:-1]:
-        cursor = cursor[key]
-    cursor[key_path[-1]] = "g" * 40
-    _write_json(fixture["manifest"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any(message in error for error in errors)
+def test_r4_rejects_unpaired_construct_tier(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    construct = json.loads(fixture["construct"].read_text(encoding="utf-8"))
+    construct["validation_tier"] = "candidate_external"
+    _write_json(fixture["construct"], construct)
+    assert "paired bridge tier" in _verify(fixture)[0]
 
 
-def test_verify_canonical_run_rejects_malformed_source_inventory(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    payload["public_lake_provenance"]["source_metadata_inventory"] = [None]
-    _write_json(fixture["manifest"], payload)
+def test_r4_cli_writes_complete_sanitized_atomic_attestation(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    completed = _run_cli(fixture)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert any("public source inventory" in error for error in errors)
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "source_name",
-        "source_url",
-        "downloaded_at_utc",
-        "payload_sha256",
-        "payload_size_bytes",
-        "parser_version",
+    raw = fixture["attestation"].read_text(encoding="utf-8")
+    attestation = json.loads(raw)
+    assert set(attestation) == {
         "schema_version",
-    ],
-)
-def test_verify_canonical_run_rejects_sidecar_missing_required_field(
-    tmp_path: Path,
-    field: str,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    payload["public_lake_provenance"]["source_metadata_inventory"][0].pop(field)
-    _write_json(fixture["manifest"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
+        "verifier_version",
+        "verified_at_utc",
+        "study_commit",
+        "expected_as_of_date",
+        "paired_bridge_tier",
+        "runtime",
+        "study_manifest_sha256",
+        "study_config_hash",
+        "study_input_hash",
+        "study_uv_lock_hash",
+        "public_lake_inputs",
+        "public_lake_config_hash",
+        "public_lake_input_hash",
+        "public_lake_uv_lock_hash",
+        "package_manifest_sha256",
+        "package_study_manifest_sha256",
+        "package_artifacts",
+        "raw_reconstruction_owners",
+        "report_surface",
+    }
+    assert attestation["schema_version"] == "canonical-attestation-v1"
+    assert attestation["verifier_version"] == "4"
+    timestamp = datetime.fromisoformat(attestation["verified_at_utc"])
+    assert timestamp.tzinfo is not None and timestamp.utcoffset() == timedelta(0)
+    assert attestation["study_commit"] == fixture["commit"]
+    assert attestation["expected_as_of_date"] == "2026-07-06"
+    assert attestation["paired_bridge_tier"] == "wrds_validated"
+    assert attestation["runtime"] == {
+        "parallel_jobs": 4,
+        "model_threads": 2,
+        "seed_policy": "task-isolated",
+        "peer_comparison_mode": "full",
+        "peer_target": "both",
+        "peer_parallel_jobs": 4,
+        "peer_model_threads": 2,
+    }
+    study_manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    package_manifest = json.loads(fixture["package_manifest"].read_text(encoding="utf-8"))
+    assert attestation["study_manifest_sha256"] == sha256_path(fixture["manifest"])
+    assert attestation["study_config_hash"] == study_manifest["provenance"]["config_hash"]
+    assert attestation["study_input_hash"] == study_manifest["provenance"]["input_hash"]
+    assert attestation["study_uv_lock_hash"] == study_manifest["provenance"]["uv_lock_hash"]
+    assert attestation["public_lake_inputs"] == {
+        key: record["sha256"]
+        for key, record in sorted(study_manifest["public_lake_inputs"].items())
+    }
+    assert (
+        attestation["public_lake_config_hash"]
+        == study_manifest["public_lake_provenance"]["config_hash"]
     )
-
-    assert "public source inventory" in errors
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement"),
-    [
-        ("source_name", ""),
-        ("source_url", 1),
-        ("downloaded_at_utc", []),
-        ("payload_sha256", 1),
-        ("payload_size_bytes", True),
-        ("payload_size_bytes", 1.0),
-        ("payload_size_bytes", "1"),
-        ("payload_size_bytes", -1),
-        ("parser_version", None),
-        ("schema_version", " "),
-    ],
-)
-def test_verify_canonical_run_rejects_sidecar_wrong_field_type_or_value(
-    tmp_path: Path,
-    field: str,
-    replacement: object,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    payload["public_lake_provenance"]["source_metadata_inventory"][0][field] = replacement
-    _write_json(fixture["manifest"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
+    assert (
+        attestation["public_lake_input_hash"]
+        == study_manifest["public_lake_provenance"]["input_hash"]
     )
-
-    assert "public source inventory" in errors
-
-
-def test_verify_canonical_run_rejects_sidecar_extra_field(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    payload["public_lake_provenance"]["source_metadata_inventory"][0]["unexpected"] = "extra"
-    _write_json(fixture["manifest"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
+    assert (
+        attestation["public_lake_uv_lock_hash"]
+        == study_manifest["public_lake_provenance"]["uv_lock_hash"]
     )
-
-    assert "public source inventory" in errors
-
-
-def test_verify_canonical_run_accepts_minimal_non_sidecar_inventory_record(
-    tmp_path: Path,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    payload["public_lake_provenance"]["source_metadata_inventory"] = [
-        {
-            "metadata_file": "issuer-origin/issuer_origin.csv",
-            "metadata_sha256": "3" * 64,
-        }
-    ]
-    _write_json(fixture["manifest"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
+    assert attestation["package_manifest_sha256"] == sha256_path(fixture["package_manifest"])
+    assert (
+        attestation["package_study_manifest_sha256"] == package_manifest["study_manifest_sha256"]
     )
+    assert len(attestation["package_artifacts"]) == 59
+    assert len(attestation["raw_reconstruction_owners"]) == len(RAW_RECONSTRUCTION_OWNERS) == 8
+    assert len(attestation["report_surface"]) == 6
+    for field in ("package_artifacts", "raw_reconstruction_owners", "report_surface"):
+        assert [record["path"] for record in attestation[field]] == sorted(
+            record["path"] for record in attestation[field]
+        )
+        assert all(not Path(record["path"]).is_absolute() for record in attestation[field])
+    for record in attestation["package_artifacts"]:
+        assert record["sha256"] == sha256_path(fixture["package_dir"] / record["path"])
+    for record in attestation["raw_reconstruction_owners"]:
+        assert record["sha256"] == sha256_path(fixture["study_dir"] / record["path"])
+    for record in attestation["report_surface"]:
+        assert record["sha256"] == sha256_path(fixture["repo"] / record["path"])
+    assert str(tmp_path) not in raw
 
-    assert errors == []
 
-
-@pytest.mark.parametrize(
-    "extra_fields",
-    [
-        {"payload_sha256": "2" * 64},
-        {"payload_sha256": "not-a-sha256"},
-        {"source_name": "unexpected acquisition metadata"},
-    ],
-)
-def test_verify_canonical_run_rejects_non_sidecar_acquisition_fields(
+@pytest.mark.parametrize("prior", [None, b"prior-attestation\n"])
+def test_r4_invalid_verification_does_not_create_or_replace_attestation(
     tmp_path: Path,
-    extra_fields: dict[str, object],
+    prior: bytes | None,
 ) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    payload["public_lake_provenance"]["source_metadata_inventory"] = [
-        {
-            "metadata_file": "issuer-origin/issuer_origin.csv",
-            "metadata_sha256": "3" * 64,
-            **extra_fields,
-        }
-    ]
-    _write_json(fixture["manifest"], payload)
+    fixture = canonical_fixture(tmp_path)
+    if prior is not None:
+        fixture["attestation"].write_bytes(prior)
+    manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    manifest["runtime"]["parallel_jobs"] = 999
+    _write_json(fixture["manifest"], manifest)
 
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert "public source inventory" in errors
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement", "message"),
-    [
-        ("interval_seed", 42.0, "construct bootstrap seed"),
-        ("interval_seed", True, "construct bootstrap seed"),
-        ("interval_seed", "42", "construct bootstrap seed"),
-        ("interval_reps", 1000.0, "construct bootstrap reps"),
-        ("interval_reps", True, "construct bootstrap reps"),
-        ("interval_reps", "1000", "construct bootstrap reps"),
-    ],
-)
-def test_verify_canonical_run_rejects_non_integer_bootstrap_contract(
-    tmp_path: Path,
-    field: str,
-    replacement: object,
-    message: str,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["construct"].read_text(encoding="utf-8"))
-    payload[field] = replacement
-    _write_json(fixture["construct"], payload)
-
-    errors = verify_canonical_run(
-        fixture["study_dir"],
-        fixture["package_dir"],
-        expected_as_of_date="2026-07-06",
-    )
-
-    assert message in errors
-
-
-@pytest.mark.parametrize(
-    "invalid_case",
-    [
-        "nested",
-        "table_09",
-        "dml",
-        "table_03",
-        "attrition",
-        "dirty",
-        "hash",
-        "sidecar_missing_payload_hash",
-        "sidecar_extra_field",
-        "interval_seed_float",
-        "interval_reps_float",
-    ],
-)
-def test_cli_never_verifies_invalid_canonical_fixture(
-    tmp_path: Path,
-    invalid_case: str,
-) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    if invalid_case in {
-        "nested",
-        "dirty",
-        "hash",
-        "sidecar_missing_payload_hash",
-        "sidecar_extra_field",
-    }:
-        payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-        if invalid_case == "nested":
-            payload["public_lake_provenance"] = None
-        elif invalid_case == "dirty":
-            payload["provenance"]["dirty"] = True
-        elif invalid_case == "sidecar_missing_payload_hash":
-            payload["public_lake_provenance"]["source_metadata_inventory"][0].pop("payload_sha256")
-        elif invalid_case == "sidecar_extra_field":
-            payload["public_lake_provenance"]["source_metadata_inventory"][0]["unexpected"] = (
-                "extra"
-            )
-        else:
-            payload["provenance"]["config_hash"] = "not-a-sha256"
-        _write_json(fixture["manifest"], payload)
-    elif invalid_case in {"interval_seed_float", "interval_reps_float"}:
-        payload = json.loads(fixture["construct"].read_text(encoding="utf-8"))
-        if invalid_case == "interval_seed_float":
-            payload["interval_seed"] = 42.0
-        else:
-            payload["interval_reps"] = 1000.0
-        _write_json(fixture["construct"], payload)
-    elif invalid_case == "table_09":
-        table = pd.read_csv(fixture["table_09"])
-        table.loc[0, "Direction"] = "wrong direction"
-        table.to_csv(fixture["table_09"], index=False)
-    elif invalid_case == "dml":
-        path = fixture["study_dir"] / "public_cascade" / "public_opacity_dml.csv"
-        dml = pd.read_csv(path)
-        dml.loc[1, "status"] = "fit"
-        dml.to_csv(path, index=False)
-    elif invalid_case == "table_03":
-        path = fixture["package_dir"] / "tables" / "table_03_public_task_metrics.csv"
-        table = pd.read_csv(path)
-        table.loc[0, "Mean_PR_AUC"] = float("inf")
-        table.to_csv(path, index=False)
+    completed = _run_cli(fixture)
+    assert completed.returncode == 1
+    if prior is None:
+        assert not fixture["attestation"].exists()
     else:
-        payload = json.loads(fixture["public"].read_text(encoding="utf-8"))
-        payload["sample_attrition"][0]["n_rows"] = 205652.5
-        _write_json(fixture["public"], payload)
+        assert fixture["attestation"].read_bytes() == prior
 
+
+def test_r4_atomic_attestation_replace_failure_preserves_prior_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "canonical_attestation.json"
+    output.write_bytes(b"prior\n")
+    real_replace = Path.replace
+
+    def fail_output_replace(source: Path, target: Path) -> Path:
+        if Path(target) == output:
+            raise OSError("injected replace failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_output_replace)
+    with pytest.raises(OSError, match="injected"):
+        _write_attestation(output, {"study_commit": "0" * 40})
+    assert output.read_bytes() == b"prior\n"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_r4_cli_help_names_attestation_and_repository_inputs() -> None:
     completed = subprocess.run(
-        [
-            sys.executable,
-            "scripts/verify_canonical_run.py",
-            "--study-dir",
-            str(fixture["study_dir"]),
-            "--manuscript-package",
-            str(fixture["package_dir"]),
-        ],
+        [sys.executable, "scripts/verify_canonical_run.py", "--help"],
         check=False,
         capture_output=True,
         text=True,
     )
+    assert completed.returncode == 0
+    assert "--repo-root" in completed.stdout
+    assert "--bronze-root" in completed.stdout
+    assert "--attestation-output" in completed.stdout
 
-    assert completed.returncode == 1
-    assert "CANONICAL RUN VERIFIED" not in completed.stdout
-    assert "FAILED:" in completed.stdout
-    assert "Traceback" not in completed.stderr
 
-
-def test_cli_rejects_non_string_bridge_status_without_traceback(tmp_path: Path) -> None:
-    fixture = _write_canonical_fixture(tmp_path)
-    payload = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
-    payload["components"]["bridge_probe"]["status"] = []
-    _write_json(fixture["manifest"], payload)
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "scripts/verify_canonical_run.py",
-            "--study-dir",
-            str(fixture["study_dir"]),
-            "--manuscript-package",
-            str(fixture["package_dir"]),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert completed.returncode == 1
-    assert "FAILED: bridge component" in completed.stdout
-    assert "CANONICAL RUN VERIFIED" not in completed.stdout
-    assert "Traceback" not in completed.stderr
+def test_r4_attestation_contains_no_raw_zip_member_bytes(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    assert _run_cli(fixture).returncode == 0
+    with zipfile.ZipFile(fixture["payload"]) as archive:
+        member = archive.read("FirmFilings.csv")
+    assert member not in fixture["attestation"].read_bytes()

@@ -69,6 +69,7 @@ _test-core:
         tests/test_construct_overlap.py \
         tests/test_data_prep.py \
         tests/test_docs.py \
+        tests/test_canonical_run.py \
         tests/test_manuscript_package.py \
         tests/test_peer_comparison.py \
         tests/test_public_cascade_interfaces.py \
@@ -521,9 +522,11 @@ verify-canonical study_dir="artifacts/full_with_peer" package_dir="artifacts/man
     study_dir_arg="{{ study_dir }}"; study_dir_arg="${study_dir_arg#study_dir=}"; \
     package_dir_arg="{{ package_dir }}"; package_dir_arg="${package_dir_arg#package_dir=}"; \
     uv run python scripts/verify_canonical_run.py \
+        --repo-root "{{ repo_root }}" \
         --study-dir "$study_dir_arg" \
         --manuscript-package "$package_dir_arg" \
-        --expected-as-of-date 2026-07-06
+        --expected-as-of-date 2026-07-06 \
+        --attestation-output "${ARTIFACTS_DIR}/canonical_validation/canonical_attestation.json"
 
 reviewer-package study_dir="artifacts/full_with_peer" package_dir="artifacts/manuscript_package": _check-data-env
     study_dir_arg="{{ study_dir }}"; study_dir_arg="${study_dir_arg#study_dir=}"; \
@@ -531,6 +534,7 @@ reviewer-package study_dir="artifacts/full_with_peer" package_dir="artifacts/man
     uv run python scripts/build_reviewer_package.py \
         --study-dir "$study_dir_arg" \
         --manuscript-package "$package_dir_arg" \
+        --attestation "${ARTIFACTS_DIR}/canonical_validation/canonical_attestation.json" \
         --output artifacts/reviewer_package/reporting-risk-cascade-reviewer.zip
 
 _docs-build: _check-env
