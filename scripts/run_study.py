@@ -284,12 +284,14 @@ def main() -> None:
         config_provenance,
         git_provenance,
         input_provenance,
+        path_record,
         public_lake_provenance,
         uv_lock_provenance,
         wrds_export_metadata,
     )
     from src.public_cascade import run_public_cascade
     from src.public_peer_comparison import run_public_peer_comparison
+    from scripts.monitor_public_lake import _validate_public_lake_final_report
 
     args = parse_args()
     cfg = _load_yaml(args.config)
@@ -317,6 +319,12 @@ def main() -> None:
     issuer_origin_panel = _resolve_project_path(
         args.issuer_origin_panel or inputs.get("issuer_origin_panel"),
         default=LAKE_GOLD_DIR / "issuer_origin_panel.parquet",
+        data_dir=DATA_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
+    )
+    public_lake_final_report = _resolve_project_path(
+        inputs.get("public_lake_final_report"),
+        default=LAKE_SILVER_DIR / "public_lake_final_report.json",
         data_dir=DATA_DIR,
         artifacts_dir=ARTIFACTS_DIR,
     )
@@ -368,6 +376,7 @@ def main() -> None:
                 raw_csv,
                 issuer_dim,
                 issuer_origin_panel,
+                public_lake_final_report,
                 crosswalk,
                 public_lake_run_metadata,
                 form_ap_source_metadata,
@@ -407,7 +416,16 @@ def main() -> None:
             "raw_data": str(raw_csv),
             "issuer_dim": str(issuer_dim),
             "issuer_origin_panel": str(issuer_origin_panel),
+            "public_lake_final_report": str(public_lake_final_report),
+            "public_lake_run_metadata": str(public_lake_run_metadata),
+            "form_ap_source_metadata": str(form_ap_source_metadata),
             "crosswalk": str(crosswalk),
+        },
+        "public_lake_inputs": {
+            "public_lake_final_report": path_record(public_lake_final_report),
+            "public_lake_run_metadata": path_record(public_lake_run_metadata),
+            "form_ap_source_metadata": path_record(form_ap_source_metadata),
+            "issuer_origin_panel": path_record(issuer_origin_panel),
         },
         "runtime": {
             "parallel_jobs": args.parallel_jobs,
@@ -462,6 +480,10 @@ def main() -> None:
                 "public cascade issuer_origin_panel not found. Build the public lake first or pass "
                 f"--issuer-origin-panel explicitly. Missing path: {issuer_origin_panel}"
             )
+        if not public_lake_final_report.is_file():
+            raise FileNotFoundError(
+                f"public lake final report not found: {public_lake_final_report}"
+            )
         if not public_lake_run_metadata.is_file():
             raise FileNotFoundError(
                 f"public lake run metadata not found: {public_lake_run_metadata}"
@@ -470,6 +492,11 @@ def main() -> None:
             raise FileNotFoundError(
                 f"Form AP source metadata not found: {form_ap_source_metadata}"
             )
+        _validate_public_lake_final_report(
+            public_lake_final_report,
+            run_metadata_path=public_lake_run_metadata,
+            issuer_origin_panel_path=issuer_origin_panel,
+        )
         public_cascade_result = run_public_cascade(
             config_path=args.public_cascade_config,
             issuer_origin_panel_path=issuer_origin_panel,

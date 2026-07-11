@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,22 @@ from typing import Dict, Iterable, Tuple
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_LAKE_FINAL_REPORT_SCHEMA = "public-lake-final-report-v1"
+PUBLIC_LAKE_ROW_COUNT_KEYS = frozenset(
+    {
+        "issuer_dim",
+        "filing_dim",
+        "filing_xbrl_dim",
+        "xbrl_fact_summary",
+        "xbrl_core_fact",
+        "notes_filing_dim",
+        "note_summary",
+        "comment_thread",
+        "correction_event",
+        "issuer_origin_panel",
+        "filing_origin_panel",
+    }
+)
 
 
 def _bootstrap_repo_root() -> None:
@@ -42,6 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pid", type=int, default=0, help="Optional root PID to monitor")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--report-json", type=Path, default=None)
+    parser.add_argument("--write-final-report", action="store_true")
+    parser.add_argument("--as-of-date", default=None)
     return parser.parse_args()
 
 
@@ -171,6 +190,129 @@ def _row_count_report(silver_dir: Path, gold_dir: Path) -> Tuple[Dict[str, int],
     return counts, errors
 
 
+def _load_json_object(path: Path, context: str) -> Dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{context} is not valid JSON: {exc.msg}") from exc
+    if type(payload) is not dict:
+        raise ValueError(f"{context} must be a JSON object")
+    return payload
+
+
+def _validate_public_lake_final_report(
+    report_path: Path,
+    *,
+    run_metadata_path: Path,
+    issuer_origin_panel_path: Path,
+) -> Dict[str, object]:
+    _bootstrap_repo_root()
+    from src.provenance import sha256_path
+
+    report = _load_json_object(Path(report_path), "public lake final report")
+    expected_fields = {
+        "schema_version",
+        "as_of_date",
+        "public_lake_run_metadata_sha256",
+        "issuer_origin_panel_sha256",
+        "row_counts",
+        "row_count_errors",
+    }
+    if set(report) != expected_fields:
+        raise ValueError(
+            f"public lake final report fields must be exactly {sorted(expected_fields)}"
+        )
+    if report["schema_version"] != PUBLIC_LAKE_FINAL_REPORT_SCHEMA:
+        raise ValueError(
+            f"public lake final report.schema_version must be {PUBLIC_LAKE_FINAL_REPORT_SCHEMA}"
+        )
+    run_metadata = _load_json_object(Path(run_metadata_path), "public lake run metadata")
+    expected_as_of = run_metadata.get("as_of_date")
+    if type(expected_as_of) is not str or not expected_as_of:
+        raise ValueError("public lake run metadata.as_of_date must be a nonempty string")
+    if report["as_of_date"] != expected_as_of:
+        raise ValueError(
+            "public lake final report.as_of_date does not match public lake run metadata"
+        )
+    expected_hashes = {
+        "public_lake_run_metadata_sha256": sha256_path(Path(run_metadata_path)),
+        "issuer_origin_panel_sha256": sha256_path(Path(issuer_origin_panel_path)),
+    }
+    for field, actual in expected_hashes.items():
+        if actual is None:
+            raise FileNotFoundError(
+                Path(run_metadata_path)
+                if field == "public_lake_run_metadata_sha256"
+                else Path(issuer_origin_panel_path)
+            )
+        if report[field] != actual:
+            raise ValueError(f"public lake final report.{field} does not match bound input")
+    row_counts = report["row_counts"]
+    if type(row_counts) is not dict or set(row_counts) != PUBLIC_LAKE_ROW_COUNT_KEYS:
+        raise ValueError(
+            "public lake final report.row_counts keys must be exactly "
+            f"{sorted(PUBLIC_LAKE_ROW_COUNT_KEYS)}"
+        )
+    for key, value in row_counts.items():
+        if type(value) is not int or value < 0:
+            raise ValueError(
+                f"public lake final report.row_counts.{key} must be a nonnegative integer"
+            )
+    if report["row_count_errors"] != {}:
+        raise ValueError("public lake final report.row_count_errors must be an empty object")
+    return report
+
+
+def _write_public_lake_final_report(
+    *,
+    silver_dir: Path,
+    as_of_date: str,
+    run_metadata_path: Path,
+    issuer_origin_panel_path: Path,
+    row_counts: Dict[str, int],
+    row_count_errors: Dict[str, str],
+) -> Path:
+    _bootstrap_repo_root()
+    from src.provenance import sha256_path
+
+    silver_dir = Path(silver_dir)
+    silver_dir.mkdir(parents=True, exist_ok=True)
+    report_path = silver_dir / "public_lake_final_report.json"
+    payload = {
+        "schema_version": PUBLIC_LAKE_FINAL_REPORT_SCHEMA,
+        "as_of_date": as_of_date,
+        "public_lake_run_metadata_sha256": sha256_path(Path(run_metadata_path)),
+        "issuer_origin_panel_sha256": sha256_path(Path(issuer_origin_panel_path)),
+        "row_counts": row_counts,
+        "row_count_errors": row_count_errors,
+    }
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=silver_dir,
+            prefix=f"{report_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _validate_public_lake_final_report(
+            temp_path,
+            run_metadata_path=Path(run_metadata_path),
+            issuer_origin_panel_path=Path(issuer_origin_panel_path),
+        )
+        temp_path.replace(report_path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+    return report_path
+
+
 def _snapshot(args: argparse.Namespace, *, include_row_counts: bool = False) -> Dict[str, object]:
     manifests = _manifest_rows(args.bronze_dir)
     row = {
@@ -212,8 +354,8 @@ def main() -> None:
     if args.once:
         row = _snapshot(args, include_row_counts=True)
         _append_csv(monitor_csv, [row])
+        counts, errors = _row_count_report(args.silver_dir, args.gold_dir)
         if args.report_json:
-            counts, errors = _row_count_report(args.silver_dir, args.gold_dir)
             args.report_json.parent.mkdir(parents=True, exist_ok=True)
             args.report_json.write_text(
                 json.dumps(
@@ -227,6 +369,18 @@ def main() -> None:
                 ),
                 encoding="utf-8",
             )
+        if args.write_final_report:
+            if not args.as_of_date:
+                raise ValueError("--as-of-date is required with --write-final-report")
+            final_report = _write_public_lake_final_report(
+                silver_dir=args.silver_dir,
+                as_of_date=args.as_of_date,
+                run_metadata_path=args.silver_dir / "public_lake_run_metadata.json",
+                issuer_origin_panel_path=args.gold_dir / "issuer_origin_panel.parquet",
+                row_counts=counts,
+                row_count_errors=errors,
+            )
+            print(f"Wrote stable final report: {final_report}")
         print(json.dumps(row, indent=2, sort_keys=True))
         return
 

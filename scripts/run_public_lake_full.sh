@@ -485,7 +485,8 @@ run_step "final-report" uv run python scripts/monitor_public_lake.py \
     --gold-dir "$GOLD_DIR" \
     --log-dir "$LOG_DIR" \
     --once \
-    --report-json "$LOG_DIR/run_report.json"
+    --write-final-report \
+    --as-of-date "$AS_OF_DATE"
 
 echo
 echo "Public lake run complete. Logs: ${LOG_DIR}"

@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shutil
 import sys
+import tempfile
+import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import numpy as np
@@ -18,8 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src import ARTIFACTS_DIR, LAKE_GOLD_DIR, PROJECT_ROOT  # noqa: E402
+from src import ARTIFACTS_DIR, PROJECT_ROOT  # noqa: E402
 from src.linkage import WRDS_VALIDATED_TIER  # noqa: E402
+from src.provenance import sha256_path  # noqa: E402
 
 
 REQUIRED_ARTIFACTS = [
@@ -44,6 +48,12 @@ REQUIRED_ARTIFACTS = [
 
 MIN_VALID_FOLDS_FOR_CI = 5
 SPARSE_POSITIVE_THRESHOLD = 10
+MANUSCRIPT_PACKAGE_SCHEMA = "manuscript-package-v1"
+PACKAGE_TABLE_KEYS = {
+    *(f"table_{index:02d}" for index in range(1, 10)),
+    *(f"table_{index:02d}" for index in range(12, 19)),
+}
+PACKAGE_FIGURE_KEYS = {f"figure_{index:02d}" for index in range(1, 6)}
 
 ANNUAL_INTERVAL_NOTE = (
     "PR-AUC dispersion entries are descriptive fold-dispersion intervals over "
@@ -257,6 +267,13 @@ def _read_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, low_memory=False)
 
 
+def _artifact_record(path: Path, package_dir: Path) -> dict[str, str]:
+    return {
+        "path": path.relative_to(package_dir).as_posix(),
+        "sha256": str(sha256_path(path)),
+    }
+
+
 def _fmt(value: Any, digits: int = 4) -> str:
     if value is None:
         return ""
@@ -346,7 +363,7 @@ def _write_table_bundle(
     label: str,
     display_df: pd.DataFrame | None = None,
     note: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, dict[str, str]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / f"{stem}.csv"
     md_path = out_dir / f"{stem}.md"
@@ -356,7 +373,12 @@ def _write_table_bundle(
     note_text = f"\n\nNote: {note}\n" if note else ""
     md_path.write_text(f"Table: {caption}\n\n{_markdown_table(rendered)}{note_text}", encoding="utf-8")
     tex_path.write_text(_latex_table(rendered, caption=caption, label=label, note=note), encoding="utf-8")
-    return {"csv": _rel(csv_path), "md": _rel(md_path), "tex": _rel(tex_path)}
+    package_dir = out_dir.parent
+    return {
+        "csv": _artifact_record(csv_path, package_dir),
+        "md": _artifact_record(md_path, package_dir),
+        "tex": _artifact_record(tex_path, package_dir),
+    }
 
 
 def _positive_counts(frame: pd.DataFrame) -> pd.Series:
@@ -496,22 +518,52 @@ def _table_view(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return df[[col for col in columns if col in df.columns]].copy()
 
 
-def _latest_public_lake_report() -> dict[str, Any]:
-    report_root = ARTIFACTS_DIR / "logs" / "public_lake_full"
-    reports = sorted(report_root.glob("*/run_report.json"), key=lambda path: path.stat().st_mtime)
-    if not reports:
-        return {}
-    report = _read_json(reports[-1])
-    snapshot = report.get("snapshot", {})
-    row_counts = report.get("row_counts")
-    if row_counts is None and isinstance(snapshot, dict):
-        row_counts = snapshot.get("row_counts_json") or snapshot.get("row_counts")
-    if isinstance(row_counts, str):
-        row_counts = json.loads(row_counts)
-    report["row_counts"] = row_counts or {}
-    report["timestamp_utc"] = report.get("timestamp_utc") or snapshot.get("timestamp_utc")
-    report["_path"] = str(reports[-1])
-    return report
+def _bound_input_path(record: Any, key: str) -> Path:
+    context = f"study public_lake_inputs.{key}"
+    expected_fields = {"path", "exists", "sha256", "kind", "size_bytes"}
+    if type(record) is not dict or set(record) != expected_fields:
+        raise ValueError(f"{context} must have exactly {sorted(expected_fields)}")
+    path_value = record["path"]
+    if type(path_value) is not str or not path_value:
+        raise ValueError(f"{context}.path must be a nonempty string")
+    path = Path(path_value)
+    if not path.is_file():
+        raise FileNotFoundError(f"{key} not found: {path}")
+    if record["exists"] is not True or record["kind"] != "file":
+        raise ValueError(f"{context} must record an existing file")
+    if type(record["size_bytes"]) is not int or record["size_bytes"] != path.stat().st_size:
+        raise ValueError(f"{context}.size_bytes does not match bound file")
+    if type(record["sha256"]) is not str or record["sha256"] != sha256_path(path):
+        raise ValueError(f"{context}.sha256 does not match bound file")
+    return path
+
+
+def _bound_public_lake_inputs(
+    manifest: dict[str, Any],
+    *,
+    study_manifest_path: Path,
+) -> dict[str, Any]:
+    from scripts.monitor_public_lake import _validate_public_lake_final_report
+
+    records = manifest.get("public_lake_inputs")
+    expected_keys = {
+        "public_lake_final_report",
+        "public_lake_run_metadata",
+        "form_ap_source_metadata",
+        "issuer_origin_panel",
+    }
+    if type(records) is not dict or set(records) != expected_keys:
+        raise ValueError(
+            f"{study_manifest_path}: public_lake_inputs keys must be exactly "
+            f"{sorted(expected_keys)}"
+        )
+    paths = {key: _bound_input_path(records[key], key) for key in sorted(expected_keys)}
+    final_report = _validate_public_lake_final_report(
+        paths["public_lake_final_report"],
+        run_metadata_path=paths["public_lake_run_metadata"],
+        issuer_origin_panel_path=paths["issuer_origin_panel"],
+    )
+    return {**paths, "final_report": final_report}
 
 
 def _component_status(
@@ -1099,10 +1151,10 @@ def _bridge_sample_boundaries(
     return out
 
 
-def _selection_profile_table(panel_path: Path | None = None) -> pd.DataFrame:
-    path = panel_path or LAKE_GOLD_DIR / "issuer_origin_panel.parquet"
-    if not path.exists():
-        return pd.DataFrame()
+def _selection_profile_table(panel_path: Path) -> pd.DataFrame:
+    path = Path(panel_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"bound issuer-origin panel not found: {path}")
     try:
         import duckdb
     except ImportError:
@@ -1122,10 +1174,13 @@ def _selection_profile_table(panel_path: Path | None = None) -> pd.DataFrame:
         "label_8k_402_365",
     ]
     query = "SELECT " + ", ".join(cols) + " FROM read_parquet(?)"
+    connection = duckdb.connect(database=":memory:")
     try:
-        panel = duckdb.connect(database=":memory:").execute(query, [str(path)]).fetchdf()
-    except Exception:
-        return pd.DataFrame()
+        panel = connection.execute(query, [str(path)]).fetchdf()
+    except Exception as exc:
+        raise ValueError(f"bound issuer-origin panel is malformed: {path}") from exc
+    finally:
+        connection.close()
     if panel.empty:
         return pd.DataFrame()
     panel = panel.loc[pd.to_numeric(panel["censored_365"], errors="coerce").fillna(0).eq(0)].copy()
@@ -1243,7 +1298,7 @@ def _plot_metric_with_uncertainty(
     out_path: Path,
     color: str = "#2a9d8f",
     plot_style: str = "bar",
-) -> dict[str, str]:
+) -> dict[str, dict[str, str]]:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -1341,10 +1396,18 @@ def _plot_metric_with_uncertainty(
     fig.savefig(png_path, dpi=300)
     fig.savefig(pdf_path)
     plt.close(fig)
-    return {"png": _rel(png_path), "pdf": _rel(pdf_path)}
+    package_dir = out_path.parent.parent
+    return {
+        "png": _artifact_record(png_path, package_dir),
+        "pdf": _artifact_record(pdf_path, package_dir),
+    }
 
 
-def _plot_construct_lift(df: pd.DataFrame, *, out_path: Path) -> dict[str, str]:
+def _plot_construct_lift(
+    df: pd.DataFrame,
+    *,
+    out_path: Path,
+) -> dict[str, dict[str, str]]:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -1394,7 +1457,11 @@ def _plot_construct_lift(df: pd.DataFrame, *, out_path: Path) -> dict[str, str]:
     fig.savefig(png_path, dpi=300)
     fig.savefig(pdf_path)
     plt.close(fig)
-    return {"png": _rel(png_path), "pdf": _rel(pdf_path)}
+    package_dir = out_path.parent.parent
+    return {
+        "png": _artifact_record(png_path, package_dir),
+        "pdf": _artifact_record(pdf_path, package_dir),
+    }
 
 
 def _result_narrative(
@@ -1487,6 +1554,106 @@ def _result_narrative(
     return "\n".join(lines) + "\n"
 
 
+def _validated_artifact_path(
+    package_dir: Path,
+    record: Any,
+    context: str,
+) -> str:
+    if type(record) is not dict or set(record) != {"path", "sha256"}:
+        raise ValueError(f"{context} must contain exactly path and sha256")
+    relative = record["path"]
+    if type(relative) is not str or not relative or "\\" in relative:
+        raise ValueError(f"{context}.path must be a package-relative POSIX path")
+    pure = PurePosixPath(relative)
+    if pure.is_absolute() or ".." in pure.parts or pure.as_posix() != relative:
+        raise ValueError(f"{context}.path must be a package-relative POSIX path")
+    path = package_dir.joinpath(*pure.parts)
+    if path.is_symlink() or not path.is_file():
+        raise FileNotFoundError(f"missing artifact: {relative}")
+    try:
+        path.resolve().relative_to(package_dir.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{context}.path must be a package-relative POSIX path") from exc
+    if type(record["sha256"]) is not str or record["sha256"] != sha256_path(path):
+        raise ValueError(f"{context}.sha256 does not match artifact bytes")
+    return relative
+
+
+def _validate_package_tree(
+    package_dir: Path,
+    study_manifest_path: Path,
+) -> dict[str, Any]:
+    package_dir = Path(package_dir)
+    manifest_path = package_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"missing package manifest: {manifest_path}")
+    manifest = _read_json(manifest_path)
+    if type(manifest) is not dict:
+        raise ValueError("package manifest must be a JSON object")
+    if manifest.get("schema_version") != MANUSCRIPT_PACKAGE_SCHEMA:
+        raise ValueError(f"package schema_version must be {MANUSCRIPT_PACKAGE_SCHEMA}")
+    study_manifest = _read_json(Path(study_manifest_path))
+    if type(study_manifest) is not dict:
+        raise ValueError("study manifest must be a JSON object")
+    if manifest.get("study_commit") != study_manifest.get("repo_commit"):
+        raise ValueError("package study_commit does not match exact study commit")
+    if manifest.get("study_manifest_sha256") != sha256_path(Path(study_manifest_path)):
+        raise ValueError("package study_manifest_sha256 does not match exact study manifest bytes")
+
+    tables = manifest.get("tables")
+    if type(tables) is not dict or set(tables) != PACKAGE_TABLE_KEYS:
+        raise ValueError(f"package tables keys must be exactly {sorted(PACKAGE_TABLE_KEYS)}")
+    figures = manifest.get("figures")
+    if type(figures) is not dict or set(figures) != PACKAGE_FIGURE_KEYS:
+        raise ValueError(f"package figures keys must be exactly {sorted(PACKAGE_FIGURE_KEYS)}")
+
+    declared: set[str] = set()
+    for key, formats in tables.items():
+        if type(formats) is not dict or set(formats) != {"csv", "md", "tex"}:
+            raise ValueError(f"package table {key} format set must be exactly csv, md, tex")
+        for fmt, record in formats.items():
+            declared.add(_validated_artifact_path(package_dir, record, f"tables.{key}.{fmt}"))
+    for key, formats in figures.items():
+        if type(formats) is not dict or set(formats) != {"png", "pdf"}:
+            raise ValueError(f"package figure {key} format set must be exactly png, pdf")
+        for fmt, record in formats.items():
+            declared.add(_validated_artifact_path(package_dir, record, f"figures.{key}.{fmt}"))
+    declared.add(_validated_artifact_path(package_dir, manifest.get("narrative"), "narrative"))
+    expected_artifact_count = len(PACKAGE_TABLE_KEYS) * 3 + len(PACKAGE_FIGURE_KEYS) * 2 + 1
+    if len(declared) != expected_artifact_count:
+        raise ValueError("package artifact paths must be unique")
+    actual = {
+        path.relative_to(package_dir).as_posix()
+        for path in package_dir.rglob("*")
+        if path.is_file()
+    }
+    undeclared = actual - declared - {"manifest.json"}
+    if undeclared:
+        raise ValueError(f"undeclared package file(s): {sorted(undeclared)}")
+    return manifest
+
+
+def _replace_package_tree(staging_dir: Path, final_dir: Path) -> None:
+    staging_dir = Path(staging_dir)
+    final_dir = Path(final_dir)
+    if staging_dir.parent.resolve() != final_dir.parent.resolve():
+        raise ValueError("package staging directory must be a sibling of the final package")
+    backup_dir = final_dir.with_name(f".{final_dir.name}.backup-{uuid.uuid4().hex}")
+    try:
+        if final_dir.exists():
+            final_dir.replace(backup_dir)
+        staging_dir.replace(final_dir)
+    except Exception:
+        if backup_dir.exists() and not final_dir.exists():
+            backup_dir.replace(final_dir)
+        raise
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        if backup_dir.exists() and final_dir.exists():
+            shutil.rmtree(backup_dir)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1504,10 +1671,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    study_dir = _resolve_repo_path(args.study_dir)
-    out_dir = _resolve_repo_path(args.out_dir)
+def _build_package(study_dir: Path, out_dir: Path) -> None:
     missing = [rel for rel in REQUIRED_ARTIFACTS if not (study_dir / rel).exists()]
     if missing:
         raise SystemExit(
@@ -1520,7 +1684,12 @@ def main() -> None:
     tables_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    manifest = _read_json(study_dir / "study_run_manifest.json")
+    study_manifest_path = study_dir / "study_run_manifest.json"
+    manifest = _read_json(study_manifest_path)
+    bound_public_lake = _bound_public_lake_inputs(
+        manifest,
+        study_manifest_path=study_manifest_path,
+    )
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
     construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
     bridge_language = _bridge_language(manifest, construct_manifest)
@@ -1533,7 +1702,7 @@ def main() -> None:
     )
     public_primary_metrics = _select_primary_public_metrics(public_metrics, public_summary)
 
-    public_lake = _public_lake_scale(_latest_public_lake_report())
+    public_lake = _public_lake_scale(bound_public_lake["final_report"])
     public_task = _public_task_metrics(
         public_primary_metrics,
         public_task_status,
@@ -1550,7 +1719,7 @@ def main() -> None:
     construct_alignment = _construct_alignment(study_dir)
     bridge_overlap = _bridge_overlap_matrix(study_dir)
     bridge_boundaries = _bridge_sample_boundaries(study_dir, bridge_language)
-    selection_profile = _selection_profile_table()
+    selection_profile = _selection_profile_table(bound_public_lake["issuer_origin_panel"])
     public_opacity_dml = _public_opacity_dml_table(study_dir)
     component_status = _component_status(manifest, bridge_language)
 
@@ -1560,21 +1729,21 @@ def main() -> None:
     public_peer_folds = _annual_fold_frame(public_peer_metrics, ["peer_model_id"])
 
     table_manifest = {
-        "table_01_component_status": _write_table_bundle(
+        "table_01": _write_table_bundle(
             component_status,
             out_dir=tables_dir,
             stem="table_01_component_status",
             caption="Study component status for manuscript evidence",
             label="tab:component-status",
         ),
-        "table_02_public_lake_scale": _write_table_bundle(
+        "table_02": _write_table_bundle(
             public_lake,
             out_dir=tables_dir,
             stem="table_02_public_lake_scale",
             caption="Public data architecture and analytical panel scale",
             label="tab:public-lake-scale",
         ),
-        "table_03_public_task_metrics": _write_table_bundle(
+        "table_03": _write_table_bundle(
             public_task,
             out_dir=tables_dir,
             stem="table_03_public_task_metrics",
@@ -1600,7 +1769,7 @@ def main() -> None:
                 ],
             ),
         ),
-        "table_04_feature_family_metrics": _write_table_bundle(
+        "table_04": _write_table_bundle(
             feature_family,
             out_dir=tables_dir,
             stem="table_04_feature_family_metrics",
@@ -1623,7 +1792,7 @@ def main() -> None:
                 ],
             ),
         ),
-        "table_05_benchmark_timing_metrics": _write_table_bundle(
+        "table_05": _write_table_bundle(
             benchmark_timing,
             out_dir=tables_dir,
             stem="table_05_benchmark_timing_metrics",
@@ -1645,7 +1814,7 @@ def main() -> None:
                 ],
             ),
         ),
-        "table_06_detected_misstatement_peer_metrics": _write_table_bundle(
+        "table_06": _write_table_bundle(
             benchmark_peer,
             out_dir=tables_dir,
             stem="table_06_detected_misstatement_peer_metrics",
@@ -1664,7 +1833,7 @@ def main() -> None:
                 ],
             ),
         ),
-        "table_07_public_peer_metrics": _write_table_bundle(
+        "table_07": _write_table_bundle(
             public_peer,
             out_dir=tables_dir,
             stem="table_07_public_peer_metrics",
@@ -1683,7 +1852,7 @@ def main() -> None:
                 ],
             ),
         ),
-        "table_08_bridge_coverage": _write_table_bundle(
+        "table_08": _write_table_bundle(
             bridge_coverage,
             out_dir=tables_dir,
             stem="table_08_bridge_coverage",
@@ -1691,7 +1860,7 @@ def main() -> None:
             label="tab:bridge-coverage",
             note=bridge_language["coverage_note"],
         ),
-        "table_09_construct_alignment": _write_table_bundle(
+        "table_09": _write_table_bundle(
             construct_alignment,
             out_dir=tables_dir,
             stem="table_09_construct_alignment",
@@ -1721,7 +1890,7 @@ def main() -> None:
         ),
     }
     if not public_fold_support.empty:
-        table_manifest["table_13_public_fold_support"] = _write_table_bundle(
+        table_manifest["table_13"] = _write_table_bundle(
             public_fold_support,
             out_dir=tables_dir,
             stem="table_13_public_fold_support",
@@ -1730,7 +1899,7 @@ def main() -> None:
             note=FOLD_SUPPORT_NOTE,
         )
     if not task_feature_family.empty:
-        table_manifest["table_14_task_feature_family_metrics"] = _write_table_bundle(
+        table_manifest["table_14"] = _write_table_bundle(
             task_feature_family,
             out_dir=tables_dir,
             stem="table_14_task_feature_family_metrics",
@@ -1754,7 +1923,7 @@ def main() -> None:
             ),
         )
     if not bridge_overlap.empty:
-        table_manifest["table_15_bridge_overlap_matrix"] = _write_table_bundle(
+        table_manifest["table_15"] = _write_table_bundle(
             bridge_overlap,
             out_dir=tables_dir,
             stem="table_15_bridge_overlap_matrix",
@@ -1763,7 +1932,7 @@ def main() -> None:
             note=bridge_language["overlap_note"],
         )
     if not bridge_boundaries.empty:
-        table_manifest["table_16_bridge_sample_boundaries"] = _write_table_bundle(
+        table_manifest["table_16"] = _write_table_bundle(
             bridge_boundaries,
             out_dir=tables_dir,
             stem="table_16_bridge_sample_boundaries",
@@ -1781,7 +1950,7 @@ def main() -> None:
             ),
         )
     if not selection_profile.empty:
-        table_manifest["table_17_selection_profile"] = _write_table_bundle(
+        table_manifest["table_17"] = _write_table_bundle(
             selection_profile,
             out_dir=tables_dir,
             stem="table_17_selection_profile",
@@ -1789,7 +1958,7 @@ def main() -> None:
             label="tab:selection-profile",
             note=SELECTION_PROFILE_NOTE,
         )
-    table_manifest["table_18_public_sample_attrition"] = _write_table_bundle(
+    table_manifest["table_18"] = _write_table_bundle(
         public_sample_attrition,
         out_dir=tables_dir,
         stem="table_18_public_sample_attrition",
@@ -1798,7 +1967,7 @@ def main() -> None:
         note=PUBLIC_ATTRITION_NOTE,
     )
     if not public_opacity_dml.empty:
-        table_manifest["table_12_public_opacity_dml"] = _write_table_bundle(
+        table_manifest["table_12"] = _write_table_bundle(
             public_opacity_dml,
             out_dir=tables_dir,
             stem="table_12_public_opacity_dml",
@@ -1824,7 +1993,7 @@ def main() -> None:
         )
 
     figure_manifest = {
-        "figure_01_public_task_pr_auc": _plot_metric_with_uncertainty(
+        "figure_01": _plot_metric_with_uncertainty(
             public_task,
             fold_df=public_task_folds,
             summary_group_col="Task",
@@ -1834,7 +2003,7 @@ def main() -> None:
             out_path=figures_dir / "figure_01_public_task_pr_auc",
             color="#2a9d8f",
         ),
-        "figure_02_feature_family_pr_auc": _plot_metric_with_uncertainty(
+        "figure_02": _plot_metric_with_uncertainty(
             feature_family,
             fold_df=feature_family_folds,
             summary_group_col="Feature_Set",
@@ -1844,7 +2013,7 @@ def main() -> None:
             out_path=figures_dir / "figure_02_feature_family_pr_auc",
             color="#6a994e",
         ),
-        "figure_03_detected_misstatement_peer_pr_auc": _plot_metric_with_uncertainty(
+        "figure_03": _plot_metric_with_uncertainty(
             benchmark_peer,
             fold_df=benchmark_peer_folds,
             summary_group_col="Model",
@@ -1855,7 +2024,7 @@ def main() -> None:
             color="#bc6c25",
             plot_style="dot",
         ),
-        "figure_04_public_peer_pr_auc": _plot_metric_with_uncertainty(
+        "figure_04": _plot_metric_with_uncertainty(
             public_peer,
             fold_df=public_peer_folds,
             summary_group_col="Model",
@@ -1866,7 +2035,7 @@ def main() -> None:
             color="#4361ee",
             plot_style="dot",
         ),
-        "figure_05_construct_overlap_lift": _plot_construct_lift(
+        "figure_05": _plot_construct_lift(
             construct_alignment,
             out_path=figures_dir / "figure_05_construct_overlap_lift",
         ),
@@ -1888,12 +2057,13 @@ def main() -> None:
 
     package_manifest = {
         **_package_primary_identity(public_summary),
+        "schema_version": MANUSCRIPT_PACKAGE_SCHEMA,
+        "study_commit": manifest.get("repo_commit"),
+        "study_manifest_sha256": sha256_path(study_manifest_path),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "study_dir": _rel(study_dir),
-        "out_dir": _rel(out_dir),
         "tables": table_manifest,
         "figures": figure_manifest,
-        "narrative": _rel(narrative_path),
+        "narrative": _artifact_record(narrative_path, out_dir),
         "uncertainty": {
             "annual_metric_interval": "descriptive fold-dispersion interval over valid annual out-of-time fold means when valid_folds >= 5",
             "sparse_fold_rule": f"folds with positive count < {SPARSE_POSITIVE_THRESHOLD} are excluded from dispersion calculations and listed in excluded_sparse_years",
@@ -1909,7 +2079,27 @@ def main() -> None:
     }
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(package_manifest, indent=2), encoding="utf-8")
-    print(f"Built manuscript package in {_rel(out_dir)}")
+
+
+def main() -> None:
+    args = parse_args()
+    study_dir = _resolve_repo_path(args.study_dir)
+    final_dir = _resolve_repo_path(args.out_dir)
+    final_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{final_dir.name}.staging-",
+            dir=final_dir.parent,
+        )
+    )
+    try:
+        _build_package(study_dir, staging_dir)
+        _validate_package_tree(staging_dir, study_dir / "study_run_manifest.json")
+        _replace_package_tree(staging_dir, final_dir)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+    print(f"Built manuscript package in {_rel(final_dir)}")
 
 
 if __name__ == "__main__":

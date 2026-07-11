@@ -5,6 +5,7 @@ paper:
 inputs:
   raw_data: "${DATA_DIR}/raw/raw_dataset_misstatement.parquet"
   issuer_origin_panel: "${LAKE_GOLD_DIR}/issuer_origin_panel.parquet"
+  public_lake_final_report: "${LAKE_SILVER_DIR}/public_lake_final_report.json"
   public_lake_run_metadata: "${LAKE_SILVER_DIR}/public_lake_run_metadata.json"
   form_ap_source_metadata: "${LAKE_SILVER_DIR}/form_ap_source_metadata.json"
   gvkey_cik_crosswalk: "${DATA_DIR}/linkage/raw_only/gvkey_cik_year.csv"

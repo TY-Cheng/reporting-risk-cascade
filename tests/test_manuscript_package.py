@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +28,18 @@ from scripts.build_manuscript_package import (
     _select_primary_public_metrics,
     _task_feature_family_metrics,
 )
+from src.table_io import write_table
+
+
+PACKAGE_TABLE_KEYS = {
+    *(f"table_{index:02d}" for index in range(1, 10)),
+    *(f"table_{index:02d}" for index in range(12, 19)),
+}
+PACKAGE_FIGURE_KEYS = {f"figure_{index:02d}" for index in range(1, 6)}
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_sparse_fold_display_uses_diagnostic_label_without_interval() -> None:
@@ -711,3 +725,285 @@ def test_bridge_overlap_matrix_keeps_all_public_labels(tmp_path) -> None:
 
     assert table["Public_Label"].tolist() == ["comment_thread", "amendment", "8k_402"]
     assert "Public_Rate_If_Benchmark_Pos" in table.columns
+
+
+def _selection_panel(rows: int, *, label: int) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "form": ["10-K"] * rows,
+            "entity_type": ["operating"] * rows,
+            "size": list(range(1, rows + 1)),
+            "xbrl_ratio_log_assets": list(range(1, rows + 1)),
+            "days_since_previous_filing": [365] * rows,
+            "prior_filing_count": [1] * rows,
+            "public_history_comment_thread_3y_count": [0] * rows,
+            "issuer_has_fpi_form_year": [0] * rows,
+            "censored_365": [0] * rows,
+            "label_comment_thread_365": [label] * rows,
+            "label_amendment_365": [label] * rows,
+            "label_8k_402_365": [label] * rows,
+        }
+    )
+
+
+def _write_bound_study_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict[str, Path]]:
+    silver = tmp_path / "lake" / "silver"
+    gold = tmp_path / "lake" / "gold"
+    silver.mkdir(parents=True)
+    gold.mkdir(parents=True)
+    paths = {
+        "public_lake_run_metadata": silver / "public_lake_run_metadata.json",
+        "form_ap_source_metadata": silver / "form_ap_source_metadata.json",
+        "public_lake_final_report": silver / "public_lake_final_report.json",
+        "issuer_origin_panel": gold / "issuer_origin_panel.parquet",
+    }
+    paths["public_lake_run_metadata"].write_text(
+        json.dumps({"as_of_date": "2026-07-06"}), encoding="utf-8"
+    )
+    paths["form_ap_source_metadata"].write_text(
+        json.dumps(
+            {
+                "source_kind": "verified_zip_member",
+                "archive_sha256": "a" * 64,
+                "member": "FirmFilings.csv",
+                "member_sha256": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_table(_selection_panel(1, label=0), paths["issuer_origin_panel"])
+    row_counts = {
+        key: 0
+        for key in {
+            "comment_thread",
+            "correction_event",
+            "filing_dim",
+            "filing_origin_panel",
+            "filing_xbrl_dim",
+            "issuer_dim",
+            "issuer_origin_panel",
+            "note_summary",
+            "notes_filing_dim",
+            "xbrl_core_fact",
+            "xbrl_fact_summary",
+        }
+    }
+    row_counts["issuer_origin_panel"] = 1
+    paths["public_lake_final_report"].write_text(
+        json.dumps(
+            {
+                "schema_version": "public-lake-final-report-v1",
+                "as_of_date": "2026-07-06",
+                "public_lake_run_metadata_sha256": _sha256(paths["public_lake_run_metadata"]),
+                "issuer_origin_panel_sha256": _sha256(paths["issuer_origin_panel"]),
+                "row_counts": row_counts,
+                "row_count_errors": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest: dict[str, object] = {
+        "repo_commit": "study-commit",
+        "public_lake_inputs": {
+            key: {
+                "path": str(path),
+                "exists": True,
+                "kind": "file",
+                "size_bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            }
+            for key, path in paths.items()
+        },
+    }
+    study_manifest_path = tmp_path / "study" / "study_run_manifest.json"
+    study_manifest_path.parent.mkdir()
+    study_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return study_manifest_path, manifest, paths
+
+
+def test_package_tables_use_only_study_bound_report_and_panel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_manifest_path, manifest, _ = _write_bound_study_fixture(tmp_path)
+    ambient_root = tmp_path / "ambient"
+    ambient_report = ambient_root / "logs" / "public_lake_full" / "new" / "run_report.json"
+    ambient_report.parent.mkdir(parents=True)
+    ambient_report.write_text(
+        json.dumps({"row_counts": {"issuer_origin_panel": 999}}), encoding="utf-8"
+    )
+    ambient_panel = ambient_root / "gold" / "issuer_origin_panel.parquet"
+    write_table(_selection_panel(9, label=1), ambient_panel)
+    monkeypatch.setattr(manuscript_module, "ARTIFACTS_DIR", ambient_root)
+
+    bound = manuscript_module._bound_public_lake_inputs(
+        manifest,
+        study_manifest_path=study_manifest_path,
+    )
+    scale = manuscript_module._public_lake_scale(bound["final_report"])
+    selection = manuscript_module._selection_profile_table(bound["issuer_origin_panel"])
+
+    assert scale.loc[scale["Artifact"].eq("issuer_origin_panel"), "Artifact_Rows"].item() == "1"
+    assert set(selection["Issuer_Years"]) == {"1"}
+
+
+@pytest.mark.parametrize("missing_key", ["public_lake_final_report", "issuer_origin_panel"])
+def test_package_rejects_missing_bound_report_or_panel(
+    tmp_path: Path,
+    missing_key: str,
+) -> None:
+    study_manifest_path, manifest, paths = _write_bound_study_fixture(tmp_path)
+    paths[missing_key].unlink()
+
+    with pytest.raises(FileNotFoundError, match=paths[missing_key].name):
+        manuscript_module._bound_public_lake_inputs(
+            manifest,
+            study_manifest_path=study_manifest_path,
+        )
+
+
+def test_package_rejects_malformed_bound_report(tmp_path: Path) -> None:
+    study_manifest_path, manifest, paths = _write_bound_study_fixture(tmp_path)
+    report_path = paths["public_lake_final_report"]
+    report_path.write_text('{"schema_version":', encoding="utf-8")
+    manifest["public_lake_inputs"]["public_lake_final_report"].update(  # type: ignore[index,union-attr]
+        {"sha256": _sha256(report_path), "size_bytes": report_path.stat().st_size}
+    )
+
+    with pytest.raises(ValueError, match="valid JSON"):
+        manuscript_module._bound_public_lake_inputs(
+            manifest,
+            study_manifest_path=study_manifest_path,
+        )
+
+
+def test_selection_profile_rejects_malformed_bound_panel(tmp_path: Path) -> None:
+    panel = tmp_path / "issuer_origin_panel.parquet"
+    panel.write_bytes(b"not parquet")
+
+    with pytest.raises(ValueError, match="issuer-origin panel"):
+        manuscript_module._selection_profile_table(panel)
+
+
+def _write_package_manifest_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
+    study_manifest_path = tmp_path / "study" / "study_run_manifest.json"
+    study_manifest_path.parent.mkdir()
+    study_manifest_path.write_text(
+        json.dumps({"repo_commit": "study-commit"}, indent=2), encoding="utf-8"
+    )
+    package_dir = tmp_path / "manuscript_package"
+    (package_dir / "tables").mkdir(parents=True)
+    (package_dir / "figures").mkdir()
+
+    def record(relative_path: str, content: bytes) -> dict[str, str]:
+        path = package_dir / relative_path
+        path.write_bytes(content)
+        return {"path": relative_path, "sha256": _sha256(path)}
+
+    tables = {
+        key: {
+            fmt: record(f"tables/{key}.{fmt}", f"{key}-{fmt}".encode())
+            for fmt in ("csv", "md", "tex")
+        }
+        for key in sorted(PACKAGE_TABLE_KEYS)
+    }
+    figures = {
+        key: {
+            fmt: record(f"figures/{key}.{fmt}", f"{key}-{fmt}".encode()) for fmt in ("png", "pdf")
+        }
+        for key in sorted(PACKAGE_FIGURE_KEYS)
+    }
+    manifest: dict[str, object] = {
+        "schema_version": "manuscript-package-v1",
+        "study_commit": "study-commit",
+        "study_manifest_sha256": _sha256(study_manifest_path),
+        "tables": tables,
+        "figures": figures,
+        "narrative": record("results_narrative.md", b"narrative"),
+    }
+    (package_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return package_dir, study_manifest_path, manifest
+
+
+def test_exact_package_manifest_and_inventory_validate(tmp_path: Path) -> None:
+    package_dir, study_manifest_path, _ = _write_package_manifest_fixture(tmp_path)
+
+    validated = manuscript_module._validate_package_tree(package_dir, study_manifest_path)
+
+    assert set(validated["tables"]) == PACKAGE_TABLE_KEYS
+    assert set(validated["figures"]) == PACKAGE_FIGURE_KEYS
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ("missing_table", "tables"),
+        ("missing_figure", "missing artifact"),
+        ("missing_narrative", "missing artifact"),
+        ("changed_artifact", "sha256"),
+        ("absolute_path", "package-relative POSIX"),
+        ("traversal_path", "package-relative POSIX"),
+        ("stale_study_digest", "study_manifest_sha256"),
+        ("wrong_format_set", "format set"),
+        ("undeclared_extra", "undeclared"),
+    ],
+)
+def test_package_manifest_rejects_inventory_tampering(
+    tmp_path: Path,
+    mutation: str,
+    match: str,
+) -> None:
+    package_dir, study_manifest_path, manifest = _write_package_manifest_fixture(tmp_path)
+    tables = manifest["tables"]  # type: ignore[assignment]
+    figures = manifest["figures"]  # type: ignore[assignment]
+    if mutation == "missing_table":
+        del tables["table_01"]
+    elif mutation == "missing_figure":
+        (package_dir / figures["figure_01"]["png"]["path"]).unlink()
+    elif mutation == "missing_narrative":
+        (package_dir / manifest["narrative"]["path"]).unlink()  # type: ignore[index]
+    elif mutation == "changed_artifact":
+        (package_dir / tables["table_01"]["csv"]["path"]).write_bytes(b"changed")
+    elif mutation == "absolute_path":
+        tables["table_01"]["csv"]["path"] = str(
+            (package_dir / "tables" / "table_01.csv").resolve()
+        )
+    elif mutation == "traversal_path":
+        tables["table_01"]["csv"]["path"] = "../table_01.csv"
+    elif mutation == "stale_study_digest":
+        manifest["study_manifest_sha256"] = "0" * 64
+    elif mutation == "wrong_format_set":
+        del tables["table_01"]["tex"]
+    else:
+        (package_dir / "extra.txt").write_text("extra", encoding="utf-8")
+    (package_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises((FileNotFoundError, ValueError), match=match):
+        manuscript_module._validate_package_tree(package_dir, study_manifest_path)
+
+
+def test_atomic_package_replace_restores_prior_tree_and_cleans_staging_on_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_dir = tmp_path / "manuscript_package"
+    staging_dir = tmp_path / ".manuscript_package.staging"
+    final_dir.mkdir()
+    staging_dir.mkdir()
+    (final_dir / "prior.txt").write_text("prior", encoding="utf-8")
+    (staging_dir / "new.txt").write_text("new", encoding="utf-8")
+    real_replace = Path.replace
+
+    def fail_staging_replace(path: Path, target: Path) -> Path:
+        if path == staging_dir and Path(target) == final_dir:
+            raise OSError("simulated package swap failure")
+        return real_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_staging_replace)
+
+    with pytest.raises(OSError, match="simulated package swap failure"):
+        manuscript_module._replace_package_tree(staging_dir, final_dir)
+
+    assert (final_dir / "prior.txt").read_text(encoding="utf-8") == "prior"
+    assert not staging_dir.exists()
+    assert not list(tmp_path.glob(".manuscript_package.backup-*"))

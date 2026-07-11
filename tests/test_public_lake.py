@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from datetime import date
@@ -8,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from scripts import monitor_public_lake
 import src.public_lake as public_lake
 from src.public_lake import (
     DagTask,
@@ -27,9 +29,173 @@ from src.public_lake import (
 from src.table_io import read_table, write_table
 
 
+FINAL_REPORT_ROW_COUNT_KEYS = {
+    "comment_thread",
+    "correction_event",
+    "filing_dim",
+    "filing_origin_panel",
+    "filing_xbrl_dim",
+    "issuer_dim",
+    "issuer_origin_panel",
+    "note_summary",
+    "notes_filing_dim",
+    "xbrl_core_fact",
+    "xbrl_fact_summary",
+}
+
+
 def _write_csv_gz(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(path, index=False, compression="gzip")
+
+
+def test_final_public_lake_report_is_stable_hashed_and_atomically_written(
+    tmp_path: Path,
+) -> None:
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_dir.mkdir()
+    gold_dir.mkdir()
+    run_metadata = silver_dir / "public_lake_run_metadata.json"
+    issuer_panel = gold_dir / "issuer_origin_panel.parquet"
+    run_metadata.write_bytes(b'{"as_of_date":"2026-07-06"}')
+    issuer_panel.write_bytes(b"bound-panel")
+    counts = {key: index for index, key in enumerate(sorted(FINAL_REPORT_ROW_COUNT_KEYS))}
+
+    report_path = monitor_public_lake._write_public_lake_final_report(
+        silver_dir=silver_dir,
+        as_of_date="2026-07-06",
+        run_metadata_path=run_metadata,
+        issuer_origin_panel_path=issuer_panel,
+        row_counts=counts,
+        row_count_errors={},
+    )
+
+    assert report_path == silver_dir / "public_lake_final_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report == {
+        "schema_version": "public-lake-final-report-v1",
+        "as_of_date": "2026-07-06",
+        "public_lake_run_metadata_sha256": hashlib.sha256(run_metadata.read_bytes()).hexdigest(),
+        "issuer_origin_panel_sha256": hashlib.sha256(issuer_panel.read_bytes()).hexdigest(),
+        "row_counts": counts,
+        "row_count_errors": {},
+    }
+    assert list(silver_dir.glob("public_lake_final_report.json.*.tmp")) == []
+
+
+def _write_final_report_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, object]]:
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_dir.mkdir()
+    gold_dir.mkdir()
+    run_metadata = silver_dir / "public_lake_run_metadata.json"
+    issuer_panel = gold_dir / "issuer_origin_panel.parquet"
+    run_metadata.write_bytes(b'{"as_of_date":"2026-07-06"}')
+    issuer_panel.write_bytes(b"bound-panel")
+    report = {
+        "schema_version": "public-lake-final-report-v1",
+        "as_of_date": "2026-07-06",
+        "public_lake_run_metadata_sha256": hashlib.sha256(run_metadata.read_bytes()).hexdigest(),
+        "issuer_origin_panel_sha256": hashlib.sha256(issuer_panel.read_bytes()).hexdigest(),
+        "row_counts": {
+            key: index for index, key in enumerate(sorted(FINAL_REPORT_ROW_COUNT_KEYS))
+        },
+        "row_count_errors": {},
+    }
+    report_path = silver_dir / "public_lake_final_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report_path, run_metadata, issuer_panel, report
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ("missing_count", "row_counts"),
+        ("boolean_count", "nonnegative integer"),
+        ("float_count", "nonnegative integer"),
+        ("string_count", "nonnegative integer"),
+        ("negative_count", "nonnegative integer"),
+        ("count_error", "row_count_errors"),
+        ("as_of_mismatch", "as_of_date"),
+        ("metadata_hash_mismatch", "public_lake_run_metadata_sha256"),
+        ("panel_hash_mismatch", "issuer_origin_panel_sha256"),
+    ],
+)
+def test_final_public_lake_report_rejects_malformed_or_mismatched_content(
+    tmp_path: Path,
+    mutation: str,
+    match: str,
+) -> None:
+    report_path, run_metadata, issuer_panel, report = _write_final_report_fixture(tmp_path)
+    first_key = sorted(FINAL_REPORT_ROW_COUNT_KEYS)[0]
+    if mutation == "missing_count":
+        del report["row_counts"][first_key]  # type: ignore[index]
+    elif mutation == "boolean_count":
+        report["row_counts"][first_key] = True  # type: ignore[index]
+    elif mutation == "float_count":
+        report["row_counts"][first_key] = 1.0  # type: ignore[index]
+    elif mutation == "string_count":
+        report["row_counts"][first_key] = "1"  # type: ignore[index]
+    elif mutation == "negative_count":
+        report["row_counts"][first_key] = -1  # type: ignore[index]
+    elif mutation == "count_error":
+        report["row_count_errors"] = {first_key: "failed"}
+    elif mutation == "as_of_mismatch":
+        report["as_of_date"] = "2026-07-05"
+    elif mutation == "metadata_hash_mismatch":
+        report["public_lake_run_metadata_sha256"] = "0" * 64
+    else:
+        report["issuer_origin_panel_sha256"] = "0" * 64
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=match):
+        monitor_public_lake._validate_public_lake_final_report(
+            report_path,
+            run_metadata_path=run_metadata,
+            issuer_origin_panel_path=issuer_panel,
+        )
+
+
+def test_final_public_lake_report_rejects_partial_json(tmp_path: Path) -> None:
+    report_path, run_metadata, issuer_panel, _ = _write_final_report_fixture(tmp_path)
+    report_path.write_text('{"schema_version":', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="valid JSON"):
+        monitor_public_lake._validate_public_lake_final_report(
+            report_path,
+            run_metadata_path=run_metadata,
+            issuer_origin_panel_path=issuer_panel,
+        )
+
+
+def test_final_public_lake_report_replace_failure_preserves_prior_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path, run_metadata, issuer_panel, report = _write_final_report_fixture(tmp_path)
+    prior = report_path.read_bytes()
+    real_replace = Path.replace
+
+    def interrupted_replace(path: Path, target: Path) -> Path:
+        if Path(target) == report_path:
+            raise OSError("simulated interruption")
+        return real_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", interrupted_replace)
+
+    with pytest.raises(OSError, match="simulated interruption"):
+        monitor_public_lake._write_public_lake_final_report(
+            silver_dir=report_path.parent,
+            as_of_date=str(report["as_of_date"]),
+            run_metadata_path=run_metadata,
+            issuer_origin_panel_path=issuer_panel,
+            row_counts=report["row_counts"],  # type: ignore[arg-type]
+            row_count_errors={},
+        )
+
+    assert report_path.read_bytes() == prior
+    assert list(report_path.parent.glob("public_lake_final_report.json.*.tmp")) == []
 
 
 def _sort_gold_for_compare(frame: pd.DataFrame) -> pd.DataFrame:

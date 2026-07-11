@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import subprocess
+import zipfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -130,8 +131,86 @@ def _source_metadata_inventory(input_files: list[Any]) -> list[dict[str, Any]]:
                     expected_type,
                     sidecar_context,
                 )
+            actual_metadata_sha256 = sha256_path(path)
+            if metadata_sha256 != actual_metadata_sha256:
+                raise ValueError(
+                    f"{context}.sha256 recorded sha256 does not match metadata sidecar bytes"
+                )
+            if "size_bytes" in raw_record:
+                recorded_size = _required(raw_record, "size_bytes", int, context)
+                if recorded_size != path.stat().st_size:
+                    raise ValueError(
+                        f"{context}.size_bytes does not match metadata sidecar byte size"
+                    )
+            payload_path = path.with_name(path.name.removesuffix(".meta.json"))
+            if not payload_path.is_file():
+                raise ValueError(f"{sidecar_context} references missing payload: {payload_path}")
+            if item["payload_sha256"] != sha256_path(payload_path):
+                raise ValueError(f"{sidecar_context} payload sha256 does not match payload bytes")
+            if item["payload_size_bytes"] != payload_path.stat().st_size:
+                raise ValueError(
+                    f"{sidecar_context} payload size does not match payload byte size"
+                )
+        else:
+            if not path.is_file():
+                raise ValueError(f"{context}.path references missing metadata file: {path}")
+            if metadata_sha256 != sha256_path(path):
+                raise ValueError(f"{context}.sha256 recorded sha256 does not match file bytes")
+            if "size_bytes" in raw_record:
+                recorded_size = _required(raw_record, "size_bytes", int, context)
+                if recorded_size != path.stat().st_size:
+                    raise ValueError(f"{context}.size_bytes does not match metadata file byte size")
         inventory.append(item)
     return sorted(inventory, key=lambda item: str(item["metadata_file"]))
+
+
+def _verify_form_ap_member(
+    *,
+    source_kind: str,
+    archive_sha256: str | None,
+    member: str,
+    member_sha256: str,
+    input_files: list[Any],
+    context: str,
+) -> None:
+    if not input_files:
+        return
+    payload_paths = [
+        Path(str(record["path"])).with_name(
+            Path(str(record["path"])).name.removesuffix(".meta.json")
+        )
+        for record in input_files
+        if type(record) is dict
+        and type(record.get("path")) is str
+        and str(record["path"]).endswith(".meta.json")
+    ]
+    expected_name = (
+        "FirmFilings.zip" if source_kind == "verified_zip_member" else "FirmFilings.csv"
+    )
+    matches = [path for path in payload_paths if path.name == expected_name]
+    if len(matches) != 1:
+        raise ValueError(f"{context} must bind exactly one {expected_name} metadata sidecar")
+    payload_path = matches[0]
+    if source_kind == "verified_zip_member":
+        if member != "FirmFilings.csv":
+            raise ValueError(f"{context}.member must be exact FirmFilings.csv; got {member}")
+        if archive_sha256 != sha256_path(payload_path):
+            raise ValueError(f"{context}.archive_sha256 does not match FirmFilings.zip")
+        try:
+            with zipfile.ZipFile(payload_path) as archive:
+                with archive.open(member) as handle:
+                    digest = hashlib.sha256()
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+        except (KeyError, zipfile.BadZipFile) as exc:
+            raise ValueError(f"{context} cannot read exact FirmFilings.csv member") from exc
+        actual_member_sha256 = digest.hexdigest()
+    else:
+        if member != "FirmFilings.csv":
+            raise ValueError(f"{context}.member must be exact FirmFilings.csv; got {member}")
+        actual_member_sha256 = sha256_path(payload_path)
+    if member_sha256 != actual_member_sha256:
+        raise ValueError(f"{context}.member_sha256 does not match FirmFilings.csv bytes")
 
 
 def public_lake_provenance(
@@ -176,6 +255,16 @@ def public_lake_provenance(
     for field in ("member", "member_sha256"):
         _required(form_ap, field, str, form_ap_context)
 
+    source_metadata_inventory = _source_metadata_inventory(input_files)
+    _verify_form_ap_member(
+        source_kind=source_kind,
+        archive_sha256=archive_sha256,
+        member=form_ap["member"],
+        member_sha256=form_ap["member_sha256"],
+        input_files=input_files,
+        context=form_ap_context,
+    )
+
     return {
         "as_of_date": run_metadata["as_of_date"],
         "fresh_build": run_metadata["fresh_build"],
@@ -184,7 +273,7 @@ def public_lake_provenance(
         "config_hash": provenance["config_hash"],
         "input_hash": provenance["input_hash"],
         "uv_lock_hash": provenance["uv_lock_hash"],
-        "source_metadata_inventory": _source_metadata_inventory(input_files),
+        "source_metadata_inventory": source_metadata_inventory,
         "form_ap": {
             "source_kind": source_kind,
             "archive_sha256": archive_sha256,

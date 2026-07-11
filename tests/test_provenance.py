@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
+import zipfile
 
 import pytest
 
@@ -16,6 +18,25 @@ from src.provenance import (
     sha256_path,
     wrds_export_metadata,
 )
+
+
+FINAL_REPORT_ROW_COUNT_KEYS = {
+    "comment_thread",
+    "correction_event",
+    "filing_dim",
+    "filing_origin_panel",
+    "filing_xbrl_dim",
+    "issuer_dim",
+    "issuer_origin_panel",
+    "note_summary",
+    "notes_filing_dim",
+    "xbrl_core_fact",
+    "xbrl_fact_summary",
+}
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _valid_public_lake_run_metadata(
@@ -69,6 +90,47 @@ def _write_public_lake_metadata(
     return run_metadata, form_ap_metadata
 
 
+def _write_verified_form_ap_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, Path]:
+    archive = tmp_path / "bronze" / "form-ap" / "FirmFilings.zip"
+    archive.parent.mkdir(parents=True)
+    member_bytes = b"firm_id,filing_date\n1,2026-01-01\n"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("FirmFilings.csv", member_bytes)
+    sidecar = archive.with_name(f"{archive.name}.meta.json")
+    sidecar_payload = _valid_source_sidecar()
+    sidecar_payload.update(
+        {
+            "sha256": _sha256(archive),
+            "size_bytes": archive.stat().st_size,
+        }
+    )
+    sidecar.write_text(json.dumps(sidecar_payload), encoding="utf-8")
+    run_payload = _valid_public_lake_run_metadata(
+        input_files=[
+            {
+                "path": str(sidecar),
+                "sha256": _sha256(sidecar),
+                "size_bytes": sidecar.stat().st_size,
+            }
+        ]
+    )
+    form_ap_payload = _valid_form_ap_metadata()
+    form_ap_payload.update(
+        {
+            "archive_sha256": _sha256(archive),
+            "member_sha256": hashlib.sha256(member_bytes).hexdigest(),
+        }
+    )
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        run_payload,
+        form_ap_payload,
+    )
+    return run_metadata, form_ap_metadata, sidecar, archive
+
+
 def _write_study_fixture(
     tmp_path: Path,
     *,
@@ -81,6 +143,7 @@ def _write_study_fixture(
         "raw_data": tmp_path / "raw.parquet",
         "issuer_dim": tmp_path / "issuer_dim.parquet",
         "issuer_origin_panel": tmp_path / "issuer_origin_panel.parquet",
+        "public_lake_final_report": tmp_path / "public_lake_final_report.json",
         "crosswalk": tmp_path / "crosswalk.csv",
         "public_lake_run_metadata": tmp_path / "public_lake_run_metadata.json",
         "form_ap_source_metadata": tmp_path / "form_ap_source_metadata.json",
@@ -95,6 +158,21 @@ def _write_study_fixture(
         json.dumps(_valid_form_ap_metadata()),
         encoding="utf-8",
     )
+    paths["public_lake_final_report"].write_text(
+        json.dumps(
+            {
+                "schema_version": "public-lake-final-report-v1",
+                "as_of_date": "2026-07-06",
+                "public_lake_run_metadata_sha256": _sha256(paths["public_lake_run_metadata"]),
+                "issuer_origin_panel_sha256": _sha256(paths["issuer_origin_panel"]),
+                "row_counts": {
+                    key: index for index, key in enumerate(sorted(FINAL_REPORT_ROW_COUNT_KEYS))
+                },
+                "row_count_errors": {},
+            }
+        ),
+        encoding="utf-8",
+    )
     paths["config"].write_text(
         json.dumps(
             {
@@ -102,6 +180,7 @@ def _write_study_fixture(
                     "raw_data": str(paths["raw_data"]),
                     "issuer_dim": str(paths["issuer_dim"]),
                     "issuer_origin_panel": str(paths["issuer_origin_panel"]),
+                    "public_lake_final_report": str(paths["public_lake_final_report"]),
                     "gvkey_cik_crosswalk": str(paths["crosswalk"]),
                     "public_lake_run_metadata": str(paths["public_lake_run_metadata"]),
                     "form_ap_source_metadata": str(paths["form_ap_source_metadata"]),
@@ -162,68 +241,91 @@ def test_wrds_export_metadata_summarizes_crosswalk_source(tmp_path: Path) -> Non
 
 
 def test_public_lake_provenance_is_pathless_and_keeps_form_ap_hashes(tmp_path: Path) -> None:
-    run_metadata = tmp_path / "public_lake_run_metadata.json"
-    form_ap_metadata = tmp_path / "form_ap_source_metadata.json"
-    source_sidecar = tmp_path / "bronze" / "form-ap" / "FirmFilings.zip.meta.json"
-    source_sidecar.parent.mkdir(parents=True)
-    source_sidecar.write_text(
-        json.dumps(_valid_source_sidecar()),
-        encoding="utf-8",
-    )
-    run_metadata.write_text(
-        json.dumps(
-            {
-                "as_of_date": "2026-07-06",
-                "fresh_build": True,
-                "provenance": {
-                    "commit_sha": "abc123",
-                    "dirty": False,
-                    "config_hash": "config-hash",
-                    "input_hash": "input-hash",
-                    "uv_lock_hash": "lock-hash",
-                    "input_files": [
-                        {
-                            "path": str(source_sidecar),
-                            "sha256": "sidecar-hash",
-                            "size_bytes": source_sidecar.stat().st_size,
-                        }
-                    ],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    form_ap_metadata.write_text(
-        json.dumps(
-            {
-                "source_kind": "verified_zip_member",
-                "archive_sha256": "archive-hash",
-                "member": "FirmFilings.csv",
-                "member_sha256": "member-hash",
-            }
-        ),
-        encoding="utf-8",
+    run_metadata, form_ap_metadata, source_sidecar, archive = _write_verified_form_ap_fixture(
+        tmp_path
     )
 
     reduced = public_lake_provenance(run_metadata, form_ap_metadata)
 
     assert reduced["as_of_date"] == "2026-07-06"
     assert reduced["git_dirty"] is False
-    assert reduced["form_ap"]["archive_sha256"] == "archive-hash"
+    assert reduced["form_ap"]["archive_sha256"] == _sha256(archive)
     assert reduced["source_metadata_inventory"] == [
         {
             "metadata_file": "form-ap/FirmFilings.zip.meta.json",
-            "metadata_sha256": "sidecar-hash",
+            "metadata_sha256": _sha256(source_sidecar),
             "source_name": "form-ap",
             "source_url": "https://example.invalid/FirmFilings.zip",
             "downloaded_at_utc": "2026-07-06T00:00:00+00:00",
-            "payload_sha256": "payload-hash",
-            "payload_size_bytes": 0,
+            "payload_sha256": _sha256(archive),
+            "payload_size_bytes": archive.stat().st_size,
             "parser_version": "public-lake-v1",
             "schema_version": "public-lake-v1",
         }
     ]
     assert str(tmp_path) not in json.dumps(reduced)
+
+
+def test_public_lake_provenance_rehashes_sidecar_payload_and_form_ap_member(
+    tmp_path: Path,
+) -> None:
+    run_metadata, form_ap_metadata, _, _ = _write_verified_form_ap_fixture(tmp_path)
+
+    reduced = public_lake_provenance(run_metadata, form_ap_metadata)
+
+    assert reduced["source_metadata_inventory"][0]["metadata_sha256"] == _sha256(
+        tmp_path / "bronze" / "form-ap" / "FirmFilings.zip.meta.json"
+    )
+    assert reduced["form_ap"]["member"] == "FirmFilings.csv"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ("recorded_sidecar_hash", "recorded sha256"),
+        ("sidecar_bytes", "recorded sha256"),
+        ("payload_bytes", "payload sha256"),
+        ("payload_hash", "payload sha256"),
+        ("payload_size", "payload size"),
+        ("form_ap_member", "FirmFilings.csv"),
+        ("form_ap_member_hash", "member_sha256"),
+    ],
+)
+def test_public_lake_provenance_rejects_changed_sidecar_payload_or_form_ap_member(
+    tmp_path: Path,
+    mutation: str,
+    match: str,
+) -> None:
+    run_metadata, form_ap_metadata, sidecar, archive = _write_verified_form_ap_fixture(tmp_path)
+    run_payload = json.loads(run_metadata.read_text(encoding="utf-8"))
+    form_ap_payload = json.loads(form_ap_metadata.read_text(encoding="utf-8"))
+    if mutation == "recorded_sidecar_hash":
+        run_payload["provenance"]["input_files"][0]["sha256"] = "0" * 64
+        run_metadata.write_text(json.dumps(run_payload), encoding="utf-8")
+    elif mutation == "sidecar_bytes":
+        sidecar.write_text(sidecar.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    elif mutation == "payload_bytes":
+        archive.write_bytes(archive.read_bytes() + b"changed")
+    elif mutation in {"payload_hash", "payload_size"}:
+        sidecar_payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        if mutation == "payload_hash":
+            sidecar_payload["sha256"] = "0" * 64
+        else:
+            sidecar_payload["size_bytes"] = archive.stat().st_size + 1
+        sidecar.write_text(json.dumps(sidecar_payload), encoding="utf-8")
+        run_payload["provenance"]["input_files"][0].update(
+            {"sha256": _sha256(sidecar), "size_bytes": sidecar.stat().st_size}
+        )
+        run_metadata.write_text(json.dumps(run_payload), encoding="utf-8")
+    elif mutation == "form_ap_member":
+        form_ap_payload["member"] = "Other.csv"
+        form_ap_metadata.write_text(json.dumps(form_ap_payload), encoding="utf-8")
+    else:
+        form_ap_payload["member_sha256"] = "0" * 64
+        form_ap_metadata.write_text(json.dumps(form_ap_payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=match):
+        public_lake_provenance(run_metadata, form_ap_metadata)
 
 
 @pytest.mark.parametrize(
@@ -570,6 +672,17 @@ def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
     for metadata_key in ["public_lake_run_metadata", "form_ap_source_metadata"]:
         metadata_path = paths[metadata_key]
         assert input_records[str(metadata_path)]["sha256"] == sha256_path(metadata_path)
+    lake_inputs = manifest["public_lake_inputs"]
+    assert set(lake_inputs) == {
+        "public_lake_final_report",
+        "public_lake_run_metadata",
+        "form_ap_source_metadata",
+        "issuer_origin_panel",
+    }
+    for key, record in lake_inputs.items():
+        assert record["path"] == str(paths[key])
+        assert record["sha256"] == sha256_path(paths[key])
+        assert record["size_bytes"] == paths[key].stat().st_size
 
 
 @pytest.mark.parametrize(
