@@ -68,44 +68,6 @@ def _compact_identifier(value: object) -> str:
 PROVENANCE_HEADER_COMPACTS = {
     _compact_identifier(column) for column in BRIDGE_PROVENANCE_SCAN_COLUMNS
 }
-PROVENANCE_HEADER_FIELDS = (
-    "source",
-    "version",
-    "method",
-    "score",
-    "priority",
-    "origin",
-    "link",
-    "desc",
-)
-PROVENANCE_METADATA_ROLES = frozenset(
-    {
-        "provider",
-        "vendor",
-        "dataset",
-        "database",
-        "product",
-        "system",
-        "service",
-        "table",
-        "file",
-        "extract",
-        "extracted",
-        "extractedat",
-        "timestamp",
-        "feed",
-        "archive",
-        "validation",
-        "tier",
-        "status",
-        "quality",
-        "confidence",
-        "path",
-        "url",
-        "uri",
-        "name",
-    }
-)
 BUSINESS_DATA_HEADER_ROLES = frozenset(
     {
         "revenue",
@@ -139,14 +101,6 @@ BUSINESS_DATA_HEADER_ROLES = frozenset(
         "financing",
     }
 )
-BUSINESS_DATA_COMPACT_SUFFIX_ROLES = tuple(
-    sorted(
-        (role for role in BUSINESS_DATA_HEADER_ROLES if len(role) >= 4),
-        key=len,
-        reverse=True,
-    )
-)
-FUSED_METADATA_SAFE_PREFIXES = ("external", "business")
 WRDS_EXACT_CONTRACT_COMPACTS = tuple(
     _compact_identifier(value)
     for allowed in WRDS_PROVENANCE_TOKEN_ALLOWLISTS.values()
@@ -170,28 +124,16 @@ WRDS_SOURCE_COMPACT_ALIASES = {
     for pair in WRDS_RAW_SOURCE_TO_NORMALIZED_SOURCE.items()
     for source in pair
 }
-
-
-def _has_fused_metadata_role_before_business_suffix(compact: str) -> bool:
-    for business_role in BUSINESS_DATA_COMPACT_SUFFIX_ROLES:
-        if not compact.endswith(business_role):
-            continue
-        stem = compact[: -len(business_role)]
-        for marker in PROVENANCE_COMPACT_MARKERS:
-            marker_index = stem.find(marker)
-            if marker_index < 0:
-                continue
-            segments = [
-                stem[:marker_index],
-                stem[marker_index + len(marker) :],
-            ]
-            for metadata_segment in segments:
-                for prefix in FUSED_METADATA_SAFE_PREFIXES:
-                    if metadata_segment.startswith(prefix):
-                        metadata_segment = metadata_segment[len(prefix) :]
-                if metadata_segment in PROVENANCE_METADATA_ROLES:
-                    return True
-    return False
+ALLOWED_VENDOR_BUSINESS_HEADER_COMPACTS = frozenset(
+    prefix + vendor + modifier + role
+    for prefix in ("", "business", "external")
+    for vendor in PROVENANCE_COMPACT_MARKERS
+    for modifier in ("", "security", "frontier")
+    for role in BUSINESS_DATA_HEADER_ROLES
+)
+ALLOWED_STRUCTURAL_BUSINESS_HEADER_COMPACTS = frozenset(
+    {"rawmaterialflag", "bridgefinancingflag"}
+)
 
 
 def _is_unknown_provenance_column(column: object) -> bool:
@@ -201,43 +143,20 @@ def _is_unknown_provenance_column(column: object) -> bool:
     compact = _compact_identifier(name)
     if any(compact.startswith(canonical) for canonical in PROVENANCE_HEADER_COMPACTS):
         return True
+    if any(marker in compact for marker in PROVENANCE_COMPACT_MARKERS):
+        return compact not in ALLOWED_VENDOR_BUSINESS_HEADER_COMPACTS
+    if compact in ALLOWED_STRUCTURAL_BUSINESS_HEADER_COMPACTS:
+        return False
     words = _identifier_words(name)
-    has_field = any(field in compact for field in PROVENANCE_HEADER_FIELDS)
-    has_metadata_role = (
-        bool(words & PROVENANCE_METADATA_ROLES)
-        or any(compact.endswith(role) for role in PROVENANCE_METADATA_ROLES)
-        or _has_fused_metadata_role_before_business_suffix(compact)
+    return (
+        "provenance" in compact
+        or bool(words & {"raw", "bridge"})
+        or compact.startswith(("raw", "bridge"))
+        or any(
+            control in compact
+            for control in ALLOWED_STRUCTURAL_BUSINESS_HEADER_COMPACTS
+        )
     )
-    has_vendor_namespace = any(
-        marker in compact for marker in PROVENANCE_COMPACT_MARKERS
-    )
-    has_provenance_namespace = "provenance" in words or compact.startswith("provenance")
-    has_raw_namespace = "raw" in words or compact.startswith("raw")
-    has_bridge_namespace = "bridge" in words or compact.startswith("bridge")
-    has_business_role = bool(words & BUSINESS_DATA_HEADER_ROLES) or any(
-        compact.endswith(role) for role in BUSINESS_DATA_COMPACT_SUFFIX_ROLES
-    )
-    if has_vendor_namespace:
-        return has_field or has_metadata_role or not has_business_role
-    if has_provenance_namespace:
-        return True
-    if has_raw_namespace:
-        raw_tail = compact[len("raw") :] if compact.startswith("raw") else ""
-        has_raw_material_role = bool(words & {"material", "materials"}) or raw_tail in {
-            "material",
-            "materials",
-            "materialflag",
-            "materialsflag",
-        }
-        return has_field or has_metadata_role or not has_raw_material_role
-    if has_bridge_namespace:
-        bridge_tail = compact[len("bridge") :] if compact.startswith("bridge") else ""
-        has_bridge_financing_role = "financing" in words or bridge_tail in {
-            "financing",
-            "financingflag",
-        }
-        return has_field or has_metadata_role or not has_bridge_financing_role
-    return False
 
 
 def _identifier_words(value: object) -> set[str]:

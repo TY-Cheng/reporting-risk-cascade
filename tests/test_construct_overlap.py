@@ -687,6 +687,11 @@ def test_unknown_provenance_like_column_is_rejected(tmp_path: Path) -> None:
         "capitaliqsourceassets",
         "providerwrdsrevenue",
         "datasetcrspreturn",
+        "businessexternalproviderwrdsrevenue",
+        "providerexternalwrdsrevenue",
+        "wrdsproviderexternalrevenue",
+        "raw_material_flag_extra",
+        "bridge_financing_flag_extra",
     ],
 )
 def test_conflicting_provenance_header_alias_is_rejected(
@@ -738,9 +743,12 @@ def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path
         "CRSPReturn": "0.10",
         "CompustatAssets": "100",
         "CapitalIQMarketCap": "100",
+        "CapIQRevenue": "100",
         "SECAnalyticsSales": "100",
         "bridge_financing_flag": "business control",
         "crspfrontierreturn": "0.10",
+        "RawMaterialFlag": "business control",
+        "BridgeFinancingFlag": "business control",
         "rawmaterialflag": "business control",
         "bridgefinancingflag": "business control",
     }
