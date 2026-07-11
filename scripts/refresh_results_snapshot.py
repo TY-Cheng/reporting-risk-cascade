@@ -129,6 +129,24 @@ FIGURE_EXPLANATIONS = {
     },
 }
 
+FOLD_FIGURE_NOTE = (
+    "Colored bars or dots encode mean PR-AUC; grey points encode valid annual test "
+    "folds; capped black lines encode descriptive fold-dispersion intervals."
+)
+CONSTRUCT_FIGURE_NOTE = (
+    "Blue bars encode top-decile lift; capped black lines encode row-level "
+    "percentile-bootstrap intervals; the dashed vertical line marks lift = 1; "
+    "annotations report top-decile precision and FDR."
+)
+FIGURE_NOTES = {
+    **{f"figure_{index:02d}": FOLD_FIGURE_NOTE for index in range(1, 5)},
+    "figure_05": CONSTRUCT_FIGURE_NOTE,
+    **{
+        key: CONSTRUCT_FIGURE_NOTE if key.startswith("figure_05") else FOLD_FIGURE_NOTE
+        for key in FIGURE_EXPLANATIONS
+    },
+}
+
 
 TABLE_EXPLANATIONS = {
     "table_01_component_status": {
@@ -490,6 +508,44 @@ def _fmt(value: Any, digits: int = 4) -> str:
             return f"{int(value):,}"
         return f"{value:.{digits}f}"
     return str(value)
+
+
+def _fmt_p_value(value: Any) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return _fmt(value)
+    if pd.isna(numeric):
+        return ""
+    if 0 <= numeric < 0.001:
+        return "<0.001"
+    return _fmt(numeric)
+
+
+def _summarize_wrds_sources(source_values: Any) -> str:
+    if isinstance(source_values, list | tuple | set):
+        combinations = {str(value).strip() for value in source_values if str(value).strip()}
+    elif source_values is None or (isinstance(source_values, float) and pd.isna(source_values)):
+        combinations = set()
+    else:
+        value = str(source_values).strip()
+        combinations = {value} if value else set()
+    if not combinations:
+        return "none"
+
+    families = {
+        token.rsplit(":", 1)[-1].strip()
+        for combination in combinations
+        for token in combination.split(";")
+        if token.strip()
+    }
+    combination_label = "combination" if len(combinations) == 1 else "combinations"
+    family_label = "family" if len(families) == 1 else "families"
+    return (
+        f"{len(combinations)} observed {combination_label} across {len(families)} WRDS "
+        f"source {family_label} in the current run; full values remain hash-bound in "
+        "the study manifest"
+    )
 
 
 def _fmt_year(value: Any) -> str:
@@ -1089,7 +1145,7 @@ def _structural_break_rows(study_dir: Path, *, max_rows: int = 12) -> list[list[
                 _code(row["family"]),
                 _fmt_year(row["break_year"]),
                 _fmt(row["f_stat"]),
-                _fmt(row["p_value"]),
+                _fmt_p_value(row["p_value"]),
             ]
         )
     return rows
@@ -1336,9 +1392,9 @@ def _manifest_format_path(
     return fallback
 
 
-def _ars_explanation_block(explanation: dict[str, str]) -> list[str]:
+def _explanation_block(explanation: dict[str, str]) -> list[str]:
     return [
-        f"- **ARS claim.** {explanation['claim']}",
+        f"- **Claim.** {explanation['claim']}",
         f"- **Evidence.** {explanation['evidence']}",
         f"- **Boundary.** {explanation['boundary']}",
     ]
@@ -1392,17 +1448,29 @@ def _inline_figure_gallery(
             [
                 f"#### {explanation['title']}",
                 "",
-                *(_ars_explanation_block(explanation)),
+                *(_explanation_block(explanation)),
                 "",
+            ]
+        )
+        if image_path:
+            figure_note = FIGURE_NOTES.get(key, FIGURE_NOTES.get(explanation_key, ""))
+            lines.extend(
+                [
+                    f"![{explanation['title']}]({image_path})",
+                    "",
+                    f"**Figure note.** {figure_note}",
+                    "",
+                ]
+            )
+        else:
+            lines.extend([f"_Missing PNG preview for `{key}`._", ""])
+        lines.extend(
+            [
                 f"- **Source PNG.** `{_rel(png_path)}`",
                 f"- **Manuscript PDF.** `{_rel(pdf_path)}`",
                 "",
             ]
         )
-        if image_path:
-            lines.extend([f"![{explanation['title']}]({image_path})", ""])
-        else:
-            lines.extend([f"_Missing PNG preview for `{key}`._", ""])
     return lines
 
 
@@ -1447,7 +1515,7 @@ def _inline_table_gallery(
             [
                 f"#### `{explanation_key}`",
                 "",
-                *(_ars_explanation_block(explanation)),
+                *(_explanation_block(explanation)),
                 "",
                 f"- **Source table.** `{_rel(md_path)}`",
                 "",
@@ -1735,7 +1803,7 @@ def build_snapshot(
                 ["Form AP archive hash", _code(form_ap.get("archive_sha256"))],
                 ["Form AP member", _code(form_ap.get("member"))],
                 ["Form AP member hash", _code(form_ap.get("member_sha256"))],
-                ["WRDS source", _code(wrds.get("source_values"))],
+                ["WRDS source", _code(_summarize_wrds_sources(wrds.get("source_values")))],
                 ["WRDS version", _code(wrds.get("source_version_values"))],
                 ["WRDS extraction time", _code(wrds.get("extracted_at_values"))],
                 ["WRDS hash", _code(wrds.get("sha256"))],
@@ -2370,10 +2438,9 @@ def build_snapshot(
         "renders every current manuscript-package figure and table in one place, "
         "then keeps the file index for provenance checks.",
         "",
-        "### ARS Evidence Gallery",
+        "### Evidence Gallery",
         "",
-        "Following the Academic Research Suite argument and visualization checks, "
-        "each display is paired with a claim, the evidence it contributes, and the "
+        "Each display is paired with a claim, the evidence it contributes, and the "
         "boundary that prevents over-interpretation.",
         "",
         *_inline_figure_gallery(manuscript_package, figure_explanations),

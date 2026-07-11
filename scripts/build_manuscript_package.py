@@ -326,31 +326,58 @@ def _markdown_table(df: pd.DataFrame) -> str:
 
 
 def _latex_table(df: pd.DataFrame, *, caption: str, label: str, note: str | None = None) -> str:
-    columns = "l" * len(df.columns)
-    lines = [
-        r"\begin{table}[!htbp]",
-        r"\centering",
-        rf"\caption{{{_latex_escape(caption)}}}",
-        rf"\label{{{_latex_escape(label)}}}",
-        r"\resizebox{\textwidth}{!}{%",
-        rf"\begin{{tabular}}{{{columns}}}",
-        r"\toprule",
-        " & ".join(_latex_escape(col) for col in df.columns) + r" \\",
-        r"\midrule",
-    ]
+    wide = len(df.columns) >= 9
+    long_text_columns = {
+        column
+        for column in df.columns
+        if max((len(str(value)) for value in df[column].dropna()), default=0) > 40
+    }
+    wrapped = bool(long_text_columns) and not wide
+    environment = "sidewaystable" if wide else "table"
+    lines = []
+    if wide:
+        lines.append(r"% Requires \usepackage{rotating}")
+    lines.extend(
+        [
+            rf"\begin{{{environment}}}[!htbp]",
+            r"\centering",
+            r"\small",
+            rf"\caption{{{_latex_escape(caption)}}}",
+            rf"\label{{{_latex_escape(label)}}}",
+        ]
+    )
+    if wide:
+        lines.append(r"\resizebox{\textheight}{!}{%")
+    if wrapped:
+        columns = "".join(
+            "X" if column in long_text_columns else "l" for column in df.columns
+        )
+        lines.append(rf"\begin{{tabularx}}{{\textwidth}}{{{columns}}}")
+    else:
+        lines.append(rf"\begin{{tabular}}{{{'l' * len(df.columns)}}}")
+    lines.extend(
+        [
+            r"\toprule",
+            " & ".join(_latex_escape(col) for col in df.columns) + r" \\",
+            r"\midrule",
+        ]
+    )
     for _, row in df.iterrows():
         lines.append(" & ".join(_latex_escape(row[col]) for col in df.columns) + r" \\")
-    lines.extend([r"\bottomrule", r"\end{tabular}%", r"}"])
+    lines.extend([r"\bottomrule", r"\end{tabularx}" if wrapped else r"\end{tabular}"])
+    if wide:
+        lines.append(r"}")
     if note:
+        note_width = r"0.98\textheight" if wide else r"0.98\textwidth"
         lines.extend(
             [
-                r"\begin{minipage}{0.98\textwidth}",
+                rf"\begin{{minipage}}{{{note_width}}}",
                 r"\footnotesize",
                 rf"\emph{{Note:}} {_latex_escape(note)}",
                 r"\end{minipage}",
             ]
         )
-    lines.extend([r"\end{table}", ""])
+    lines.extend([rf"\end{{{environment}}}", ""])
     return "\n".join(lines)
 
 
@@ -1403,6 +1430,27 @@ def _plot_metric_with_uncertainty(
     }
 
 
+def _construct_lift_annotation(row: pd.Series) -> tuple[str | None, float | None]:
+    precision = pd.to_numeric(
+        pd.Series([row.get("Top_10pct_Precision")]), errors="coerce"
+    ).iloc[0]
+    fdr = pd.to_numeric(pd.Series([row.get("Top_10pct_FDR")]), errors="coerce").iloc[0]
+    if pd.isna(precision) or pd.isna(fdr):
+        return None, None
+    endpoints = pd.to_numeric(
+        pd.Series([row.get("Top_Decile_Lift"), row.get("ci_high")]), errors="coerce"
+    ).dropna()
+    anchor = float(endpoints.max()) if not endpoints.empty else 0.0
+    return f"Precision={precision:.3f}; FDR={fdr:.3f}", anchor + 0.05
+
+
+def _construct_lift_xlim(data_max: float, annotation_positions: list[float]) -> float:
+    right = data_max * 1.15
+    if annotation_positions:
+        right = max(right, max(annotation_positions) * 2.0)
+    return right
+
+
 def _plot_construct_lift(
     df: pd.DataFrame,
     *,
@@ -1413,7 +1461,7 @@ def _plot_construct_lift(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    plot_df = df.copy()
+    plot_df = df.copy().reset_index(drop=True)
     plot_df["Top_Decile_Lift"] = pd.to_numeric(plot_df["top_decile_lift"], errors="coerce")
     plot_df["ci_low"] = pd.to_numeric(plot_df["ci_low"], errors="coerce")
     plot_df["ci_high"] = pd.to_numeric(plot_df["ci_high"], errors="coerce")
@@ -1421,6 +1469,7 @@ def _plot_construct_lift(
     y_pos = np.arange(len(plot_df))
     ax.barh(y_pos, plot_df["Top_Decile_Lift"], color="#457b9d")
     ax.set_yticks(y_pos, plot_df["Direction"])
+    annotation_positions = []
     for idx, row in plot_df.iterrows():
         if pd.notna(row["ci_low"]) and pd.notna(row["ci_high"]):
             ax.errorbar(
@@ -1431,15 +1480,15 @@ def _plot_construct_lift(
                 ecolor="#222222",
                 elinewidth=1,
                 capsize=3,
-                    zorder=3,
-                )
-        precision = pd.to_numeric(pd.Series([row.get("Top_10pct_Precision")]), errors="coerce").iloc[0]
-        fdr = pd.to_numeric(pd.Series([row.get("Top_10pct_FDR")]), errors="coerce").iloc[0]
-        if pd.notna(precision) and pd.notna(fdr):
+                zorder=3,
+            )
+        annotation, annotation_x = _construct_lift_annotation(row)
+        if annotation is not None and annotation_x is not None:
+            annotation_positions.append(annotation_x)
             ax.text(
-                row["Top_Decile_Lift"] + 0.05,
+                annotation_x,
                 idx,
-                f"P={precision:.3f}; FDR={fdr:.3f}",
+                annotation,
                 va="center",
                 fontsize=8,
                 color="#1f2933",
@@ -1447,7 +1496,10 @@ def _plot_construct_lift(
     ax.axvline(1.0, color="#222222", linewidth=1, linestyle="--")
     finite_x = pd.concat([plot_df["ci_high"], plot_df["Top_Decile_Lift"]], ignore_index=True).dropna()
     if not finite_x.empty:
-        ax.set_xlim(left=0, right=float(finite_x.max()) * 1.28)
+        ax.set_xlim(
+            left=0,
+            right=_construct_lift_xlim(float(finite_x.max()), annotation_positions),
+        )
     ax.set_xlabel("Top-decile lift")
     ax.set_title("Severe-tail diagnostic lift")
     ax.grid(axis="x", alpha=0.25)

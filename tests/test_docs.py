@@ -378,7 +378,7 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "Label Contingency and Lift",
         "Event-Time Concentration",
         "Tables, Figures, and Artifact Index",
-        "ARS Evidence Gallery",
+        "Evidence Gallery",
         "Inline Figure Gallery",
         "Inline Table Gallery",
         "Manuscript Package Tables and Figures",
@@ -420,8 +420,51 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
         "table_17_selection_profile",
     ]:
         assert f"#### `{table}`" in results
-    assert "ARS claim" in results
-    assert "Boundary" in results
+    assert "ARS" not in results
+    assert "Academic Research Suite" not in results
+    assert "- **Claim.**" in results
+    assert "- **Evidence.**" in results
+    assert "- **Boundary.**" in results
+    assert results.count("**Figure note.**") == 5
+    assert (
+        "Colored bars or dots encode mean PR-AUC; grey points encode valid annual test "
+        "folds; capped black lines encode descriptive fold-dispersion intervals."
+        in results
+    )
+    assert (
+        "Blue bars encode top-decile lift; capped black lines encode row-level "
+        "percentile-bootstrap intervals; the dashed vertical line marks lift = 1; "
+        "annotations report top-decile precision and FDR."
+        in results
+    )
+
+
+def test_wrds_source_summary_counts_observed_combinations_and_families() -> None:
+    summarize = getattr(snapshot_module, "_summarize_wrds_sources", None)
+    assert callable(summarize)
+    families = ["capital_iq", "compustat_company", "compustat_security", "crsp_ccm"]
+    source_values = [
+        ";".join(
+            f"wrds_bridge:{family}"
+            for idx, family in enumerate(families)
+            if mask & (1 << idx)
+        )
+        for mask in range(1, 1 << len(families))
+    ]
+
+    assert summarize(source_values) == (
+        "15 observed combinations across 4 WRDS source families in the current run; "
+        "full values remain hash-bound in the study manifest"
+    )
+
+
+def test_structural_break_pvalue_formatter_uses_threshold_not_zero() -> None:
+    formatter = getattr(snapshot_module, "_fmt_p_value", None)
+    assert callable(formatter)
+    assert formatter(0.00001) == "<0.001"
+    assert formatter(0.0009) == "<0.001"
+    assert formatter(0.001) == "0.0010"
+    assert formatter(float("nan")) == ""
 
 
 CURRENT_PACKAGE_TABLES = [
@@ -1415,7 +1458,11 @@ def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifac
     ]:
         assert phrase in results
     assert "| Canonical status | `CANONICAL` |" in results
-    assert "wrds_sec_analytics_cik_gvkey" in results
+    assert (
+        "1 observed combination across 1 WRDS source family in the current run; "
+        "full values remain hash-bound in the study manifest"
+        in results
+    )
     assert "WRDS SEC Analytics Suite 2026-05" in results
     assert "2026-05-25T00:00:00Z" in results
     assert "7" * 64 in results
@@ -1443,7 +1490,12 @@ def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifac
         assert f"#### `{table}`" in results
     for figure in fixture["figures"]:
         assert f"{figure}.png" in results
-    assert results.count("- **ARS claim.**") == len(fixture["tables"]) + len(fixture["figures"])
+    assert "ARS" not in results
+    assert "Academic Research Suite" not in results
+    assert results.count("- **Claim.**") == len(fixture["tables"]) + len(fixture["figures"])
+    assert results.count("- **Evidence.**") == len(fixture["tables"]) + len(fixture["figures"])
+    assert results.count("- **Boundary.**") == len(fixture["tables"]) + len(fixture["figures"])
+    assert results.count("**Figure note.**") == len(fixture["figures"])
 
 
 @pytest.mark.parametrize(

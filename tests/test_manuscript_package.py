@@ -69,6 +69,76 @@ def test_dispersion_display_uses_interval_when_available() -> None:
     assert _dispersion_text(row) == "[0.1235, 0.2346]"
 
 
+def test_latex_table_uses_small_tabular_for_narrow_numeric_data() -> None:
+    frame = pd.DataFrame({"Year": [2024], "Estimate": [0.1234], "N": [120]})
+
+    tex = manuscript_module._latex_table(frame, caption="Narrow", label="tab:narrow")
+
+    assert r"\begin{table}[!htbp]" in tex
+    assert r"\small" in tex
+    assert r"\begin{tabular}{lll}" in tex
+    assert r"\begin{tabularx}" not in tex
+    assert r"\resizebox" not in tex
+    assert r"\begin{sidewaystable}" not in tex
+
+
+def test_latex_table_uses_tabularx_for_long_text_without_scaling() -> None:
+    frame = pd.DataFrame(
+        {
+            "Status": ["complete"],
+            "Interpretation": [
+                "This deliberately long interpretation must wrap instead of being scaled."
+            ],
+        }
+    )
+
+    tex = manuscript_module._latex_table(frame, caption="Long text", label="tab:long")
+
+    assert r"\begin{table}[!htbp]" in tex
+    assert r"\small" in tex
+    assert r"\begin{tabularx}{\textwidth}" in tex
+    assert r"\resizebox" not in tex
+    assert r"\begin{sidewaystable}" not in tex
+
+
+def test_latex_table_rotates_wide_display_and_scales_to_textheight() -> None:
+    frame = pd.DataFrame({f"Column_{idx}": [idx] for idx in range(9)})
+
+    tex = manuscript_module._latex_table(frame, caption="Wide", label="tab:wide")
+
+    assert "% Requires \\usepackage{rotating}" in tex
+    assert r"\begin{sidewaystable}[!htbp]" in tex
+    assert r"\resizebox{\textheight}{!}{%" in tex
+    assert r"\resizebox{\textwidth}{!}" not in tex
+    assert r"\begin{tabularx}" not in tex
+
+
+def test_construct_lift_annotation_names_precision_and_clears_interval() -> None:
+    helper = getattr(manuscript_module, "_construct_lift_annotation", None)
+    assert callable(helper)
+    row = pd.Series(
+        {
+            "Top_Decile_Lift": 1.8,
+            "ci_high": 2.4,
+            "Top_10pct_Precision": 0.1234,
+            "Top_10pct_FDR": 0.8766,
+        }
+    )
+
+    annotation, x_position = helper(row)
+
+    assert annotation == "Precision=0.123; FDR=0.877"
+    assert "P=" not in annotation
+    assert x_position > max(row["Top_Decile_Lift"], row["ci_high"])
+
+
+def test_construct_lift_xlim_reserves_room_for_full_annotation() -> None:
+    helper = getattr(manuscript_module, "_construct_lift_xlim", None)
+    assert callable(helper)
+
+    assert helper(4.3, [4.35]) >= 4.35 * 2.0
+
+
 def test_public_task_metrics_include_calibration_diagnostics() -> None:
     metrics = pd.DataFrame(
         {
