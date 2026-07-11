@@ -19,16 +19,37 @@ if str(REPO_ROOT) not in sys.path:
 
 from src import ARTIFACTS_DIR, DOCS_DIR, PROJECT_ROOT  # noqa: E402
 from src.linkage import WRDS_VALIDATED_TIER  # noqa: E402
+from src.provenance import sha256_path  # noqa: E402
+from scripts.monitor_public_lake import _validate_public_lake_final_report  # noqa: E402
 
 
 CANONICAL_PUBLIC_DATA_AS_OF_DATE = "2026-07-06"
 INPUT_SOURCE_ROLES = [
-    "Detected-misstatement benchmark input",
-    "Public issuer dimension input",
-    "Public issuer-origin panel input",
-    "CIK-GVKEY bridge input",
-    "Public-lake run metadata input",
-    "Form AP source metadata input",
+    ("Detected-misstatement benchmark input", "raw_data"),
+    ("Public issuer dimension input", "issuer_dim"),
+    ("Public issuer-origin panel input", "issuer_origin_panel"),
+    ("Public-lake final report input", "public_lake_final_report"),
+    ("CIK-GVKEY bridge input", "crosswalk"),
+    ("Public-lake run metadata input", "public_lake_run_metadata"),
+    ("Form AP source metadata input", "form_ap_source_metadata"),
+]
+MODERN_PUBLIC_LAKE_INPUT_LABELS = {
+    "public_lake_final_report": "public-lake final report",
+    "public_lake_run_metadata": "public-lake run metadata",
+    "issuer_origin_panel": "issuer-origin panel",
+    "form_ap_source_metadata": "Form AP source metadata",
+}
+
+PUBLIC_LAKE_ROW_SPECS = [
+    ("Silver", "filing_dim", "normalized public filing index"),
+    ("Silver", "issuer_dim", "normalized issuer dimension"),
+    ("Silver", "xbrl_core_fact", "controlled XBRL core facts"),
+    ("Silver", "xbrl_fact_summary", "accession-level fact coverage"),
+    ("Silver", "note_summary", "Notes summary mode"),
+    ("Silver", "comment_thread", "SEC comment-thread signal"),
+    ("Silver", "correction_event", "amended-filing/correction signal"),
+    ("Gold", "issuer_origin_panel", "annual issuer-year modeling table"),
+    ("Gold", "filing_origin_panel", "filing-origin provenance table"),
 ]
 
 
@@ -534,6 +555,90 @@ def _latest_public_lake_report() -> dict[str, Any]:
     return report
 
 
+def _resolve_input_records(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    inputs = manifest.get("inputs")
+    if not isinstance(inputs, dict):
+        inputs = {}
+    provenance = manifest.get("provenance")
+    records = provenance.get("input_files", []) if isinstance(provenance, dict) else []
+    if not isinstance(records, list):
+        records = []
+    records_by_path: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        if isinstance(record, dict) and isinstance(record.get("path"), str):
+            records_by_path.setdefault(record["path"], []).append(record)
+
+    resolved = {}
+    for _, input_key in INPUT_SOURCE_ROLES:
+        path = inputs.get(input_key)
+        matches = records_by_path.get(path, []) if isinstance(path, str) else []
+        if len(matches) == 1:
+            resolved[input_key] = matches[0]
+
+    if "public_lake_inputs" not in manifest:
+        return resolved
+    public_lake_inputs = manifest["public_lake_inputs"]
+    if not isinstance(public_lake_inputs, dict):
+        raise ValueError("pinned public-lake inputs are malformed")
+    for key, label in MODERN_PUBLIC_LAKE_INPUT_LABELS.items():
+        if key not in public_lake_inputs:
+            raise ValueError(f"pinned public-lake inputs missing {key}")
+        record = public_lake_inputs[key]
+        if not isinstance(record, dict):
+            raise ValueError(f"pinned {label} record is malformed")
+        raw_path = record.get("path")
+        expected_sha256 = record.get("sha256")
+        if (
+            record.get("exists") is not True
+            or not isinstance(raw_path, str)
+            or not raw_path
+            or not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        ):
+            raise ValueError(f"pinned {label} record is malformed")
+        if inputs.get(key) != raw_path:
+            raise ValueError(f"pinned {label} path does not match manifest.inputs")
+        path = Path(raw_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"pinned {label} is missing: {path}")
+        if sha256_path(path) != expected_sha256:
+            raise ValueError(f"pinned {label} hash mismatch")
+        provenance_matches = records_by_path.get(raw_path, [])
+        if not provenance_matches:
+            raise ValueError(f"pinned {label} provenance record is missing")
+        if len(provenance_matches) != 1:
+            raise ValueError(f"pinned {label} provenance record is ambiguous")
+        provenance_record = provenance_matches[0]
+        provenance_sha256 = provenance_record.get("sha256")
+        if (
+            provenance_record.get("exists") is not True
+            or not isinstance(provenance_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", provenance_sha256) is None
+        ):
+            raise ValueError(f"pinned {label} provenance record is malformed")
+        if provenance_sha256 != expected_sha256:
+            raise ValueError(f"pinned {label} SHA does not match provenance")
+        resolved[key] = provenance_record
+    return resolved
+
+
+def _load_public_lake_report(
+    manifest: dict[str, Any],
+    resolved_inputs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if "public_lake_inputs" not in manifest:
+        return _latest_public_lake_report()
+    paths = {key: Path(resolved_inputs[key]["path"]) for key in MODERN_PUBLIC_LAKE_INPUT_LABELS}
+
+    return dict(
+        _validate_public_lake_final_report(
+            paths["public_lake_final_report"],
+            run_metadata_path=paths["public_lake_run_metadata"],
+            issuer_origin_panel_path=paths["issuer_origin_panel"],
+        )
+    )
+
+
 def _component_rows(manifest: dict[str, Any]) -> list[list[str]]:
     rows: list[list[str]] = []
     for name, payload in manifest.get("components", {}).items():
@@ -550,15 +655,10 @@ def _component_rows(manifest: dict[str, Any]) -> list[list[str]]:
     return rows
 
 
-def _source_role_rows(provenance: dict[str, Any]) -> list[list[str]]:
-    records = provenance.get("input_files", [])
-    if not isinstance(records, list):
-        records = []
+def _source_role_rows(resolved_inputs: dict[str, dict[str, Any]]) -> list[list[str]]:
     rows = []
-    for index, role in enumerate(INPUT_SOURCE_ROLES):
-        record = (
-            records[index] if index < len(records) and isinstance(records[index], dict) else {}
-        )
+    for role, input_key in INPUT_SOURCE_ROLES:
+        record = resolved_inputs.get(input_key, {})
         rows.append(
             [
                 role,
@@ -631,19 +731,8 @@ def _public_lake_rows(report: dict[str, Any]) -> list[list[str]]:
     row_counts = report.get("row_counts", {})
     if not isinstance(row_counts, dict):
         row_counts = {}
-    wanted = [
-        ("Silver", "filing_dim", "normalized public filing index"),
-        ("Silver", "issuer_dim", "normalized issuer dimension"),
-        ("Silver", "xbrl_core_fact", "controlled XBRL core facts"),
-        ("Silver", "xbrl_fact_summary", "accession-level fact coverage"),
-        ("Silver", "note_summary", "Notes summary mode"),
-        ("Silver", "comment_thread", "SEC comment-thread signal"),
-        ("Silver", "correction_event", "amended-filing/correction signal"),
-        ("Gold", "issuer_origin_panel", "annual issuer-year modeling table"),
-        ("Gold", "filing_origin_panel", "filing-origin provenance table"),
-    ]
     rows = []
-    for layer, artifact, note in wanted:
+    for layer, artifact, note in PUBLIC_LAKE_ROW_SPECS:
         rows.append([layer, f"`{artifact}`", _fmt(row_counts.get(artifact)), note])
     return rows
 
@@ -1511,10 +1600,11 @@ def build_snapshot(
 ) -> str:
     manuscript_package = manuscript_package or ARTIFACTS_DIR / "manuscript_package"
     manifest = _read_json(study_dir / "study_run_manifest.json")
+    resolved_inputs = _resolve_input_records(manifest)
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
     bridge_summary = _read_json(study_dir / "bridge_probe" / "bridge_probe_summary.json")
     construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
-    public_lake_report = _latest_public_lake_report()
+    public_lake_report = _load_public_lake_report(manifest, resolved_inputs)
     public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
     benchmark_metrics = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
     public_task_positive_counts = public_summary.get("task_positive_counts") or {}
@@ -1655,8 +1745,8 @@ def build_snapshot(
                     "; ".join(canonical_failures) if canonical_failures else _code("none"),
                 ],
                 [
-                    "Public-lake report timestamp",
-                    _code(public_lake_report.get("timestamp_utc")),
+                    "Public-lake final-report schema",
+                    _code(public_lake_report.get("schema_version")),
                 ],
                 ["Peer comparison mode", _code(peer_status)],
                 ["Bridge status", _code(bridge_status)],
@@ -1669,7 +1759,10 @@ def build_snapshot(
         "Local input paths are intentionally omitted; stable roles, availability, and "
         "content hashes identify the evidence inputs.",
         "",
-        _table(["Source role", "Available", "SHA-256"], _source_role_rows(provenance)),
+        _table(
+            ["Source role", "Available", "SHA-256"],
+            _source_role_rows(resolved_inputs),
+        ),
         "",
         "### Component status",
         "",

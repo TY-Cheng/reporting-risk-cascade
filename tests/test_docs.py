@@ -12,6 +12,7 @@ import yaml
 
 import scripts.refresh_results_snapshot as snapshot_module
 from scripts.refresh_results_snapshot import _construct_alignment_rows
+from src.provenance import sha256_path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -548,7 +549,7 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
                         "sha256": "1" * 64,
                     },
                     {
-                        "path": VOLUME_PATH_PREFIX + "private/issuer.parquet",
+                        "path": VOLUME_PATH_PREFIX + "private/issuer_dim.parquet",
                         "exists": True,
                         "sha256": "2" * 64,
                     },
@@ -561,19 +562,24 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
                         "sha256": "3" * 64,
                     },
                     {
-                        "path": VOLUME_PATH_PREFIX + "private/bridge.csv",
+                        "path": VOLUME_PATH_PREFIX + "private/public_lake_final_report.json",
                         "exists": True,
                         "sha256": "4" * 64,
                     },
                     {
-                        "path": USER_PATH_PREFIX + "example/lake.json",
+                        "path": VOLUME_PATH_PREFIX + "private/bridge.csv",
                         "exists": True,
                         "sha256": "5" * 64,
                     },
                     {
-                        "path": USER_PATH_PREFIX + "example/form_ap.json",
+                        "path": USER_PATH_PREFIX + "example/lake.json",
                         "exists": True,
                         "sha256": "6" * 64,
+                    },
+                    {
+                        "path": USER_PATH_PREFIX + "example/form_ap.json",
+                        "exists": True,
+                        "sha256": "7" * 64,
                     },
                 ],
                 "wrds_export_metadata": {
@@ -643,8 +649,16 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
             },
             "inputs": {
                 "raw_data": USER_PATH_PREFIX + "example/raw.csv",
-                "issuer_origin_panel": VOLUME_PATH_PREFIX + "private/issuer.parquet",
-                "crosswalk": USER_PATH_PREFIX + "example/" + CLOUD_STORAGE_MARKER + "/bridge.csv",
+                "issuer_dim": VOLUME_PATH_PREFIX + "private/issuer_dim.parquet",
+                "issuer_origin_panel": USER_PATH_PREFIX
+                + "example/"
+                + CLOUD_STORAGE_MARKER
+                + "/panel.parquet",
+                "public_lake_final_report": VOLUME_PATH_PREFIX
+                + "private/public_lake_final_report.json",
+                "crosswalk": VOLUME_PATH_PREFIX + "private/bridge.csv",
+                "public_lake_run_metadata": USER_PATH_PREFIX + "example/lake.json",
+                "form_ap_source_metadata": USER_PATH_PREFIX + "example/form_ap.json",
             },
             "runtime": {"peer_comparison_mode": "full"},
         },
@@ -821,6 +835,348 @@ def _build_fixture_snapshot(
         manuscript_package=fixture["package_dir"],
         allow_partial=False,
     )
+
+
+def _attach_modern_public_lake_fixture(
+    fixture: dict[str, Any],
+    tmp_path: Path,
+) -> dict[str, Any]:
+    run_metadata_path = tmp_path / "public_lake_run_metadata.json"
+    issuer_origin_panel_path = tmp_path / "issuer_origin_panel.parquet"
+    form_ap_source_metadata_path = tmp_path / "form_ap_source_metadata.json"
+    report_path = tmp_path / "public_lake_final_report.json"
+    _write_json(run_metadata_path, {"as_of_date": "2026-07-06"})
+    issuer_origin_panel_path.write_bytes(b"fixture issuer-origin panel")
+    _write_json(form_ap_source_metadata_path, {"source_kind": "verified_zip_member"})
+    row_counts = {
+        "issuer_dim": 102,
+        "filing_dim": 101,
+        "filing_xbrl_dim": 110,
+        "xbrl_fact_summary": 104,
+        "xbrl_core_fact": 103,
+        "notes_filing_dim": 111,
+        "note_summary": 105,
+        "comment_thread": 106,
+        "correction_event": 107,
+        "issuer_origin_panel": 108,
+        "filing_origin_panel": 109,
+    }
+    _write_json(
+        report_path,
+        {
+            "schema_version": "public-lake-final-report-v1",
+            "as_of_date": "2026-07-06",
+            "public_lake_run_metadata_sha256": sha256_path(run_metadata_path),
+            "issuer_origin_panel_sha256": sha256_path(issuer_origin_panel_path),
+            "row_counts": row_counts,
+            "row_count_errors": {},
+        },
+    )
+    paths = {
+        "public_lake_final_report": report_path,
+        "public_lake_run_metadata": run_metadata_path,
+        "issuer_origin_panel": issuer_origin_panel_path,
+        "form_ap_source_metadata": form_ap_source_metadata_path,
+    }
+    records = {
+        key: {
+            "path": str(path),
+            "exists": True,
+            "sha256": sha256_path(path),
+        }
+        for key, path in paths.items()
+    }
+    manifest_path = fixture["study_dir"] / "study_run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    old_paths = {manifest["inputs"].get(key) for key in paths}
+    manifest["inputs"].update({key: str(path) for key, path in paths.items()})
+    manifest["provenance"]["input_files"] = [
+        record
+        for record in manifest["provenance"]["input_files"]
+        if record.get("path") not in old_paths
+    ] + list(records.values())
+    manifest["public_lake_inputs"] = records
+    _write_json(manifest_path, manifest)
+    return {
+        "manifest_path": manifest_path,
+        "paths": paths,
+        "records": records,
+        "row_counts": row_counts,
+    }
+
+
+def test_snapshot_source_roles_follow_semantic_inputs_when_records_are_shuffled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    manifest_path = modern["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    records = manifest["provenance"]["input_files"]
+    manifest["provenance"]["input_files"] = [
+        records[6],
+        records[4],
+        records[0],
+        records[3],
+        records[2],
+        records[5],
+        records[1],
+    ]
+    _write_json(manifest_path, manifest)
+
+    results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+    expected = [
+        ("Detected-misstatement benchmark input", "1"),
+        ("Public issuer dimension input", "2"),
+        ("Public issuer-origin panel input", modern["records"]["issuer_origin_panel"]["sha256"]),
+        (
+            "Public-lake final report input",
+            modern["records"]["public_lake_final_report"]["sha256"],
+        ),
+        ("CIK-GVKEY bridge input", "5"),
+        (
+            "Public-lake run metadata input",
+            modern["records"]["public_lake_run_metadata"]["sha256"],
+        ),
+        (
+            "Form AP source metadata input",
+            modern["records"]["form_ap_source_metadata"]["sha256"],
+        ),
+    ]
+    for role, digest in expected:
+        expected_hash = digest * 64 if len(digest) == 1 else digest
+        assert f"| {role} | `True` | `{expected_hash}` |" in results
+
+
+def test_snapshot_uses_pinned_public_lake_report_counts_and_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+
+    results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+    assert (
+        "| Public-lake final-report schema | `public-lake-final-report-v1` |" in results
+    )
+    rendered_artifacts = {
+        "filing_dim",
+        "issuer_dim",
+        "xbrl_core_fact",
+        "xbrl_fact_summary",
+        "note_summary",
+        "comment_thread",
+        "correction_event",
+        "issuer_origin_panel",
+        "filing_origin_panel",
+    }
+    for artifact in rendered_artifacts:
+        rows = modern["row_counts"][artifact]
+        assert f"`{artifact}` | {rows}" in results
+
+
+@pytest.mark.parametrize(
+    "missing_key",
+    [
+        "public_lake_final_report",
+        "public_lake_run_metadata",
+        "issuer_origin_panel",
+        "form_ap_source_metadata",
+    ],
+)
+def test_snapshot_rejects_incomplete_modern_public_lake_input_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_key: str,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    manifest_path = modern["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["public_lake_inputs"].pop(missing_key)
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(ValueError, match=f"pinned public-lake inputs missing {missing_key}"):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("record_key", "message"),
+    [
+        ("public_lake_run_metadata", "pinned public-lake run metadata hash mismatch"),
+        ("issuer_origin_panel", "pinned issuer-origin panel hash mismatch"),
+    ],
+)
+def test_snapshot_rejects_hash_mismatch_in_bound_public_lake_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_key: str,
+    message: str,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    manifest_path = modern["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["public_lake_inputs"][record_key]["sha256"] = "0" * 64
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(ValueError, match=message):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+
+def test_snapshot_rejects_modern_input_path_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    manifest_path = modern["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["inputs"]["public_lake_final_report"] = str(tmp_path / "different.json")
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(
+        ValueError,
+        match="pinned public-lake final report path does not match manifest.inputs",
+    ):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+
+def test_snapshot_rejects_modern_provenance_sha_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    manifest_path = modern["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    run_metadata_path = str(modern["paths"]["public_lake_run_metadata"])
+    for record in manifest["provenance"]["input_files"]:
+        if record.get("path") == run_metadata_path:
+            record["sha256"] = "0" * 64
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(
+        ValueError,
+        match="pinned public-lake run metadata SHA does not match provenance",
+    ):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("remove", "pinned Form AP source metadata provenance record is missing"),
+        ("duplicate", "pinned Form AP source metadata provenance record is ambiguous"),
+    ],
+)
+def test_snapshot_rejects_invalid_form_ap_provenance_cardinality(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    manifest_path = modern["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    form_ap_path = str(modern["paths"]["form_ap_source_metadata"])
+    matching = [
+        record
+        for record in manifest["provenance"]["input_files"]
+        if record.get("path") == form_ap_path
+    ]
+    if mutation == "remove":
+        manifest["provenance"]["input_files"] = [
+            record
+            for record in manifest["provenance"]["input_files"]
+            if record.get("path") != form_ap_path
+        ]
+    else:
+        manifest["provenance"]["input_files"].append(dict(matching[0]))
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(ValueError, match=message):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("missing", "message"),
+    [
+        ("report_field", "public lake final report fields must be exactly"),
+        ("row_count", "public lake final report.row_counts keys must be exactly"),
+    ],
+)
+def test_snapshot_reuses_exact_public_lake_final_report_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing: str,
+    message: str,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    report_path = modern["paths"]["public_lake_final_report"]
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if missing == "report_field":
+        report.pop("as_of_date")
+    else:
+        report["row_counts"].pop("filing_xbrl_dim")
+    _write_json(report_path, report)
+    digest = sha256_path(report_path)
+    manifest_path = modern["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["public_lake_inputs"]["public_lake_final_report"]["sha256"] = digest
+    for record in manifest["provenance"]["input_files"]:
+        if record.get("path") == str(report_path):
+            record["sha256"] = digest
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(ValueError, match=message):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("record", "error", "message"),
+    [
+        ("malformed", ValueError, "pinned public-lake final report record is malformed"),
+        ("missing", FileNotFoundError, "pinned public-lake final report is missing"),
+        ("hash_mismatch", ValueError, "pinned public-lake final report hash mismatch"),
+    ],
+)
+def test_snapshot_rejects_invalid_pinned_public_lake_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record: str,
+    error: type[Exception],
+    message: str,
+) -> None:
+    fixture = _write_snapshot_fixture(tmp_path)
+    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    report_path = modern["paths"]["public_lake_final_report"]
+    manifest_path = modern["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if record == "malformed":
+        pinned: object = "not-a-record"
+    else:
+        path = tmp_path / "missing.json" if record == "missing" else report_path
+        digest = "0" * 64 if record == "hash_mismatch" else sha256_path(report_path)
+        pinned = {
+            "path": str(path),
+            "exists": True,
+            "sha256": digest,
+        }
+        manifest["inputs"]["public_lake_final_report"] = str(path)
+        for provenance_record in manifest["provenance"]["input_files"]:
+            if provenance_record.get("path") == str(report_path):
+                provenance_record.update(pinned)
+    manifest["public_lake_inputs"]["public_lake_final_report"] = pinned
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(error, match=message):
+        _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
 
 
 def test_snapshot_galleries_resolve_canonical_manifest_artifact_paths(
