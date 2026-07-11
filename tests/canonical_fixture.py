@@ -67,6 +67,7 @@ def _init_repo(repo: Path) -> str:
     files = {
         "src/__init__.py": "",
         "src/example.py": 'CONTACT = "Avery Example avery@example.invalid"\n',
+        "src/report_collision.md": "# Canonical Results Snapshot\n",
         "config/study.yaml": "study: canonical\n",
         "config/benchmark.yaml": "benchmark: canonical\n",
         "config/public_cascade.yaml": "public: canonical\n",

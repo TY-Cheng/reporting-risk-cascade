@@ -42,8 +42,7 @@ def _write(path: Path, content: str | bytes) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-def _attested_report_fixture(tmp_path: Path) -> dict[str, Any]:
-    fixture = canonical_fixture(tmp_path)
+def _write_canonical_attestation(fixture: dict[str, Any]) -> None:
     completed = subprocess.run(
         [
             sys.executable,
@@ -64,6 +63,11 @@ def _attested_report_fixture(tmp_path: Path) -> dict[str, Any]:
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def _attested_report_fixture(tmp_path: Path) -> dict[str, Any]:
+    fixture = canonical_fixture(tmp_path)
+    _write_canonical_attestation(fixture)
     repo = fixture["repo"]
     _git(repo, "add", *(path.relative_to(repo).as_posix() for path in fixture["report_paths"]))
     _git(repo, "commit", "-m", "attested report")
@@ -236,6 +240,25 @@ def test_reviewer_rejects_nonattested_source_delta(tmp_path: Path) -> None:
     _git(repo, "add", "src/example.py")
     _git(repo, "commit", "-m", "report plus source")
     with pytest.raises(ValueError, match="report-commit delta"):
+        _build(fixture, tmp_path / "reviewer.zip")
+
+
+def test_reviewer_rejects_source_rename_hidden_as_attested_report_addition(
+    tmp_path: Path,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    _write_canonical_attestation(fixture)
+    repo = fixture["repo"]
+    fixture["report_paths"][0].unlink()
+    _git(repo, "mv", "src/report_collision.md", "docs/results_snapshot.md")
+    _git(
+        repo,
+        "add",
+        *(path.relative_to(repo).as_posix() for path in fixture["report_paths"][1:]),
+    )
+    _git(repo, "commit", "-m", "rename source into report surface")
+
+    with pytest.raises(ValueError, match="outside the attested report surface"):
         _build(fixture, tmp_path / "reviewer.zip")
 
 

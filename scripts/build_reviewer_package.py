@@ -343,7 +343,15 @@ def _validate_report_commit(
         )
     report_records = _attested_report_records(attestation)
     allowed = {record["path"] for record in report_records}
-    raw_delta = _git_bytes(repo_root, "diff", "--name-only", "-z", study_commit, report_commit)
+    raw_delta = _git_bytes(
+        repo_root,
+        "diff",
+        "--no-renames",
+        "--name-only",
+        "-z",
+        study_commit,
+        report_commit,
+    )
     delta = {item.decode("utf-8") for item in raw_delta.split(b"\0") if item}
     if not delta:
         raise ValueError("report-commit delta must be nonempty")
