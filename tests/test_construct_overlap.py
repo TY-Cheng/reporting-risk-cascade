@@ -679,6 +679,14 @@ def test_unknown_provenance_like_column_is_rejected(tmp_path: Path) -> None:
         "raw_foo",
         "provenance_owner",
         "bridge_vendor",
+        "provenance_revenue",
+        "raw_revenue",
+        "bridge_revenue",
+        "wrdsproviderrevenue",
+        "crspdatasetreturn",
+        "capitaliqsourceassets",
+        "providerwrdsrevenue",
+        "datasetcrspreturn",
     ],
 )
 def test_conflicting_provenance_header_alias_is_rejected(
@@ -732,6 +740,9 @@ def test_ordinary_business_column_does_not_change_wrds_validation(tmp_path: Path
         "CapitalIQMarketCap": "100",
         "SECAnalyticsSales": "100",
         "bridge_financing_flag": "business control",
+        "crspfrontierreturn": "0.10",
+        "rawmaterialflag": "business control",
+        "bridgefinancingflag": "business control",
     }
     pd.DataFrame([row]).to_csv(crosswalk, index=False)
 
