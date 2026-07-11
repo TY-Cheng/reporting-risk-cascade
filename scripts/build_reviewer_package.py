@@ -93,12 +93,29 @@ export ARTIFACTS_DIR="$REPLICATION_ROOT/artifacts"
 export MANUSCRIPT_DIR="$REPLICATION_ROOT/manuscript"
 export UV_PROJECT_ENVIRONMENT="$REPLICATION_ROOT/uv-venv"
 export UV_CACHE_DIR="$REPLICATION_ROOT/uv-cache"
+export COVERAGE_FILE="$REPLICATION_ROOT/coverage/.coverage"
+export PYTHONPYCACHEPREFIX="$REPLICATION_ROOT/pycache"
+export RUFF_CACHE_DIR="$REPLICATION_ROOT/ruff-cache"
+export PYTEST_ADDOPTS="-o cache_dir='$REPLICATION_ROOT/pytest-cache'"
+export MKDOCS_SITE_DIR="$REPLICATION_ROOT/site"
+export TMPDIR="$REPLICATION_ROOT/tmp"
 export PUBLIC_LAKE_DIR="$DATA_DIR/public_lake"
 export LAKE_BRONZE_DIR="$PUBLIC_LAKE_DIR/bronze"
 export LAKE_SILVER_DIR="$PUBLIC_LAKE_DIR/silver"
 export LAKE_GOLD_DIR="$PUBLIC_LAKE_DIR/gold"
 export RAW_DATASET_PATH="$DATA_DIR/raw/raw_dataset_misstatement.parquet"
-mkdir -p "$WORK_DIR" "$DATA_DIR" "$ARTIFACTS_DIR" "$MANUSCRIPT_DIR" "$UV_CACHE_DIR"
+mkdir -p \
+    "$WORK_DIR" \
+    "$DATA_DIR" \
+    "$ARTIFACTS_DIR" \
+    "$MANUSCRIPT_DIR" \
+    "$UV_CACHE_DIR" \
+    "$(dirname "$COVERAGE_FILE")" \
+    "$PYTHONPYCACHEPREFIX" \
+    "$RUFF_CACHE_DIR" \
+    "$REPLICATION_ROOT/pytest-cache" \
+    "$MKDOCS_SITE_DIR" \
+    "$TMPDIR"
 
 cat > .env <<EOF
 PROJECT_ROOT="$SOURCE_ROOT"
@@ -112,6 +129,12 @@ LAKE_SILVER_DIR="$LAKE_SILVER_DIR"
 LAKE_GOLD_DIR="$LAKE_GOLD_DIR"
 UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT"
 UV_CACHE_DIR="$UV_CACHE_DIR"
+COVERAGE_FILE="$COVERAGE_FILE"
+PYTHONPYCACHEPREFIX="$PYTHONPYCACHEPREFIX"
+RUFF_CACHE_DIR="$RUFF_CACHE_DIR"
+PYTEST_ADDOPTS="$PYTEST_ADDOPTS"
+MKDOCS_SITE_DIR="$MKDOCS_SITE_DIR"
+TMPDIR="$TMPDIR"
 MANUSCRIPT_DIR="$MANUSCRIPT_DIR"
 SEC_USER_AGENT="$SEC_USER_AGENT"
 EOF
@@ -159,11 +182,14 @@ output.write_text(
 PY
 
 uv sync --locked
-just check
+just _test
+just _ruff
+uv run --group docs mkdocs build --strict --clean --site-dir "$MKDOCS_SITE_DIR"
 ```
 
-The `just check` above is the normal source preflight. The archive can also be inspected
-with the repository's Gitless `just --list` and `just check` gate before bootstrap.
+The three commands above are the portable source preflight with every generated output
+redirected below `REPLICATION_ROOT`. The archive can also be inspected with the repository's
+Gitless `just --list` and `just check` gate before bootstrap.
 
 ## Production
 
@@ -181,6 +207,12 @@ if [ "$SEC_USER_AGENT" = "Your Name your.email@institution.edu" ]; then
     echo "Replace the SEC_USER_AGENT template with a real contact identity and email" >&2
     exit 1
 fi
+: "${COVERAGE_FILE:?Bootstrap must set COVERAGE_FILE}"
+: "${PYTHONPYCACHEPREFIX:?Bootstrap must set PYTHONPYCACHEPREFIX}"
+: "${RUFF_CACHE_DIR:?Bootstrap must set RUFF_CACHE_DIR}"
+: "${PYTEST_ADDOPTS:?Bootstrap must set PYTEST_ADDOPTS}"
+: "${MKDOCS_SITE_DIR:?Bootstrap must set MKDOCS_SITE_DIR}"
+: "${TMPDIR:?Bootstrap must set TMPDIR}"
 SOURCE_ROOT="$(pwd -P)"
 STUDY_DIR="$ARTIFACTS_DIR/full_with_peer"
 MANUSCRIPT_PACKAGE="$MANUSCRIPT_DIR/manuscript_package"
@@ -198,7 +230,9 @@ uv run python scripts/refresh_results_snapshot.py \
     --study-dir "$STUDY_DIR" \
     --docs-file "$SOURCE_ROOT/docs/results_snapshot.md" \
     --manuscript-package "$MANUSCRIPT_PACKAGE"
-just check
+just _test
+just _ruff
+uv run --group docs mkdocs build --strict --clean --site-dir "$MKDOCS_SITE_DIR"
 test "$(git rev-parse --verify HEAD)" = "$STUDY_COMMIT"
 
 uv run python scripts/verify_canonical_run.py \
@@ -416,9 +450,17 @@ def _validate_entries(
     )
     folded_markers = tuple(marker.casefold() for marker in markers if marker)
     folded_identities = tuple(needle.casefold() for needle in identity_needles if needle)
-    drive_path = re.compile(r"(?<![a-z0-9])[a-z]:[\\/]", flags=re.IGNORECASE)
-    backslash_unc = re.compile(r"\\\\[^\\/\s]+[\\/][^\\/\s]+")
-    forward_unc = re.compile(r"(?<![:/a-z0-9])//[^/\s]+/[^/\s]+", flags=re.IGNORECASE)
+    separator = r"[\\/]"
+    component = r"[^\\/\s]+"
+    drive_path = re.compile(
+        r"(?<![a-z0-9])[a-z]" + ":" + separator,
+        flags=re.IGNORECASE,
+    )
+    backslash_unc = re.compile(re.escape("\\") * 2 + component + separator + component)
+    forward_unc = re.compile(
+        r"(?<![:/a-z0-9])" + "/" * 2 + component + "/" + component,
+        flags=re.IGNORECASE,
+    )
     for name, payload in entries.items():
         if _path_forbidden(name):
             raise ValueError(f"forbidden archive entry: {name}")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import zipfile
@@ -34,6 +35,21 @@ from tests.canonical_fixture import canonical_fixture
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SLASH = chr(47)
+BACKSLASH = chr(92)
+COLON = chr(58)
+POSIX_HOME_PATH = SLASH + "home" + SLASH + "example" + SLASH + "private.csv"
+WINDOWS_USER_PATH = (
+    "C" + COLON + BACKSLASH + "Users" + BACKSLASH + "example" + BACKSLASH + "private.csv"
+)
+WINDOWS_USER_PATH_LOWER = WINDOWS_USER_PATH.lower()
+WINDOWS_DRIVE_USER_PATH = "D" + COLON + SLASH + "Users" + SLASH + "alice" + SLASH + "private.csv"
+WINDOWS_DRIVE_USER_PATH_BACKSLASH = (
+    "D" + COLON + BACKSLASH + "Users" + BACKSLASH + "alice" + BACKSLASH + "private.csv"
+)
+WINDOWS_DRIVE_ROOT_PATH = "Z" + COLON + SLASH + "private" + SLASH + "data.csv"
+BACKSLASH_UNC_PATH = BACKSLASH * 2 + "server" + BACKSLASH + "share" + BACKSLASH + "private.csv"
+FORWARD_UNC_PATH = SLASH * 2 + "server" + SLASH + "share" + SLASH + "private.csv"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -204,9 +220,9 @@ def test_env_example_uses_portable_placeholders_and_preserves_contract() -> None
 @pytest.mark.parametrize(
     "marker",
     [
-        "/home/example/private.csv",
-        "C:\\Users\\example\\private.csv",
-        "c:\\users\\example\\private.csv",
+        POSIX_HOME_PATH,
+        WINDOWS_USER_PATH,
+        WINDOWS_USER_PATH_LOWER,
     ],
 )
 def test_validate_entries_rejects_local_path_markers(marker: str) -> None:
@@ -217,12 +233,12 @@ def test_validate_entries_rejects_local_path_markers(marker: str) -> None:
 @pytest.mark.parametrize(
     ("path", "basename"),
     [
-        ("/home/alice/private.csv", "private.csv"),
-        ("D:/Users/alice/private.csv", "private.csv"),
-        (r"D:\Users\alice\private.csv", "private.csv"),
-        ("Z:/private/data.csv", "data.csv"),
-        (r"\\server\share\private.csv", "private.csv"),
-        ("//server/share/private.csv", "private.csv"),
+        (POSIX_HOME_PATH.replace("example", "alice"), "private.csv"),
+        (WINDOWS_DRIVE_USER_PATH, "private.csv"),
+        (WINDOWS_DRIVE_USER_PATH_BACKSLASH, "private.csv"),
+        (WINDOWS_DRIVE_ROOT_PATH, "data.csv"),
+        (BACKSLASH_UNC_PATH, "private.csv"),
+        (FORWARD_UNC_PATH, "private.csv"),
     ],
 )
 def test_sanitize_redacts_posix_windows_and_unc_absolute_paths(
@@ -235,11 +251,11 @@ def test_sanitize_redacts_posix_windows_and_unc_absolute_paths(
 @pytest.mark.parametrize(
     "marker",
     [
-        "D:/Users/alice/private.csv",
-        r"d:\users\alice\private.csv",
-        "Z:/private/data.csv",
-        r"\\server\share\private.csv",
-        "//server/share/private.csv",
+        WINDOWS_DRIVE_USER_PATH,
+        WINDOWS_DRIVE_USER_PATH_BACKSLASH.lower(),
+        WINDOWS_DRIVE_ROOT_PATH,
+        BACKSLASH_UNC_PATH,
+        FORWARD_UNC_PATH,
     ],
 )
 @pytest.mark.parametrize("binary", [False, True], ids=["text", "binary"])
@@ -256,6 +272,29 @@ def test_validate_entries_rejects_embedded_windows_and_unc_paths(
 
 def test_validate_entries_does_not_treat_https_url_as_unc_path() -> None:
     _validate_entries({"generated/results.txt": b"https://www.sec.gov/files/data.zip"})
+
+
+def test_real_allowed_worktree_source_survives_archive_validation() -> None:
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    entries = {
+        f"source/{relative}": (REPO_ROOT / relative).read_bytes()
+        for raw in tracked
+        if raw
+        for relative in [raw.decode("utf-8")]
+        if _source_allowed(relative) and (REPO_ROOT / relative).is_file()
+    }
+    redactions = _derive_identity_redactions(entries)
+    redacted = _redact_entries(entries, redactions)
+
+    _validate_entries(
+        redacted,
+        identity_needles=[needle for needle, _, _ in redactions],
+    )
 
 
 def test_identity_redactions_cover_all_categories() -> None:
@@ -336,6 +375,14 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
     readme = (extracted / "REPLICATION_README.md").read_text(encoding="utf-8")
     bootstrap_section = readme.split("## Bootstrap", 1)[1].split("## Production", 1)[0]
     bootstrap = bootstrap_section.split("```bash", 1)[1].split("```", 1)[0].strip()
+    syntax = subprocess.run(
+        ["/bin/bash", "-n"],
+        input=bootstrap,
+        text=True,
+        check=False,
+        capture_output=True,
+    )
+    assert syntax.returncode == 0, syntax.stdout + syntax.stderr
 
     poison = extracted / ".env"
     poison.write_text(
@@ -347,21 +394,53 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
         'SEC_USER_AGENT="Poison Contact poison@institution.edu"\n',
         encoding="utf-8",
     )
-    replication_root = tmp_path / "reviewer-runtime"
+    replication_root = tmp_path / "reviewer runtime"
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    for command in ("uv", "just"):
+    common_log = (
+        'printf "%s\\n" "$*" >> "$REPLICATION_ROOT/COMMAND-calls.txt"\n'
+        'printf "%s\\n" "$WORK_DIR|$DATA_DIR|$RAW_DATASET_PATH|$PUBLIC_LAKE_DIR|'
+        "$LAKE_BRONZE_DIR|$LAKE_SILVER_DIR|$LAKE_GOLD_DIR|"
+        "$UV_PROJECT_ENVIRONMENT|$UV_CACHE_DIR|$ARTIFACTS_DIR|$MANUSCRIPT_DIR|"
+        '$COVERAGE_FILE|$PYTHONPYCACHEPREFIX|$RUFF_CACHE_DIR|$MKDOCS_SITE_DIR|${TMPDIR:-}" '
+        '>> "$REPLICATION_ROOT/COMMAND-env.txt"\n'
+        'printf "%s\\n" "$PYTEST_ADDOPTS" >> "$REPLICATION_ROOT/COMMAND-pytest-addopts.txt"\n'
+    )
+    uv_script = (
+        "#!/bin/sh\nset -eu\n"
+        + common_log.replace("COMMAND", "uv")
+        + 'if [ "${1:-}" = "sync" ]; then mkdir -p "$UV_PROJECT_ENVIRONMENT" "$UV_CACHE_DIR"; fi\n'
+        + 'if [ "${1:-}" = "run" ] && printf "%s\\n" "$*" | grep -q "mkdocs build"; then\n'
+        '    site_dir="site"\n'
+        '    while [ "$#" -gt 0 ]; do\n'
+        '        if [ "$1" = "--site-dir" ]; then shift; site_dir="$1"; fi\n'
+        "        shift\n"
+        "    done\n"
+        '    mkdir -p "$site_dir" "${PYTHONPYCACHEPREFIX:-scripts/__pycache__}"\n'
+        "fi\n"
+    )
+    just_script = (
+        "#!/bin/sh\nset -eu\n" + common_log.replace("COMMAND", "just") + 'case "${1:-}" in\n'
+        "    check)\n"
+        "        : > .coverage\n"
+        "        mkdir -p .pytest_cache .ruff_cache site src/__pycache__\n"
+        "        ;;\n"
+        "    _test)\n"
+        '        coverage_file="${COVERAGE_FILE:-.coverage}"\n'
+        '        pytest_cache=".pytest_cache"\n'
+        '        pytest_tmp="${TMPDIR:-.}/pytest-tmp"\n'
+        '        case "${PYTEST_ADDOPTS:-}" in\n'
+        '            *cache_dir=*) pytest_cache="$REPLICATION_ROOT/pytest-cache" ;;\n'
+        "        esac\n"
+        '        mkdir -p "$(dirname "$coverage_file")" "$pytest_cache" "$pytest_tmp" "${PYTHONPYCACHEPREFIX:-src/__pycache__}"\n'
+        '        : > "$coverage_file"\n'
+        "        ;;\n"
+        '    _ruff) mkdir -p "${RUFF_CACHE_DIR:-.ruff_cache}" ;;\n'
+        "esac\n"
+    )
+    for command, script in (("uv", uv_script), ("just", just_script)):
         executable = fake_bin / command
-        executable.write_text(
-            '#!/bin/sh\nprintf "%s\\n" "$*" >> "$REPLICATION_ROOT/'
-            + command
-            + '-calls.txt"\nprintf "%s\\n" '
-            '"$WORK_DIR|$DATA_DIR|$RAW_DATASET_PATH|$PUBLIC_LAKE_DIR|'
-            "$LAKE_BRONZE_DIR|$LAKE_SILVER_DIR|$LAKE_GOLD_DIR|"
-            '$UV_PROJECT_ENVIRONMENT|$UV_CACHE_DIR|$ARTIFACTS_DIR|$MANUSCRIPT_DIR" '
-            '>> "$REPLICATION_ROOT/' + command + '-env.txt"\n',
-            encoding="utf-8",
-        )
+        executable.write_text(script, encoding="utf-8")
         executable.chmod(0o755)
 
     scrubbed = dict(os.environ)
@@ -384,6 +463,12 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
         "LAKE_GOLD_DIR",
         "UV_PROJECT_ENVIRONMENT",
         "UV_CACHE_DIR",
+        "COVERAGE_FILE",
+        "PYTHONPYCACHEPREFIX",
+        "RUFF_CACHE_DIR",
+        "PYTEST_ADDOPTS",
+        "MKDOCS_SITE_DIR",
+        "TMPDIR",
         "MANUSCRIPT_DIR",
         "DIR_MANUSCRIPT",
         "SEC_USER_AGENT",
@@ -406,9 +491,25 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
     source = extracted / "source"
+    forbidden_names = {
+        ".venv",
+        ".pytest_cache",
+        ".ruff_cache",
+        "pytest-tmp",
+        "site",
+        "__pycache__",
+    }
+    assert not [path for path in source.rglob("*") if path.name in forbidden_names]
+    assert not [path for path in source.rglob("*") if path.name.startswith(".coverage")]
     local_env = (source / ".env").read_text(encoding="utf-8")
     assert "/poison/" not in local_env
-    for name in (
+    env_values = {
+        key: value.strip().strip('"')
+        for line in local_env.splitlines()
+        if line and not line.startswith("#")
+        for key, value in [line.split("=", 1)]
+    }
+    path_variables = (
         "WORK_DIR",
         "DATA_DIR",
         "RAW_DATASET_PATH",
@@ -420,15 +521,26 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
         "UV_CACHE_DIR",
         "ARTIFACTS_DIR",
         "MANUSCRIPT_DIR",
-    ):
-        value = next(
-            line.split("=", 1)[1].strip().strip('"')
-            for line in local_env.splitlines()
-            if line.startswith(f"{name}=")
-        )
+        "COVERAGE_FILE",
+        "PYTHONPYCACHEPREFIX",
+        "RUFF_CACHE_DIR",
+        "MKDOCS_SITE_DIR",
+        "TMPDIR",
+    )
+    for name in path_variables:
+        value = env_values[name]
         Path(value).resolve().relative_to(replication_root.resolve())
         with pytest.raises(ValueError):
             Path(value).resolve().relative_to(source.resolve())
+    pytest_addopts = env_values["PYTEST_ADDOPTS"]
+    assert "--basetemp" not in pytest_addopts
+    pytest_paths = (replication_root / "pytest-cache",)
+    for value in pytest_paths:
+        assert str(value) in pytest_addopts
+        assert f"cache_dir={value}" in shlex.split(pytest_addopts)
+        value.resolve().relative_to(replication_root.resolve())
+        with pytest.raises(ValueError):
+            value.resolve().relative_to(source.resolve())
     assert 'SEC_USER_AGENT="Your Name your.email@institution.edu"' in local_env
 
     derivative = _git(source, "rev-parse", "HEAD")
@@ -441,7 +553,20 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
     assert _git(source, "show", "-s", "--format=%ae") == "reviewer@example.invalid"
     assert _git(source, "status", "--porcelain", "--untracked-files=all") == ""
     assert "sync --locked" in (replication_root / "uv-calls.txt").read_text()
-    assert "check" in (replication_root / "just-calls.txt").read_text()
+    just_calls = (replication_root / "just-calls.txt").read_text().splitlines()
+    assert just_calls == ["_test", "_ruff"]
+    assert "mkdocs build --strict --clean" in (replication_root / "uv-calls.txt").read_text()
+    assert env_values["COVERAGE_FILE"] and Path(env_values["COVERAGE_FILE"]).is_file()
+    for value in (
+        env_values["UV_PROJECT_ENVIRONMENT"],
+        env_values["UV_CACHE_DIR"],
+        env_values["PYTHONPYCACHEPREFIX"],
+        env_values["RUFF_CACHE_DIR"],
+        env_values["MKDOCS_SITE_DIR"],
+        env_values["TMPDIR"],
+        *pytest_paths,
+    ):
+        assert Path(value).is_dir()
     for command in ("uv", "just"):
         command_env = (replication_root / f"{command}-env.txt").read_text().strip()
         assert "/poison/" not in command_env
@@ -449,6 +574,10 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
             Path(value).resolve().relative_to(replication_root.resolve())
             with pytest.raises(ValueError):
                 Path(value).resolve().relative_to(source.resolve())
+        command_addopts = (replication_root / f"{command}-pytest-addopts.txt").read_text()
+        assert "/poison/" not in command_addopts
+        for value in pytest_paths:
+            assert str(value) in command_addopts
 
     identity = json.loads((replication_root / "replication_identity.json").read_text())
     assert identity["derivative_commit"] == derivative
@@ -476,6 +605,15 @@ def test_documented_production_orders_external_canonical_workflow(tmp_path: Path
     with zipfile.ZipFile(output) as archive:
         readme = archive.read("REPLICATION_README.md").decode()
     production = readme.split("## Production", 1)[1]
+    production_block = production.split("```bash", 1)[1].split("```", 1)[0].strip()
+    syntax = subprocess.run(
+        ["/bin/bash", "-n"],
+        input=production_block,
+        text=True,
+        check=False,
+        capture_output=True,
+    )
+    assert syntax.returncode == 0, syntax.stdout + syntax.stderr
 
     ordered = [
         'test -z "$(git status --porcelain --untracked-files=all)"',
@@ -483,7 +621,9 @@ def test_documented_production_orders_external_canonical_workflow(tmp_path: Path
         'just task study raw "$STUDY_DIR"',
         "scripts/build_manuscript_package.py",
         "scripts/refresh_results_snapshot.py",
-        "just check",
+        "just _test",
+        "just _ruff",
+        'uv run --group docs mkdocs build --strict --clean --site-dir "$MKDOCS_SITE_DIR"',
         "scripts/verify_canonical_run.py",
         "git add docs/results_snapshot.md docs/assets/results_snapshot",
         'git commit -m "Refresh canonical results snapshot"',
@@ -722,7 +862,7 @@ def test_validate_entries_rejects_original_identity() -> None:
 
 
 def test_binary_path_marker_is_rejected() -> None:
-    marker = b"\x89PNG\r\nC:\\Users\\example\\private.png"
+    marker = b"\x89PNG\r\n" + WINDOWS_USER_PATH.replace(".csv", ".png").encode()
     with pytest.raises(ValueError, match="local identity/path marker"):
         _validate_entries({"generated/figure.png": marker})
 

@@ -313,7 +313,9 @@ run_step() {
     shift
     echo
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] START ${name}"
-    echo "+ $*"
+    printf "+"
+    printf " %q" "$@"
+    printf "\n"
     if [[ "$DRY_RUN" -eq 0 ]]; then
         "$@"
     fi

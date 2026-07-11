@@ -104,7 +104,7 @@ def test_public_lake_dry_run_uses_canonical_report_flags(
         Path(__file__).resolve().parents[1] / "scripts" / "run_public_lake_full.sh",
         scripts_dir / "run_public_lake_full.sh",
     )
-    external = tmp_path / "external"
+    external = tmp_path / "external root"
     data_dir = external / "data"
     public_lake_dir = data_dir / "public_lake"
     env = {
