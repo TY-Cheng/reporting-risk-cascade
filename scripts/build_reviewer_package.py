@@ -466,6 +466,10 @@ def _validate_entries(
         r"(?<![a-z0-9])[a-z]" + ":" + separator,
         flags=re.IGNORECASE,
     )
+    binary_drive_path = re.compile(
+        r"(?<![a-z0-9])[a-z]" + ":" + separator + component,
+        flags=re.IGNORECASE,
+    )
     backslash_unc = re.compile(re.escape("\\") * 2 + component + separator + component)
     forward_unc = re.compile(
         r"(?<![:/a-z0-9])" + "/" * 2 + component + "/" + component,
@@ -474,19 +478,30 @@ def _validate_entries(
     for name, payload in entries.items():
         if _path_forbidden(name):
             raise ValueError(f"forbidden archive entry: {name}")
-        text = payload.decode("utf-8", errors="ignore").casefold()
+        decoded = _text_payload(name, payload)
+        continuous_text = (
+            decoded if decoded is not None else payload.decode("utf-8", errors="replace")
+        ).casefold()
+        if decoded is None:
+            path_text = "\n".join(
+                run.decode("ascii") for run in re.findall(rb"[\x20-\x7e]+", payload)
+            ).casefold()
+            selected_drive_path = binary_drive_path
+        else:
+            path_text = continuous_text
+            selected_drive_path = drive_path
         if (
-            drive_path.search(text)
-            or backslash_unc.search(text)
-            or forward_unc.search(text)
-            or any(marker in text for marker in local_share_uris)
+            selected_drive_path.search(path_text)
+            or backslash_unc.search(path_text)
+            or forward_unc.search(path_text)
+            or any(marker in continuous_text for marker in local_share_uris)
         ):
             raise ValueError(f"local identity/path marker in archive entry: {name}")
         for marker in folded_markers:
-            if marker in text:
+            if marker in continuous_text:
                 raise ValueError(f"local identity/path marker in archive entry: {name}")
         for needle in folded_identities:
-            if needle in text:
+            if needle in continuous_text:
                 raise ValueError(f"original identity marker in archive entry: {name}")
 
 

@@ -324,6 +324,59 @@ def test_validate_entries_does_not_treat_https_url_as_unc_path() -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "payload"),
+    [
+        ("figure.png", b"\x89PNG\r\np:\xff/\x80"),
+        ("figure.png", b"\x89PNG\r\n/\xff/server/share\x80"),
+        (
+            "figure.pdf",
+            b"%PDF-1.7\n"
+            + BACKSLASH.encode()
+            + b"\xff"
+            + BACKSLASH.encode()
+            + b"server"
+            + BACKSLASH.encode()
+            + b"share\x80\n%%EOF",
+        ),
+    ],
+    ids=["split-drive-prefix", "split-forward-unc", "split-backslash-unc-pdf"],
+)
+def test_validate_entries_does_not_join_binary_runs_into_paths(
+    name: str,
+    payload: bytes,
+) -> None:
+    _validate_entries({f"generated/{name}": payload})
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [letter + COLON + SLASH for letter in ("p", "t", "Y")],
+)
+def test_validate_entries_allows_incomplete_binary_drive_prefix(marker: str) -> None:
+    _validate_entries({"generated/figure.png": marker.encode()})
+
+
+def test_validate_entries_rejects_incomplete_text_drive_prefix() -> None:
+    with pytest.raises(ValueError, match="local identity/path marker"):
+        _validate_entries({"generated/results.txt": ("C" + COLON + SLASH).encode()})
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "figure_01_public_task_pr_auc.png",
+        "figure_02_feature_family_pr_auc.png",
+        "figure_03_detected_misstatement_peer_pr_auc.png",
+        "figure_04_public_peer_pr_auc.png",
+        "figure_05_construct_overlap_lift.png",
+    ],
+)
+def test_validate_entries_accepts_canonical_report_figures(name: str) -> None:
+    path = REPO_ROOT / "docs" / "assets" / "results_snapshot" / name
+    _validate_entries({f"report/docs/assets/results_snapshot/{name}": path.read_bytes()})
+
+
+@pytest.mark.parametrize(
     "marker",
     [
         FILE_SHARE_URI,
@@ -1046,6 +1099,15 @@ def test_binary_path_marker_is_rejected() -> None:
     marker = b"\x89PNG\r\n" + WINDOWS_USER_PATH.replace(".csv", ".png").encode()
     with pytest.raises(ValueError, match="local identity/path marker"):
         _validate_entries({"generated/figure.png": marker})
+
+
+def test_binary_identity_marker_is_rejected() -> None:
+    marker = b"\x89PNG\r\n\xffAvery Example\x80"
+    with pytest.raises(ValueError, match="original identity marker"):
+        _validate_entries(
+            {"generated/figure.png": marker},
+            identity_needles=["Avery Example"],
+        )
 
 
 def test_reviewer_attestation_hash_uses_archived_sanitized_bytes(tmp_path: Path) -> None:
