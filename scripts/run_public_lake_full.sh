@@ -479,14 +479,17 @@ if [[ "$SKIP_PUBLIC_CASCADE" -eq 0 ]]; then
         --issuer-origin-panel "${GOLD_DIR}/issuer_origin_panel.parquet"
 fi
 
+FINAL_REPORT_ARGS=(--report-json "$LOG_DIR/run_report.json")
+if [[ "$MODE" = "full" && "$STORAGE_FORMAT" = "parquet" && ( "$NOTES_MODE" = "summary" || "$NOTES_MODE" = "raw" ) ]]; then
+    FINAL_REPORT_ARGS+=(--write-final-report --as-of-date "$AS_OF_DATE")
+fi
 run_step "final-report" uv run python scripts/monitor_public_lake.py \
     --bronze-dir "$BRONZE_DIR" \
     --silver-dir "$SILVER_DIR" \
     --gold-dir "$GOLD_DIR" \
     --log-dir "$LOG_DIR" \
     --once \
-    --write-final-report \
-    --as-of-date "$AS_OF_DATE"
+    "${FINAL_REPORT_ARGS[@]}"
 
 echo
 echo "Public lake run complete. Logs: ${LOG_DIR}"

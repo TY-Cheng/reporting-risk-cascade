@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shlex
+import shutil
+import subprocess
 import zipfile
 from argparse import Namespace
 from datetime import date
@@ -43,6 +47,121 @@ FINAL_REPORT_ROW_COUNT_KEYS = {
     "xbrl_core_fact",
     "xbrl_fact_summary",
 }
+
+
+@pytest.mark.parametrize(
+    ("mode", "storage_format", "notes_mode", "expected_report_flags"),
+    [
+        pytest.param(
+            "full",
+            "parquet",
+            "summary",
+            ("--report-json", "--write-final-report", "--as-of-date"),
+            id="full-parquet-summary",
+        ),
+        pytest.param(
+            "full",
+            "parquet",
+            "raw",
+            ("--report-json", "--write-final-report", "--as-of-date"),
+            id="full-parquet-raw",
+        ),
+        pytest.param(
+            "smoke",
+            "parquet",
+            "summary",
+            ("--report-json",),
+            id="smoke",
+        ),
+        pytest.param(
+            "full",
+            "csv-gz",
+            "summary",
+            ("--report-json",),
+            id="full-csv-gz",
+        ),
+        pytest.param(
+            "full",
+            "parquet",
+            "skip",
+            ("--report-json",),
+            id="full-parquet-skip",
+        ),
+    ],
+)
+def test_public_lake_dry_run_uses_canonical_report_flags(
+    tmp_path: Path,
+    mode: str,
+    storage_format: str,
+    notes_mode: str,
+    expected_report_flags: tuple[str, ...],
+) -> None:
+    fake_repo = tmp_path / "fake_repo"
+    scripts_dir = fake_repo / "scripts"
+    scripts_dir.mkdir(parents=True)
+    shutil.copy2(
+        Path(__file__).resolve().parents[1] / "scripts" / "run_public_lake_full.sh",
+        scripts_dir / "run_public_lake_full.sh",
+    )
+    external = tmp_path / "external"
+    data_dir = external / "data"
+    public_lake_dir = data_dir / "public_lake"
+    env = {
+        **os.environ,
+        "UV_PROJECT_ENVIRONMENT": str(external / "uv-env"),
+        "UV_CACHE_DIR": str(external / "uv-cache"),
+        "DATA_DIR": str(data_dir),
+        "ARTIFACTS_DIR": str(external / "artifacts"),
+        "PUBLIC_LAKE_DIR": str(public_lake_dir),
+        "PUBLIC_LAKE_SMOKE_DIR": str(data_dir / "public_lake_smoke"),
+        "LAKE_BRONZE_DIR": str(public_lake_dir / "bronze"),
+        "LAKE_SILVER_DIR": str(public_lake_dir / "silver"),
+        "LAKE_GOLD_DIR": str(public_lake_dir / "gold"),
+        "ENGINE": "duckdb",
+    }
+    completed = subprocess.run(
+        [
+            "/bin/bash",
+            "scripts/run_public_lake_full.sh",
+            "--dry-run",
+            "--mode",
+            mode,
+            "--storage-format",
+            storage_format,
+            "--notes-mode",
+            notes_mode,
+            "--as-of-date",
+            "2026-07-06",
+        ],
+        cwd=fake_repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    report_commands = [
+        shlex.split(line.removeprefix("+ "))
+        for line in completed.stdout.splitlines()
+        if line.startswith("+ ") and "scripts/monitor_public_lake.py" in line and "--once" in line
+    ]
+    assert len(report_commands) == 1
+    report_command = report_commands[0]
+
+    assert "--report-json" in report_command
+    report_json_index = report_command.index("--report-json")
+    log_dir_index = report_command.index("--log-dir")
+    assert report_command[report_json_index + 1] == str(
+        Path(report_command[log_dir_index + 1]) / "run_report.json"
+    )
+
+    canonical_flags = {"--report-json", "--write-final-report", "--as-of-date"}
+    actual_report_flags = tuple(token for token in report_command if token in canonical_flags)
+    assert actual_report_flags == expected_report_flags
+    if "--as-of-date" in actual_report_flags:
+        as_of_date_index = report_command.index("--as-of-date")
+        assert report_command[as_of_date_index + 1] == "2026-07-06"
 
 
 def test_monitor_once_reuses_one_row_count_report(

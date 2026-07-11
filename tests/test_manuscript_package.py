@@ -1017,6 +1017,31 @@ def test_package_manifest_rejects_artifact_suffix_mismatched_to_format_label(
         manuscript_module._validate_package_tree(package_dir, study_manifest_path)
 
 
+@pytest.mark.parametrize("mutation", ["directory", "manifest", "root"])
+def test_package_tree_rejects_symlink_entries(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    package_dir, study_manifest_path, _ = _write_package_manifest_fixture(tmp_path)
+    if mutation == "directory":
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (package_dir / "escape").symlink_to(outside, target_is_directory=True)
+    elif mutation == "manifest":
+        manifest_path = package_dir / "manifest.json"
+        outside = tmp_path / "outside-manifest.json"
+        outside.write_bytes(manifest_path.read_bytes())
+        manifest_path.unlink()
+        manifest_path.symlink_to(outside)
+    else:
+        linked_package = tmp_path / "linked-package"
+        linked_package.symlink_to(package_dir, target_is_directory=True)
+        package_dir = linked_package
+
+    with pytest.raises(ValueError, match="symlink"):
+        manuscript_module._validate_package_tree(package_dir, study_manifest_path)
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [

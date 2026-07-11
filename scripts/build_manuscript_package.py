@@ -1588,6 +1588,14 @@ def _validate_package_tree(
     study_manifest_path: Path,
 ) -> dict[str, Any]:
     package_dir = Path(package_dir)
+    if package_dir.is_symlink():
+        raise ValueError("package root must not be a symlink")
+    package_entries = list(package_dir.rglob("*"))
+    symlink_entry = next((path for path in package_entries if path.is_symlink()), None)
+    if symlink_entry is not None:
+        raise ValueError(
+            f"package tree must not contain symlink: {symlink_entry.relative_to(package_dir)}"
+        )
     manifest_path = package_dir / "manifest.json"
     if not manifest_path.is_file():
         raise FileNotFoundError(f"missing package manifest: {manifest_path}")
@@ -1653,9 +1661,7 @@ def _validate_package_tree(
     if len(declared) != expected_artifact_count:
         raise ValueError("package artifact paths must be unique")
     actual = {
-        path.relative_to(package_dir).as_posix()
-        for path in package_dir.rglob("*")
-        if path.is_file()
+        path.relative_to(package_dir).as_posix() for path in package_entries if path.is_file()
     }
     undeclared = actual - declared - {"manifest.json"}
     if undeclared:
