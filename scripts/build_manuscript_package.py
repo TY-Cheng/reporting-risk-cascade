@@ -1558,6 +1558,8 @@ def _validated_artifact_path(
     package_dir: Path,
     record: Any,
     context: str,
+    *,
+    expected_format: str | None = None,
 ) -> str:
     if type(record) is not dict or set(record) != {"path", "sha256"}:
         raise ValueError(f"{context} must contain exactly path and sha256")
@@ -1567,6 +1569,8 @@ def _validated_artifact_path(
     pure = PurePosixPath(relative)
     if pure.is_absolute() or ".." in pure.parts or pure.as_posix() != relative:
         raise ValueError(f"{context}.path must be a package-relative POSIX path")
+    if expected_format is not None and pure.suffix != f".{expected_format}":
+        raise ValueError(f"{context}.path must have exact .{expected_format} suffix")
     path = package_dir.joinpath(*pure.parts)
     if path.is_symlink() or not path.is_file():
         raise FileNotFoundError(f"missing artifact: {relative}")
@@ -1624,12 +1628,26 @@ def _validate_package_tree(
         if type(formats) is not dict or set(formats) != {"csv", "md", "tex"}:
             raise ValueError(f"package table {key} format set must be exactly csv, md, tex")
         for fmt, record in formats.items():
-            declared.add(_validated_artifact_path(package_dir, record, f"tables.{key}.{fmt}"))
+            declared.add(
+                _validated_artifact_path(
+                    package_dir,
+                    record,
+                    f"tables.{key}.{fmt}",
+                    expected_format=fmt,
+                )
+            )
     for key, formats in figures.items():
         if type(formats) is not dict or set(formats) != {"png", "pdf"}:
             raise ValueError(f"package figure {key} format set must be exactly png, pdf")
         for fmt, record in formats.items():
-            declared.add(_validated_artifact_path(package_dir, record, f"figures.{key}.{fmt}"))
+            declared.add(
+                _validated_artifact_path(
+                    package_dir,
+                    record,
+                    f"figures.{key}.{fmt}",
+                    expected_format=fmt,
+                )
+            )
     declared.add(_validated_artifact_path(package_dir, manifest.get("narrative"), "narrative"))
     expected_artifact_count = len(PACKAGE_TABLE_KEYS) * 3 + len(PACKAGE_FIGURE_KEYS) * 2 + 1
     if len(declared) != expected_artifact_count:

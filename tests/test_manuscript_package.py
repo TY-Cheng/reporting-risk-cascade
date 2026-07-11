@@ -984,6 +984,40 @@ def test_package_manifest_requires_matching_full_commit_hashes(
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    ["table_csv_renamed", "table_formats_swapped", "figure_formats_swapped"],
+)
+def test_package_manifest_rejects_artifact_suffix_mismatched_to_format_label(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    package_dir, study_manifest_path, manifest = _write_package_manifest_fixture(tmp_path)
+    tables = manifest["tables"]  # type: ignore[assignment]
+    figures = manifest["figures"]  # type: ignore[assignment]
+    if mutation == "table_csv_renamed":
+        record = tables["table_01"]["csv"]
+        old_path = package_dir / record["path"]
+        new_path = old_path.with_suffix(".bin")
+        old_path.rename(new_path)
+        record.update(
+            {
+                "path": new_path.relative_to(package_dir).as_posix(),
+                "sha256": _sha256(new_path),
+            }
+        )
+    elif mutation == "table_formats_swapped":
+        formats = tables["table_01"]
+        formats["csv"], formats["md"] = formats["md"], formats["csv"]
+    else:
+        formats = figures["figure_01"]
+        formats["png"], formats["pdf"] = formats["pdf"], formats["png"]
+    (package_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact.*suffix"):
+        manuscript_module._validate_package_tree(package_dir, study_manifest_path)
+
+
+@pytest.mark.parametrize(
     ("mutation", "match"),
     [
         ("missing_table", "tables"),
