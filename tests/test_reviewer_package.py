@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+import scripts.build_reviewer_package as reviewer_module
 from scripts.build_reviewer_package import (
     _derive_identity_redactions,
     _redact_entries,
@@ -454,6 +455,43 @@ def test_reviewer_output_is_created_only_after_validation(tmp_path: Path) -> Non
     with pytest.raises(ValueError, match="direct child"):
         _build(fixture, output)
     assert not output.parent.exists()
+
+
+@pytest.mark.parametrize("target", ["study-manifest", "package-manifest", "package-artifact"])
+@pytest.mark.parametrize("prior", [None, b"prior reviewer archive\n"])
+def test_reviewer_rejects_post_validation_copy_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    prior: bytes | None,
+) -> None:
+    fixture = _attested_report_fixture(tmp_path)
+    output = tmp_path / "reviewer.zip"
+    if prior is not None:
+        output.write_bytes(prior)
+    validated_current_evidence = reviewer_module._validated_current_evidence
+
+    def validate_then_mutate(**kwargs: Any) -> dict[str, Any]:
+        evidence = validated_current_evidence(**kwargs)
+        path = {
+            "study-manifest": fixture["manifest"],
+            "package-manifest": fixture["package_manifest"],
+            "package-artifact": fixture["table_03"],
+        }[target]
+        path.write_bytes(path.read_bytes() + b"\n")
+        return evidence
+
+    monkeypatch.setattr(
+        reviewer_module,
+        "_validated_current_evidence",
+        validate_then_mutate,
+    )
+    with pytest.raises(ValueError, match="changed after evidence validation"):
+        _build(fixture, output)
+    if prior is None:
+        assert not output.exists()
+    else:
+        assert output.read_bytes() == prior
 
 
 def test_reviewer_package_root_has_no_symlink_entries(tmp_path: Path) -> None:

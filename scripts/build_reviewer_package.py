@@ -397,6 +397,16 @@ def _validated_current_evidence(
     return evidence
 
 
+def _verified_file_bytes(path: Path, expected_sha256: str, context: str) -> bytes:
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{context} changed after evidence validation") from exc
+    if hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise ValueError(f"{context} changed after evidence validation")
+    return payload
+
+
 def _write_zip_atomic(output: Path, entries: dict[str, bytes]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
@@ -441,9 +451,12 @@ def build_reviewer_package(
         manuscript_package=manuscript_package,
         attestation=attestation_payload,
     )
-    study_manifest = json.loads(
-        (study_dir / "study_run_manifest.json").read_text(encoding="utf-8")
+    study_manifest_bytes = _verified_file_bytes(
+        study_dir / "study_run_manifest.json",
+        evidence["study_manifest_sha256"],
+        "study manifest",
     )
+    study_manifest = json.loads(study_manifest_bytes)
     public_lake = study_manifest["public_lake_provenance"]
     source_inventory = public_lake["source_metadata_inventory"]
 
@@ -458,16 +471,21 @@ def build_reviewer_package(
         entries[f"report/{path}"] = payload
         entries[f"source/{path}"] = payload
 
-    package_manifest = json.loads(
-        (manuscript_package / "manifest.json").read_text(encoding="utf-8")
+    package_manifest_bytes = _verified_file_bytes(
+        manuscript_package / "manifest.json",
+        evidence["package_manifest_sha256"],
+        "package manifest",
     )
+    package_manifest = json.loads(package_manifest_bytes)
     for record in evidence["package_artifacts"]:
         relative = record["path"]
         if _path_forbidden(relative):
             raise ValueError(f"forbidden generated package entry: {relative}")
-        entries[f"generated/manuscript_package/{relative}"] = (
-            manuscript_package / relative
-        ).read_bytes()
+        entries[f"generated/manuscript_package/{relative}"] = _verified_file_bytes(
+            manuscript_package / relative,
+            record["sha256"],
+            f"package artifact {relative}",
+        )
 
     entries["generated/manuscript_package/manifest.json"] = _json_bytes(
         _sanitize(package_manifest)
