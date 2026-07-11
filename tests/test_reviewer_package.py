@@ -50,6 +50,8 @@ WINDOWS_DRIVE_USER_PATH_BACKSLASH = (
 WINDOWS_DRIVE_ROOT_PATH = "Z" + COLON + SLASH + "private" + SLASH + "data.csv"
 BACKSLASH_UNC_PATH = BACKSLASH * 2 + "server" + BACKSLASH + "share" + BACKSLASH + "private.csv"
 FORWARD_UNC_PATH = SLASH * 2 + "server" + SLASH + "share" + SLASH + "private.csv"
+FILE_SHARE_URI = "fi" + "le" + COLON + SLASH * 2 + "server" + SLASH + "share/private.csv"
+SMB_SHARE_URI = "sm" + "b" + COLON + SLASH * 2 + "server" + SLASH + "share/private.csv"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -171,6 +173,53 @@ def _build(fixture: dict[str, Any], output: Path) -> Path:
     )
 
 
+def _replication_shell_block(section: str) -> str:
+    body = reviewer_module.REPLICATION_README.split(f"## {section}", 1)[1]
+    if section == "Bootstrap":
+        body = body.split("## Production", 1)[0]
+    return body.split("```bash", 1)[1].split("```", 1)[0].strip()
+
+
+def _minimal_replication_archive(tmp_path: Path) -> tuple[Path, Path]:
+    extracted = tmp_path / "minimal-extraction"
+    source = extracted / "source"
+    (extracted / "provenance").mkdir(parents=True)
+    _write(source / ".gitignore", ".env\n")
+    _write(source / "README.md", "replication fixture\n")
+    _write_json(
+        extracted / "provenance" / "package_manifest.json",
+        {
+            "upstream_report_commit": "1" * 40,
+            "upstream_study_commit": "2" * 40,
+        },
+    )
+    return extracted, source
+
+
+def _fake_replication_commands(tmp_path: Path) -> tuple[Path, Path]:
+    fake_bin = tmp_path / "fail-fast-bin"
+    fake_bin.mkdir()
+    log = tmp_path / "replication-commands.txt"
+    scripts = {
+        "uv": (
+            "#!/bin/sh\n"
+            'echo "uv:$*" >> "$COMMAND_LOG"\n'
+            'if [ "${FAIL_UV_SYNC:-0}" = 1 ] && [ "${1:-}" = sync ]; then exit 17; fi\n'
+        ),
+        "just": (
+            "#!/bin/sh\n"
+            'echo "just:$*" >> "$COMMAND_LOG"\n'
+            'if [ "${FAIL_FIRST_PRODUCTION:-0}" = 1 ] '
+            "&& [ \"$*\" = 'data full fresh' ]; then exit 19; fi\n"
+        ),
+    }
+    for name, script in scripts.items():
+        executable = fake_bin / name
+        _write(executable, script)
+        executable.chmod(0o755)
+    return fake_bin, log
+
+
 def test_reviewer_suite_is_part_of_core_gate_once() -> None:
     justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
     core = justfile.split("\n_test-core:\n", 1)[1].split("\n_test-public-lake:", 1)[0]
@@ -272,6 +321,24 @@ def test_validate_entries_rejects_embedded_windows_and_unc_paths(
 
 def test_validate_entries_does_not_treat_https_url_as_unc_path() -> None:
     _validate_entries({"generated/results.txt": b"https://www.sec.gov/files/data.zip"})
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        FILE_SHARE_URI,
+        FILE_SHARE_URI.upper(),
+        SMB_SHARE_URI,
+        SMB_SHARE_URI.upper(),
+    ],
+)
+@pytest.mark.parametrize("binary", [False, True], ids=["text", "binary"])
+def test_validate_entries_rejects_local_share_uri_forms(marker: str, binary: bool) -> None:
+    payload = marker.encode()
+    if binary:
+        payload = b"\x89PNG\r\n" + payload
+    with pytest.raises(ValueError, match="local identity/path marker"):
+        _validate_entries({"generated/results.bin": payload})
 
 
 def test_real_allowed_worktree_source_survives_archive_validation() -> None:
@@ -394,7 +461,7 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
         'SEC_USER_AGENT="Poison Contact poison@institution.edu"\n',
         encoding="utf-8",
     )
-    replication_root = tmp_path / "reviewer runtime"
+    replication_root = tmp_path / 'reviewer $HOME $(touch${IFS}ENV_INJECTION) "quoted" runtime'
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     common_log = (
@@ -481,7 +548,7 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
         }
     )
     completed = subprocess.run(
-        ["/bin/bash", "-euo", "pipefail", "-c", bootstrap],
+        ["/bin/bash", "-c", bootstrap],
         cwd=extracted,
         env=scrubbed,
         check=False,
@@ -503,12 +570,26 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
     assert not [path for path in source.rglob("*") if path.name.startswith(".coverage")]
     local_env = (source / ".env").read_text(encoding="utf-8")
     assert "/poison/" not in local_env
+    alternate_home = tmp_path / "alternate-home"
+    alternate_home.mkdir()
+    source_env = {**scrubbed, "HOME": str(alternate_home)}
+    sourced = subprocess.run(
+        ["/bin/bash", "-c", "set -eu; set -a; . ./.env; set +a; env -0"],
+        cwd=source,
+        env=source_env,
+        check=False,
+        capture_output=True,
+    )
+    assert sourced.returncode == 0, sourced.stdout.decode(
+        errors="replace"
+    ) + sourced.stderr.decode(errors="replace")
     env_values = {
-        key: value.strip().strip('"')
-        for line in local_env.splitlines()
-        if line and not line.startswith("#")
-        for key, value in [line.split("=", 1)]
+        key.decode(): value.decode()
+        for item in sourced.stdout.split(b"\0")
+        if item and b"=" in item
+        for key, value in [item.split(b"=", 1)]
     }
+    assert not (source / "ENV_INJECTION").exists()
     path_variables = (
         "WORK_DIR",
         "DATA_DIR",
@@ -541,7 +622,7 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
         value.resolve().relative_to(replication_root.resolve())
         with pytest.raises(ValueError):
             value.resolve().relative_to(source.resolve())
-    assert 'SEC_USER_AGENT="Your Name your.email@institution.edu"' in local_env
+    assert env_values["SEC_USER_AGENT"] == "Your Name your.email@institution.edu"
 
     derivative = _git(source, "rev-parse", "HEAD")
     archived = json.loads((extracted / "provenance" / "package_manifest.json").read_text())
@@ -642,6 +723,103 @@ def test_documented_production_orders_external_canonical_workflow(tmp_path: Path
     assert "private benchmark" in readme.casefold()
     assert "crosswalk" in readme.casefold()
     assert "not distributed" in readme.casefold()
+
+
+@pytest.mark.parametrize(
+    ("dirty_source", "fail_sync", "expected_calls"),
+    [
+        (False, True, ["uv:sync --locked"]),
+        (True, False, []),
+    ],
+    ids=["failed-sync", "dirty-source"],
+)
+def test_documented_bootstrap_fails_fast_under_ordinary_bash(
+    tmp_path: Path,
+    dirty_source: bool,
+    fail_sync: bool,
+    expected_calls: list[str],
+) -> None:
+    extracted, source = _minimal_replication_archive(tmp_path)
+    if dirty_source:
+        _git(source, "init", "-q")
+        _git(source, "config", "user.name", "Fixture")
+        _git(source, "config", "user.email", "fixture@example.invalid")
+        _git(source, "add", "-A")
+        _git(source, "commit", "-q", "-m", "baseline")
+        _write(source / "README.md", "dirty fixture\n")
+    fake_bin, log = _fake_replication_commands(tmp_path)
+    env = {
+        **os.environ,
+        "COMMAND_LOG": str(log),
+        "FAIL_UV_SYNC": "1" if fail_sync else "0",
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "REPLICATION_ROOT": str(tmp_path / "bootstrap-runtime"),
+    }
+
+    completed = subprocess.run(
+        ["/bin/bash", "-c", _replication_shell_block("Bootstrap")],
+        cwd=extracted,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    assert calls == expected_calls
+
+
+def test_documented_production_stops_after_first_failed_command_under_ordinary_bash(
+    tmp_path: Path,
+) -> None:
+    extracted, source = _minimal_replication_archive(tmp_path)
+    fake_bin, log = _fake_replication_commands(tmp_path)
+    env = {
+        **os.environ,
+        "COMMAND_LOG": str(log),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "REPLICATION_ROOT": str(tmp_path / "production-runtime"),
+    }
+    bootstrapped = subprocess.run(
+        ["/bin/bash", "-c", _replication_shell_block("Bootstrap")],
+        cwd=extracted,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert bootstrapped.returncode == 0, bootstrapped.stdout + bootstrapped.stderr
+    with (source / ".env").open("a", encoding="utf-8") as handle:
+        handle.write("SEC_USER_AGENT='Research Team research@institution.edu'\n")
+    log.write_text("", encoding="utf-8")
+    env["FAIL_FIRST_PRODUCTION"] = "1"
+
+    completed = subprocess.run(
+        ["/bin/bash", "-c", _replication_shell_block("Production")],
+        cwd=extracted,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == ["just:data full fresh"]
+
+
+@pytest.mark.parametrize("section", ["Bootstrap", "Production"])
+def test_documented_shell_blocks_enable_fail_fast_before_changing_directory(section: str) -> None:
+    block = _replication_shell_block(section)
+    assert block.splitlines()[0] == "set -euo pipefail"
+    syntax = subprocess.run(
+        ["/bin/bash", "-n"],
+        input=block,
+        text=True,
+        check=False,
+        capture_output=True,
+    )
+    assert syntax.returncode == 0, syntax.stdout + syntax.stderr
 
 
 def test_reviewer_rejects_symlink_package_root(tmp_path: Path) -> None:

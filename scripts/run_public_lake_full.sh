@@ -302,37 +302,27 @@ if [[ "$ENGINE" = "duckdb" && -z "$DUCKDB_TEMP_DIRECTORY" ]]; then
     DUCKDB_TEMP_DIRECTORY="${SILVER_DIR}/._duckdb_tmp"
 fi
 
-BASE_DIR_EXTRA="--bronze-dir ${BRONZE_DIR} --silver-dir ${SILVER_DIR} --gold-dir ${GOLD_DIR}"
 FORCE_EXTRA=""
 if [[ "$FORCE" -eq 1 ]]; then
     FORCE_EXTRA="--force"
 fi
+
+print_command() {
+    printf "+"
+    printf " %q" "$@"
+    printf "\n"
+}
 
 run_step() {
     local name="$1"
     shift
     echo
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] START ${name}"
-    printf "+"
-    printf " %q" "$@"
-    printf "\n"
+    print_command "$@"
     if [[ "$DRY_RUN" -eq 0 ]]; then
         "$@"
     fi
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] END ${name}"
-}
-
-fetch_command() {
-    local source="$1"
-    local extra="$2"
-    # extra is controlled by this script and intentionally split into CLI tokens.
-    # shellcheck disable=SC2086
-    uv run python scripts/fetch_public_data.py \
-        --mode "$source" \
-        --bronze-dir "$BRONZE_DIR" \
-        --silver-dir "$SILVER_DIR" \
-        --gold-dir "$GOLD_DIR" \
-        ${extra} ${FORCE_EXTRA}
 }
 
 active_pids=()
@@ -350,19 +340,34 @@ start_fetch() {
     local source="$1"
     local extra="$2"
     local log="$LOG_DIR/fetch_${source}.log"
+    local -a command=(
+        uv run python scripts/fetch_public_data.py
+        --mode "$source"
+        --bronze-dir "$BRONZE_DIR"
+        --silver-dir "$SILVER_DIR"
+        --gold-dir "$GOLD_DIR"
+    )
+    local -a extra_args=()
+    if [[ -n "$extra" ]]; then
+        read -r -a extra_args <<< "$extra"
+        command+=("${extra_args[@]}")
+    fi
+    if [[ -n "$FORCE_EXTRA" ]]; then
+        command+=("$FORCE_EXTRA")
+    fi
     if [[ "$DRY_RUN" -eq 0 ]]; then
         wait_for_fetch_slot
     fi
     echo
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] START fetch:${source}"
-    echo "+ uv run python scripts/fetch_public_data.py --mode ${source} ${BASE_DIR_EXTRA} ${extra} ${FORCE_EXTRA}"
+    print_command "${command[@]}"
     if [[ "$DRY_RUN" -eq 1 ]]; then
         echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] END fetch:${source}"
         return
     fi
     (
         set -euo pipefail
-        fetch_command "$source" "$extra"
+        "${command[@]}"
     ) >"$log" 2>&1 &
     active_pids+=("$!")
     active_names+=("$source")

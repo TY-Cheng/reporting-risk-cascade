@@ -251,7 +251,8 @@ def _session() -> requests.Session:
 
 
 def _validate_sec_user_agent(value: str | None) -> str:
-    contact = value.strip() if isinstance(value, str) else ""
+    raw_contact = value if isinstance(value, str) else ""
+    contact = raw_contact.strip()
     folded = contact.casefold()
     rejected = (
         "anonymous",
@@ -263,7 +264,8 @@ def _validate_sec_user_agent(value: str | None) -> str:
         "your.email",
     )
     email = re.search(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", contact)
-    if not contact or email is None or any(marker in folded for marker in rejected):
+    has_control = any(ord(character) < 32 or ord(character) == 127 for character in raw_contact)
+    if has_control or not contact or email is None or any(marker in folded for marker in rejected):
         raise ValueError("SEC contact user-agent must identify a real contact and email address")
     return contact
 
@@ -277,10 +279,10 @@ def _rate_limited_get(
     user_agent: str | None,
 ) -> requests.Response:
     global _LAST_REQUEST_AT
+    contact = _validate_sec_user_agent(user_agent)
     elapsed = time.monotonic() - _LAST_REQUEST_AT
     if elapsed < SEC_REQUEST_INTERVAL_SECONDS:
         time.sleep(SEC_REQUEST_INTERVAL_SECONDS - elapsed)
-    contact = _validate_sec_user_agent(user_agent)
     session.headers["User-Agent"] = contact
     response = session.get(url, timeout=timeout, stream=stream)
     _LAST_REQUEST_AT = time.monotonic()

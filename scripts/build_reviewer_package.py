@@ -67,6 +67,7 @@ offline preflight. Every environment, data, artifact, and manuscript directory r
 under an external replication root.
 
 ```bash
+set -euo pipefail
 cd source
 SOURCE_ROOT="$(pwd -P)"
 if [ -z "${REPLICATION_ROOT:-}" ]; then
@@ -117,27 +118,30 @@ mkdir -p \
     "$MKDOCS_SITE_DIR" \
     "$TMPDIR"
 
-cat > .env <<EOF
-PROJECT_ROOT="$SOURCE_ROOT"
-WORK_DIR="$WORK_DIR"
-DATA_DIR="$DATA_DIR"
-ARTIFACTS_DIR="$ARTIFACTS_DIR"
-RAW_DATASET_PATH="$RAW_DATASET_PATH"
-PUBLIC_LAKE_DIR="$PUBLIC_LAKE_DIR"
-LAKE_BRONZE_DIR="$LAKE_BRONZE_DIR"
-LAKE_SILVER_DIR="$LAKE_SILVER_DIR"
-LAKE_GOLD_DIR="$LAKE_GOLD_DIR"
-UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT"
-UV_CACHE_DIR="$UV_CACHE_DIR"
-COVERAGE_FILE="$COVERAGE_FILE"
-PYTHONPYCACHEPREFIX="$PYTHONPYCACHEPREFIX"
-RUFF_CACHE_DIR="$RUFF_CACHE_DIR"
-PYTEST_ADDOPTS="$PYTEST_ADDOPTS"
-MKDOCS_SITE_DIR="$MKDOCS_SITE_DIR"
-TMPDIR="$TMPDIR"
-MANUSCRIPT_DIR="$MANUSCRIPT_DIR"
-SEC_USER_AGENT="$SEC_USER_AGENT"
-EOF
+write_env_assignment() {
+    printf '%s=' "$1" >> .env
+    printf '%q\n' "$2" >> .env
+}
+: > .env
+write_env_assignment PROJECT_ROOT "$SOURCE_ROOT"
+write_env_assignment WORK_DIR "$WORK_DIR"
+write_env_assignment DATA_DIR "$DATA_DIR"
+write_env_assignment ARTIFACTS_DIR "$ARTIFACTS_DIR"
+write_env_assignment RAW_DATASET_PATH "$RAW_DATASET_PATH"
+write_env_assignment PUBLIC_LAKE_DIR "$PUBLIC_LAKE_DIR"
+write_env_assignment LAKE_BRONZE_DIR "$LAKE_BRONZE_DIR"
+write_env_assignment LAKE_SILVER_DIR "$LAKE_SILVER_DIR"
+write_env_assignment LAKE_GOLD_DIR "$LAKE_GOLD_DIR"
+write_env_assignment UV_PROJECT_ENVIRONMENT "$UV_PROJECT_ENVIRONMENT"
+write_env_assignment UV_CACHE_DIR "$UV_CACHE_DIR"
+write_env_assignment COVERAGE_FILE "$COVERAGE_FILE"
+write_env_assignment PYTHONPYCACHEPREFIX "$PYTHONPYCACHEPREFIX"
+write_env_assignment RUFF_CACHE_DIR "$RUFF_CACHE_DIR"
+write_env_assignment PYTEST_ADDOPTS "$PYTEST_ADDOPTS"
+write_env_assignment MKDOCS_SITE_DIR "$MKDOCS_SITE_DIR"
+write_env_assignment TMPDIR "$TMPDIR"
+write_env_assignment MANUSCRIPT_DIR "$MANUSCRIPT_DIR"
+write_env_assignment SEC_USER_AGENT "$SEC_USER_AGENT"
 
 if [ ! -d .git ]; then
     git init -q
@@ -198,6 +202,7 @@ inputs at the paths recorded in `source/.env`. Public acquisition precedes the s
 all durable products except the six-path report surface remain outside `source/`.
 
 ```bash
+set -euo pipefail
 cd source
 set -a
 . ./.env
@@ -450,6 +455,10 @@ def _validate_entries(
     )
     folded_markers = tuple(marker.casefold() for marker in markers if marker)
     folded_identities = tuple(needle.casefold() for needle in identity_needles if needle)
+    local_share_uris = (
+        "fi" + "le" + ":" + "/" * 2,
+        "sm" + "b" + ":" + "/" * 2,
+    )
     separator = r"[\\/]"
     component = r"[^\\/\s]+"
     drive_path = re.compile(
@@ -465,7 +474,12 @@ def _validate_entries(
         if _path_forbidden(name):
             raise ValueError(f"forbidden archive entry: {name}")
         text = payload.decode("utf-8", errors="ignore").casefold()
-        if drive_path.search(text) or backslash_unc.search(text) or forward_unc.search(text):
+        if (
+            drive_path.search(text)
+            or backslash_unc.search(text)
+            or forward_unc.search(text)
+            or any(marker in text for marker in local_share_uris)
+        ):
             raise ValueError(f"local identity/path marker in archive entry: {name}")
         for marker in folded_markers:
             if marker in text:

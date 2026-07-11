@@ -164,6 +164,18 @@ def test_public_lake_dry_run_uses_canonical_report_flags(
         as_of_date_index = report_command.index("--as-of-date")
         assert report_command[as_of_date_index + 1] == "2026-07-06"
 
+    fetch_commands = [
+        shlex.split(line.removeprefix("+ "))
+        for line in completed.stdout.splitlines()
+        if line.startswith("+ ") and "scripts/fetch_public_data.py" in line
+    ]
+    assert len(fetch_commands) == 6
+    expected_lake_dir = data_dir / "public_lake_smoke" if mode == "smoke" else public_lake_dir
+    for command in fetch_commands:
+        assert command[command.index("--bronze-dir") + 1] == str(expected_lake_dir / "bronze")
+        assert command[command.index("--silver-dir") + 1] == str(expected_lake_dir / "silver")
+        assert command[command.index("--gold-dir") + 1] == str(expected_lake_dir / "gold")
+
 
 def test_monitor_once_reuses_one_row_count_report(
     tmp_path: Path,
@@ -721,6 +733,43 @@ def test_request_boundary_rejects_missing_or_placeholder_sec_contact_before_get(
             user_agent=user_agent,
         )
 
+    assert session.calls == 0
+
+
+@pytest.mark.parametrize(
+    "control",
+    ["\r\n", "\0", "\t", "\x7f"],
+    ids=["crlf", "nul", "tab", "del"],
+)
+def test_request_boundary_rejects_sec_contact_controls_before_state_change(
+    monkeypatch: pytest.MonkeyPatch,
+    control: str,
+) -> None:
+    class Session:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.calls = 0
+
+        def get(self, url: str, *, timeout: int, stream: bool = False) -> object:
+            self.calls += 1
+            raise AssertionError("network call must not occur for a control-bearing SEC contact")
+
+    session = Session()
+    sleeps: list[float] = []
+    monkeypatch.setattr(public_lake, "_LAST_REQUEST_AT", 10.0)
+    monkeypatch.setattr(public_lake.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(public_lake.time, "sleep", sleeps.append)
+
+    with pytest.raises(ValueError, match="SEC.*user-agent|contact user-agent"):
+        public_lake._rate_limited_get(
+            session,
+            "https://www.sec.gov/example",
+            timeout=1,
+            user_agent=f"Research{control}Team research@institution.edu",
+        )
+
+    assert sleeps == []
+    assert session.headers == {}
     assert session.calls == 0
 
 
