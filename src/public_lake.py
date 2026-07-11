@@ -42,7 +42,6 @@ from .table_io import (
     write_table,
 )
 
-DEFAULT_USER_AGENT = "Tuoyuan Cheng tuoyuan.cheng@nus.edu.sg"
 PARSER_VERSION = "public-lake-v1"
 SCHEMA_VERSION = "public-lake-v1"
 SEC_REQUEST_INTERVAL_SECONDS = 0.15
@@ -247,10 +246,26 @@ SOURCE_SPECS: Dict[str, SourceSpec] = {
 }
 
 
-def _session(user_agent: str) -> requests.Session:
-    session = requests.Session()
-    session.headers.update({"User-Agent": user_agent})
-    return session
+def _session() -> requests.Session:
+    return requests.Session()
+
+
+def _validate_sec_user_agent(value: str | None) -> str:
+    contact = value.strip() if isinstance(value, str) else ""
+    folded = contact.casefold()
+    rejected = (
+        "anonymous",
+        "placeholder",
+        "example",
+        ".invalid",
+        "your name",
+        "your email",
+        "your.email",
+    )
+    email = re.search(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", contact)
+    if not contact or email is None or any(marker in folded for marker in rejected):
+        raise ValueError("SEC contact user-agent must identify a real contact and email address")
+    return contact
 
 
 def _rate_limited_get(
@@ -259,11 +274,14 @@ def _rate_limited_get(
     *,
     timeout: int,
     stream: bool = False,
+    user_agent: str | None,
 ) -> requests.Response:
     global _LAST_REQUEST_AT
     elapsed = time.monotonic() - _LAST_REQUEST_AT
     if elapsed < SEC_REQUEST_INTERVAL_SECONDS:
         time.sleep(SEC_REQUEST_INTERVAL_SECONDS - elapsed)
+    contact = _validate_sec_user_agent(user_agent)
+    session.headers["User-Agent"] = contact
     response = session.get(url, timeout=timeout, stream=stream)
     _LAST_REQUEST_AT = time.monotonic()
     return response
@@ -424,20 +442,26 @@ def _download_file(
     dest: Path,
     *,
     source_name: str,
-    user_agent: str = DEFAULT_USER_AGENT,
+    user_agent: str | None = None,
     timeout: int = 120,
     extra_metadata: Optional[Dict[str, Any]] = None,
     max_retries: int = 5,
     backoff_seconds: float = 2.0,
 ) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    session = _session(user_agent)
+    session = _session()
     tmp_dest = dest.with_name(f"{dest.name}.part")
     transient_statuses = {429, 500, 502, 503, 504}
     last_error: Optional[Exception] = None
     for attempt in range(1, int(max_retries) + 1):
         try:
-            with _rate_limited_get(session, url, timeout=timeout, stream=True) as response:
+            with _rate_limited_get(
+                session,
+                url,
+                timeout=timeout,
+                stream=True,
+                user_agent=user_agent,
+            ) as response:
                 if response.status_code in transient_statuses:
                     raise requests.HTTPError(
                         f"Transient HTTP {response.status_code} for {url}",
@@ -470,9 +494,9 @@ def _download_file(
     return dest
 
 
-def _fetch_html(url: str, *, user_agent: str = DEFAULT_USER_AGENT, timeout: int = 60) -> str:
-    session = _session(user_agent)
-    response = _rate_limited_get(session, url, timeout=timeout)
+def _fetch_html(url: str, *, user_agent: str | None = None, timeout: int = 60) -> str:
+    session = _session()
+    response = _rate_limited_get(session, url, timeout=timeout, user_agent=user_agent)
     response.raise_for_status()
     return response.text
 
@@ -480,7 +504,7 @@ def _fetch_html(url: str, *, user_agent: str = DEFAULT_USER_AGENT, timeout: int 
 def _discover_links(
     page_url: str,
     *,
-    user_agent: str = DEFAULT_USER_AGENT,
+    user_agent: str | None = None,
     allowed_suffixes: Sequence[str] = (".zip", ".csv", ".json", ".xml", ".txt", ".xlsx", ".pdf"),
 ) -> pd.DataFrame:
     html = _fetch_html(page_url, user_agent=user_agent)
@@ -555,7 +579,7 @@ def fetch_source_assets(
     *,
     mode: str,
     bronze_dir: Path,
-    user_agent: str = DEFAULT_USER_AGENT,
+    user_agent: str | None = None,
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
     match: Optional[str] = None,
@@ -2215,7 +2239,9 @@ def extract_amendment_explanatory_note_window(
     return plain[start:end].strip(), False
 
 
-def _read_optional_amendment_document_text(row: pd.Series, amendment_text_dir: Optional[Path]) -> str:
+def _read_optional_amendment_document_text(
+    row: pd.Series, amendment_text_dir: Optional[Path]
+) -> str:
     if amendment_text_dir is None:
         return ""
     candidates = []
@@ -2259,7 +2285,9 @@ def build_amendment_annotations(
         description = str(row.get("primary_doc_description") or "")
         document_text = _read_optional_amendment_document_text(row, amendment_text_dir)
         note_window, note_missing = extract_amendment_explanatory_note_window(document_text)
-        financial_override = bool(note_window and AMENDMENT_FINANCIAL_KEYWORD_RE.search(note_window))
+        financial_override = bool(
+            note_window and AMENDMENT_FINANCIAL_KEYWORD_RE.search(note_window)
+        )
         admin_candidate = bool(admin_re.search(description))
         mixed = bool(admin_candidate and financial_override)
         if financial_override:
@@ -2750,10 +2778,16 @@ def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
     if "issuer_cik" not in filing.columns or "fiscal_year" not in filing.columns:
         return filing
     sort_cols = [
-        col for col in ["issuer_cik", "fiscal_year", "origin_date", "accession"] if col in filing.columns
+        col
+        for col in ["issuer_cik", "fiscal_year", "origin_date", "accession"]
+        if col in filing.columns
     ]
     work = filing.sort_values(sort_cols, kind="mergesort").copy()
-    form = work["form"].astype(str).str.upper() if "form" in work.columns else pd.Series("", index=work.index)
+    form = (
+        work["form"].astype(str).str.upper()
+        if "form" in work.columns
+        else pd.Series("", index=work.index)
+    )
     work["_annual_form_priority"] = np.select(
         [form.eq("10-K"), form.eq("10-K/A")],
         [0, 1],
@@ -2920,8 +2954,20 @@ def _add_public_history_and_filing_friction_features(
             lambda value: "" if pd.isna(value) else str(value).strip()
         )
     public_history_specs = [
-        ("public_history_comment_thread", comment_thread.rename(columns={"first_public_date": "event_date"}), "event_date", None, "correction_type"),
-        ("public_history_amendment", correction_event, "public_date", "amendment_10x_a", "correction_type"),
+        (
+            "public_history_comment_thread",
+            comment_thread.rename(columns={"first_public_date": "event_date"}),
+            "event_date",
+            None,
+            "correction_type",
+        ),
+        (
+            "public_history_amendment",
+            correction_event,
+            "public_date",
+            "amendment_10x_a",
+            "correction_type",
+        ),
         ("public_history_8k_301", item_event, "public_date", "3.01", "item_code"),
         ("public_history_8k_401", item_event, "public_date", "4.01", "item_code"),
         ("public_history_8k_402", item_event, "public_date", "4.02", "item_code"),
@@ -2938,9 +2984,13 @@ def _add_public_history_and_filing_friction_features(
                 type_col=type_col,
             )
 
-    filing["filing_friction_is_nt"] = filing["form"].fillna("").astype(str).str.startswith("NT ").astype(int)
+    filing["filing_friction_is_nt"] = (
+        filing["form"].fillna("").astype(str).str.startswith("NT ").astype(int)
+    )
     nt_forms = {"NT 10-K", "NT 10-Q"}
-    nt = filing.loc[filing["form"].isin(nt_forms), ["issuer_cik", "report_date", "origin_date"]].copy()
+    nt = filing.loc[
+        filing["form"].isin(nt_forms), ["issuer_cik", "report_date", "origin_date"]
+    ].copy()
     if nt.empty:
         filing["filing_friction_nt_pre_origin"] = 0
         filing["filing_friction_nt_delay_days"] = np.nan
@@ -2963,7 +3013,9 @@ def _add_public_history_and_filing_friction_features(
     return filing.drop(columns=["nt_public_date"])
 
 
-def _k402_label_and_unknown(base: pd.DataFrame, issuer_8k_item_event: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
+def _k402_label_and_unknown(
+    base: pd.DataFrame, issuer_8k_item_event: pd.DataFrame
+) -> Tuple[pd.Series, pd.Series]:
     if issuer_8k_item_event.empty:
         labels = pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
         unknown = pd.Series(np.zeros(len(base), dtype="int64"), index=base.index)
@@ -3019,7 +3071,9 @@ def _add_partner_prior_features(
     engagement_path = silver_dir / "partner_issuer_engagement.csv.gz"
     partner_history_path = silver_dir / "partner_risk_history.csv.gz"
     issuer_history_path = silver_dir / "partner_issuer_risk_history.csv.gz"
-    if not (engagement_path.exists() and partner_history_path.exists() and issuer_history_path.exists()):
+    if not (
+        engagement_path.exists() and partner_history_path.exists() and issuer_history_path.exists()
+    ):
         return filing
     engagement = _read_csv_with_engine(
         engagement_path,
@@ -3256,11 +3310,12 @@ def _duckdb_source_or_empty(
     empty_columns: Sequence[Tuple[str, str]],
 ) -> None:
     if path.exists():
-        con.execute(f"CREATE OR REPLACE TEMP VIEW {view_name} AS SELECT * FROM {_duckdb_table_source(path)}")
+        con.execute(
+            f"CREATE OR REPLACE TEMP VIEW {view_name} AS SELECT * FROM {_duckdb_table_source(path)}"
+        )
         return
     empty_select = ", ".join(
-        f"CAST(NULL AS {sql_type}) AS {_duckdb_identifier(col)}"
-        for col, sql_type in empty_columns
+        f"CAST(NULL AS {sql_type}) AS {_duckdb_identifier(col)}" for col, sql_type in empty_columns
     )
     con.execute(f"CREATE OR REPLACE TEMP VIEW {view_name} AS SELECT {empty_select} WHERE false")
 
@@ -3935,7 +3990,9 @@ def _build_gold_panels_duckdb(
             ).fetchone()[0]
         )
         if negative_partner_rows:
-            raise ValueError("Partner other-issuer prior exposure became negative before clipping.")
+            raise ValueError(
+                "Partner other-issuer prior exposure became negative before clipping."
+            )
 
         has_xbrl_summary = _create_duckdb_xbrl_summary_view(con, silver_dir=silver_dir)
         has_xbrl_features = _create_duckdb_xbrl_core_features_view(con, silver_dir=silver_dir)
@@ -4660,7 +4717,9 @@ def build_gold_panels(
             on=["issuer_cik", "fiscal_year"],
             how="inner",
         )
-        form_ap_base = form_ap_base.loc[form_ap_base["filing_date"].lt(form_ap_base["origin_date"])]
+        form_ap_base = form_ap_base.loc[
+            form_ap_base["filing_date"].lt(form_ap_base["origin_date"])
+        ]
         form_ap_summary = form_ap_base.groupby(["accession", "issuer_cik"], as_index=False).agg(
             form_ap_filing_count=("form_filing_id", "nunique"),
             form_ap_unique_partners=("engagement_partner_id", "nunique"),
@@ -5017,7 +5076,9 @@ def build_public_lake(
         DagTask("normalize_inspections", (), normalize_inspections_task),
         DagTask("normalize_fsds", (), normalize_fsds_task),
         DagTask("normalize_notes", (), normalize_notes_task),
-        DagTask("derived_tables", ("normalize_submissions", "normalize_form_ap"), derived_tables_task),
+        DagTask(
+            "derived_tables", ("normalize_submissions", "normalize_form_ap"), derived_tables_task
+        ),
         DagTask("empty_tables", ("derived_tables",), empty_tables_task),
         DagTask(
             "build_gold",

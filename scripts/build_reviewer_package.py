@@ -11,7 +11,7 @@ import tempfile
 import tomllib
 import zipfile
 from datetime import datetime, timedelta
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 
@@ -53,27 +53,177 @@ IDENTITY_PLACEHOLDERS = {
     "repository_owner": "anonymous-owner",
     "copyright_holder": "Anonymous Copyright Holder",
 }
-CODE_FENCE = "`" * 3
-REPLICATION_README = f"""# Replication
+REPLICATION_README = """# Replication
 
-{CODE_FENCE}bash
+The archive records the upstream study and report commits in
+`provenance/package_manifest.json`. The commands below create a separate, anonymous
+derivative repository; they never reuse those upstream identities.
+
+## Bootstrap
+
+Run this block from the extracted archive root. It writes a source-local, ignored `.env`
+with an intentionally rejected SEC contact template; no real identity is needed for this
+offline preflight. Every environment, data, artifact, and manuscript directory remains
+under an external replication root.
+
+```bash
 cd source
+SOURCE_ROOT="$(pwd -P)"
+if [ -z "${REPLICATION_ROOT:-}" ]; then
+    REPLICATION_ROOT="$(cd .. && pwd -P)/replication-work"
+fi
+case "$REPLICATION_ROOT" in
+    /*) ;;
+    *) REPLICATION_ROOT="$(cd .. && pwd -P)/$REPLICATION_ROOT" ;;
+esac
+mkdir -p "$REPLICATION_ROOT"
+REPLICATION_ROOT="$(cd "$REPLICATION_ROOT" && pwd -P)"
+case "$REPLICATION_ROOT" in
+    "$SOURCE_ROOT"|"$SOURCE_ROOT"/*)
+        echo "REPLICATION_ROOT must be outside source/" >&2
+        exit 1
+        ;;
+esac
+SEC_USER_AGENT="Your Name your.email@institution.edu"
+export SOURCE_ROOT REPLICATION_ROOT SEC_USER_AGENT
+export PROJECT_ROOT="$SOURCE_ROOT"
+export WORK_DIR="$REPLICATION_ROOT/work"
+export DATA_DIR="$REPLICATION_ROOT/data"
+export ARTIFACTS_DIR="$REPLICATION_ROOT/artifacts"
+export MANUSCRIPT_DIR="$REPLICATION_ROOT/manuscript"
+export UV_PROJECT_ENVIRONMENT="$REPLICATION_ROOT/uv-venv"
+export UV_CACHE_DIR="$REPLICATION_ROOT/uv-cache"
+export PUBLIC_LAKE_DIR="$DATA_DIR/public_lake"
+export LAKE_BRONZE_DIR="$PUBLIC_LAKE_DIR/bronze"
+export LAKE_SILVER_DIR="$PUBLIC_LAKE_DIR/silver"
+export LAKE_GOLD_DIR="$PUBLIC_LAKE_DIR/gold"
+export RAW_DATASET_PATH="$DATA_DIR/raw/raw_dataset_misstatement.parquet"
+mkdir -p "$WORK_DIR" "$DATA_DIR" "$ARTIFACTS_DIR" "$MANUSCRIPT_DIR" "$UV_CACHE_DIR"
+
+cat > .env <<EOF
+PROJECT_ROOT="$SOURCE_ROOT"
+WORK_DIR="$WORK_DIR"
+DATA_DIR="$DATA_DIR"
+ARTIFACTS_DIR="$ARTIFACTS_DIR"
+RAW_DATASET_PATH="$RAW_DATASET_PATH"
+PUBLIC_LAKE_DIR="$PUBLIC_LAKE_DIR"
+LAKE_BRONZE_DIR="$LAKE_BRONZE_DIR"
+LAKE_SILVER_DIR="$LAKE_SILVER_DIR"
+LAKE_GOLD_DIR="$LAKE_GOLD_DIR"
+UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT"
+UV_CACHE_DIR="$UV_CACHE_DIR"
+MANUSCRIPT_DIR="$MANUSCRIPT_DIR"
+SEC_USER_AGENT="$SEC_USER_AGENT"
+EOF
+
+if [ ! -d .git ]; then
+    git init -q
+fi
+git config user.name "Anonymous Reviewer"
+git config user.email "reviewer@example.invalid"
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+    git add -A
+    git commit -q -m "Initialize anonymous replication baseline"
+fi
+DERIVATIVE_COMMIT="$(git rev-parse --verify HEAD)"
+test -z "$(git status --porcelain --untracked-files=all)"
+export DERIVATIVE_COMMIT
+
+python3 - "$REPLICATION_ROOT/replication_identity.json" \
+    "../provenance/package_manifest.json" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+output = pathlib.Path(sys.argv[1])
+upstream = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+derivative = os.environ["DERIVATIVE_COMMIT"]
+upstream_study = upstream["upstream_study_commit"]
+upstream_report = upstream["upstream_report_commit"]
+if derivative in {upstream_study, upstream_report}:
+    raise SystemExit("derivative commit must differ from archived upstream commits")
+output.write_text(
+    json.dumps(
+        {
+            "derivative_commit": derivative,
+            "upstream_report_commit": upstream_report,
+            "upstream_study_commit": upstream_study,
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+PY
+
 uv sync --locked
 just check
-just task benchmark sample artifacts/reviewer_smoke
+```
+
+The `just check` above is the normal source preflight. The archive can also be inspected
+with the repository's Gitless `just --list` and `just check` gate before bootstrap.
+
+## Production
+
+Run this block from the extracted archive root after supplying the licensed private
+inputs at the paths recorded in `source/.env`. Public acquisition precedes the study;
+all durable products except the six-path report surface remain outside `source/`.
+
+```bash
+cd source
+set -a
+. ./.env
+set +a
+: "${SEC_USER_AGENT:?Set SEC_USER_AGENT to a real contact identity and email}"
+if [ "$SEC_USER_AGENT" = "Your Name your.email@institution.edu" ]; then
+    echo "Replace the SEC_USER_AGENT template with a real contact identity and email" >&2
+    exit 1
+fi
+SOURCE_ROOT="$(pwd -P)"
+STUDY_DIR="$ARTIFACTS_DIR/full_with_peer"
+MANUSCRIPT_PACKAGE="$MANUSCRIPT_DIR/manuscript_package"
+ATTESTATION="$MANUSCRIPT_DIR/canonical_attestation.json"
+REVIEWER_ZIP="$MANUSCRIPT_DIR/reporting-risk-cascade-reviewer.zip"
+test -z "$(git status --porcelain --untracked-files=all)"
+STUDY_COMMIT="$(git rev-parse --verify HEAD)"
+
 just data full fresh
-just task study raw artifacts/full_with_peer extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
-just manuscript study_dir=artifacts/full_with_peer out_dir=artifacts/manuscript_package
-just snapshot study_dir=artifacts/full_with_peer
-just verify-canonical study_dir=artifacts/full_with_peer package_dir=artifacts/manuscript_package
-{CODE_FENCE}
+just task study raw "$STUDY_DIR" extra="--peer-comparison-mode full --peer-target both --parallel-jobs 4 --model-threads 2 --seed-policy task-isolated"
+uv run python scripts/build_manuscript_package.py \
+    --study-dir "$STUDY_DIR" \
+    --out-dir "$MANUSCRIPT_PACKAGE"
+uv run python scripts/refresh_results_snapshot.py \
+    --study-dir "$STUDY_DIR" \
+    --docs-file "$SOURCE_ROOT/docs/results_snapshot.md" \
+    --manuscript-package "$MANUSCRIPT_PACKAGE"
+just check
+test "$(git rev-parse --verify HEAD)" = "$STUDY_COMMIT"
 
-The raw detected-misstatement benchmark and WRDS crosswalk are not distributed.
-Authorized users must supply them at the configured paths before the full run.
+uv run python scripts/verify_canonical_run.py \
+    --repo-root "$SOURCE_ROOT" \
+    --study-dir "$STUDY_DIR" \
+    --manuscript-package "$MANUSCRIPT_PACKAGE" \
+    --expected-as-of-date 2026-07-06 \
+    --attestation-output "$ATTESTATION"
+git add docs/results_snapshot.md docs/assets/results_snapshot
+git commit -m "Refresh canonical results snapshot"
+REPORT_COMMIT="$(git rev-parse --verify HEAD)"
+test "$(git rev-parse --verify "${REPORT_COMMIT}^")" = "$STUDY_COMMIT"
 
-The source tree is an identity-redacted derivative of the recorded study commit.
-Refreshed report snapshot files from the report commit overlay their normal source paths.
-Before network acquisition, an authorized user must set a compliant SEC contact user-agent.
+uv run python scripts/build_reviewer_package.py \
+    --repo-root "$SOURCE_ROOT" \
+    --study-dir "$STUDY_DIR" \
+    --manuscript-package "$MANUSCRIPT_PACKAGE" \
+    --attestation "$ATTESTATION" \
+    --output "$REVIEWER_ZIP"
+```
+
+The raw detected-misstatement private benchmark and WRDS crosswalk are not distributed.
+Authorized users must supply them at the configured external paths before the production
+run. The resulting reviewer ZIP retains the archived upstream commit IDs in its manifest;
+`replication_identity.json` records the anonymous derivative separately.
 """
 
 
@@ -114,8 +264,12 @@ def _sanitize(value: Any) -> Any:
         return {key: _sanitize(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_sanitize(item) for item in value]
-    if isinstance(value, str) and Path(value).is_absolute():
-        return f"<external>/{Path(value).name}"
+    if isinstance(value, str):
+        posix = PurePosixPath(value)
+        windows = PureWindowsPath(value)
+        if posix.is_absolute() or windows.is_absolute():
+            basename = windows.name if windows.is_absolute() else posix.name
+            return f"<external>/{basename}"
     return value
 
 
@@ -262,10 +416,15 @@ def _validate_entries(
     )
     folded_markers = tuple(marker.casefold() for marker in markers if marker)
     folded_identities = tuple(needle.casefold() for needle in identity_needles if needle)
+    drive_path = re.compile(r"(?<![a-z0-9])[a-z]:[\\/]", flags=re.IGNORECASE)
+    backslash_unc = re.compile(r"\\\\[^\\/\s]+[\\/][^\\/\s]+")
+    forward_unc = re.compile(r"(?<![:/a-z0-9])//[^/\s]+/[^/\s]+", flags=re.IGNORECASE)
     for name, payload in entries.items():
         if _path_forbidden(name):
             raise ValueError(f"forbidden archive entry: {name}")
         text = payload.decode("utf-8", errors="ignore").casefold()
+        if drive_path.search(text) or backslash_unc.search(text) or forward_unc.search(text):
+            raise ValueError(f"local identity/path marker in archive entry: {name}")
         for marker in folded_markers:
             if marker in text:
                 raise ValueError(f"local identity/path marker in archive entry: {name}")

@@ -87,6 +87,8 @@ def test_project_identity_uses_reporting_risk_cascade_name() -> None:
     assert "hide:" in home
     assert "reproducible research workspace" in readme
     assert "reporting-risk-cascade-manuscript" in env_example
+    assert 'SEC_USER_AGENT="Your Name your.email@institution.edu"' in env_example
+    assert "must replace" in env_example.casefold()
 
 
 def test_mkdocs_enables_richer_material_navigation_and_content_features() -> None:

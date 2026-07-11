@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -54,6 +55,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT / "config" / "public_data.yaml",
         help="Public-data config used for defaults such as as-of date",
+    )
+    parser.add_argument(
+        "--user-agent",
+        default=os.getenv("SEC_USER_AGENT"),
+        help=(
+            "Real SEC contact identity and email; overrides SEC_USER_AGENT. "
+            "Required only when a request is issued."
+        ),
     )
     parser.add_argument(
         "--bronze-dir",
@@ -307,6 +316,7 @@ def main() -> None:
             limit_links=args.limit_links if args.limit_links > 0 else None,
             list_only=args.list_only,
             force=args.force,
+            user_agent=args.user_agent,
         )
         print(manifest.head().to_string())
         return

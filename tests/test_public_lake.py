@@ -6,6 +6,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import zipfile
 from argparse import Namespace
 from datetime import date
@@ -14,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from scripts import monitor_public_lake
+from scripts import fetch_public_data, monitor_public_lake
 import src.public_lake as public_lake
 from src.public_lake import (
     DagTask,
@@ -589,7 +590,10 @@ def test_metadata_hash_table_readers_and_link_filters_are_defensive(
         limit_links=1,
     )
     assert filtered["basename"].tolist() == ["fsds_2021q1.zip"]
-    assert [day.isoformat() for day in public_lake._iter_business_days(date(2021, 1, 1), date(2021, 1, 4))] == [
+    assert [
+        day.isoformat()
+        for day in public_lake._iter_business_days(date(2021, 1, 1), date(2021, 1, 4))
+    ] == [
         "2021-01-01",
         "2021-01-04",
     ]
@@ -604,8 +608,8 @@ def test_metadata_hash_table_readers_and_link_filters_are_defensive(
 def test_low_level_download_and_html_fetch_are_mockable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = public_lake._session("unit-test-agent")
-    assert session.headers["User-Agent"] == "unit-test-agent"
+    session = public_lake._session()
+    assert isinstance(session, public_lake.requests.Session)
 
     sleeps: list[float] = []
     monkeypatch.setattr(public_lake.time, "sleep", lambda seconds: sleeps.append(float(seconds)))
@@ -635,9 +639,7 @@ def test_low_level_download_and_html_fetch_are_mockable(
 
         def raise_for_status(self) -> None:
             if self.status_code >= 400:
-                raise public_lake.requests.HTTPError(
-                    f"HTTP {self.status_code}", response=self
-                )
+                raise public_lake.requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
     class FakeSession:
         def __init__(self, responses: list[FakeResponse]) -> None:
@@ -655,11 +657,12 @@ def test_low_level_download_and_html_fetch_are_mockable(
             FakeResponse(status_code=200, body=b"abc"),
         ]
     )
-    monkeypatch.setattr(public_lake, "_session", lambda user_agent: retry_session)
+    monkeypatch.setattr(public_lake, "_session", lambda: retry_session)
     dest = public_lake._download_file(
         "https://example.com/file.csv",
         tmp_path / "file.csv",
         source_name="toy",
+        user_agent="Research Team research@institution.edu",
         max_retries=2,
         backoff_seconds=0,
         extra_metadata={"kind": "unit"},
@@ -673,8 +676,82 @@ def test_low_level_download_and_html_fetch_are_mockable(
     assert sleeps
 
     html_session = FakeSession([FakeResponse(status_code=200, text="<html>ok</html>")])
-    monkeypatch.setattr(public_lake, "_session", lambda user_agent: html_session)
-    assert public_lake._fetch_html("https://example.com/page") == "<html>ok</html>"
+    monkeypatch.setattr(public_lake, "_session", lambda: html_session)
+    assert (
+        public_lake._fetch_html(
+            "https://example.com/page",
+            user_agent="Research Team research@institution.edu",
+        )
+        == "<html>ok</html>"
+    )
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    [
+        None,
+        " ",
+        "Anonymous Reviewer reviewer@institution.edu",
+        "Researcher researcher@example.com",
+        "Researcher researcher@institution.invalid",
+        "Your Name your.email@institution.edu",
+    ],
+)
+def test_request_boundary_rejects_missing_or_placeholder_sec_contact_before_get(
+    monkeypatch: pytest.MonkeyPatch,
+    user_agent: str | None,
+) -> None:
+    class Session:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.calls = 0
+
+        def get(self, url: str, *, timeout: int, stream: bool = False) -> object:
+            self.calls += 1
+            raise AssertionError("network call must not occur for an invalid SEC contact")
+
+    session = Session()
+    monkeypatch.setattr(public_lake, "_LAST_REQUEST_AT", 0.0)
+
+    with pytest.raises(ValueError, match="SEC.*user-agent|contact user-agent"):
+        public_lake._rate_limited_get(
+            session,
+            "https://www.sec.gov/example",
+            timeout=1,
+            user_agent=user_agent,
+        )
+
+    assert session.calls == 0
+
+
+def test_request_boundary_sets_exact_valid_sec_contact_before_get(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        pass
+
+    class Session:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.calls = 0
+
+        def get(self, url: str, *, timeout: int, stream: bool = False) -> Response:
+            self.calls += 1
+            assert self.headers["User-Agent"] == "Research Team research@institution.edu"
+            return Response()
+
+    session = Session()
+    monkeypatch.setattr(public_lake, "_LAST_REQUEST_AT", 0.0)
+
+    response = public_lake._rate_limited_get(
+        session,
+        "https://www.sec.gov/example",
+        timeout=1,
+        user_agent="Research Team research@institution.edu",
+    )
+
+    assert isinstance(response, Response)
+    assert session.calls == 1
 
 
 def test_table_reader_routes_cover_supported_suffixes(
@@ -700,9 +777,7 @@ def test_table_reader_routes_cover_supported_suffixes(
     assert public_lake._read_table_auto(spaced).to_dict("records") == [{"a": 1, "b": 2}]
     assert public_lake._read_table_auto(xml_path).shape == (1, 1)
     assert public_lake._read_table_auto(xlsx_path).shape == (1, 1)
-    assert public_lake._read_delimited_table(comma_path).to_dict("records") == [
-        {"a": 1, "b": 2}
-    ]
+    assert public_lake._read_delimited_table(comma_path).to_dict("records") == [{"a": 1, "b": 2}]
     assert public_lake._read_header_columns(pipe_header) == ["a", "b"]
     assert public_lake._read_header_columns(comma_header) == ["a", "b"]
 
@@ -728,15 +803,158 @@ def test_fetch_source_assets_list_only_modes_do_not_touch_network_payloads(
     monkeypatch.setattr(
         public_lake,
         "_discover_links",
-        lambda *args, **kwargs: pd.DataFrame(
-            columns=["page_url", "url", "basename", "suffix"]
-        ),
+        lambda *args, **kwargs: pd.DataFrame(columns=["page_url", "url", "basename", "suffix"]),
     )
     empty = fetch_source_assets(mode="fsds", bronze_dir=tmp_path, list_only=True)
     assert empty.empty
     assert (tmp_path / "fsds" / "manifest.csv").exists()
     with pytest.raises(ValueError, match="Unsupported source mode"):
         fetch_source_assets(mode="unknown", bronze_dir=tmp_path, list_only=True)
+
+
+def test_page_list_only_requires_contact_but_direct_and_daily_listings_are_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Response:
+        text = '<a href="/files/fsds_2021q1.zip">zip</a>'
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class Session:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.calls = 0
+
+        def get(self, url: str, *, timeout: int, stream: bool = False) -> Response:
+            self.calls += 1
+            return Response()
+
+    session = Session()
+    monkeypatch.setattr(public_lake, "_session", lambda: session)
+    monkeypatch.setattr(public_lake, "_LAST_REQUEST_AT", 0.0)
+
+    with pytest.raises(ValueError, match="SEC.*user-agent|contact user-agent"):
+        fetch_source_assets(
+            mode="fsds",
+            bronze_dir=tmp_path / "page",
+            list_only=True,
+            user_agent=None,
+        )
+    assert session.calls == 0
+
+    monkeypatch.setattr(
+        public_lake,
+        "_session",
+        lambda: (_ for _ in ()).throw(AssertionError("offline listing opened a session")),
+    )
+    direct = fetch_source_assets(
+        mode="sec-bulk",
+        bronze_dir=tmp_path / "direct",
+        list_only=True,
+        user_agent=None,
+    )
+    daily = fetch_source_assets(
+        mode="comment-letters",
+        bronze_dir=tmp_path / "daily",
+        start_date="2021-01-01",
+        end_date="2021-01-04",
+        list_only=True,
+        user_agent=None,
+    )
+    assert set(direct["status"]) == {"listed"}
+    assert daily["basename"].tolist() == ["master.20210101.idx", "master.20210104.idx"]
+
+
+@pytest.mark.parametrize(
+    ("env_contact", "flag_contact", "expected"),
+    [
+        (
+            "Environment Team environment@institution.edu",
+            None,
+            "Environment Team environment@institution.edu",
+        ),
+        (
+            "Environment Team environment@institution.edu",
+            "Flag Team flag@institution.edu",
+            "Flag Team flag@institution.edu",
+        ),
+    ],
+    ids=["environment", "flag-overrides-environment"],
+)
+def test_fetch_cli_propagates_sec_contact_with_flag_precedence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_contact: str,
+    flag_contact: str | None,
+    expected: str,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_fetch_source_assets(**kwargs: object) -> pd.DataFrame:
+        captured.update(kwargs)
+        return pd.DataFrame(columns=["status"])
+
+    monkeypatch.setenv("SEC_USER_AGENT", env_contact)
+    monkeypatch.setattr(public_lake, "fetch_source_assets", fake_fetch_source_assets)
+    argv = [
+        "fetch_public_data.py",
+        "--mode",
+        "sec-bulk",
+        "--bronze-dir",
+        str(tmp_path),
+        "--end-year",
+        "2021",
+        "--list-only",
+    ]
+    if flag_contact is not None:
+        argv.extend(["--user-agent", flag_contact])
+    monkeypatch.setattr(sys, "argv", argv)
+
+    fetch_public_data.main()
+
+    assert captured["user_agent"] == expected
+
+
+def test_build_lake_cli_remains_contact_free(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build_public_lake(**kwargs: object) -> dict[str, Path]:
+        captured.update(kwargs)
+        return {"manifest": tmp_path / "manifest.json"}
+
+    monkeypatch.setenv("SEC_USER_AGENT", "placeholder")
+    monkeypatch.setattr(public_lake, "build_public_lake", fake_build_public_lake)
+    monkeypatch.setattr(
+        public_lake,
+        "fetch_source_assets",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("build-lake must not fetch")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "fetch_public_data.py",
+            "--mode",
+            "build-lake",
+            "--config",
+            str(tmp_path / "missing.yaml"),
+            "--bronze-dir",
+            str(tmp_path / "bronze"),
+            "--silver-dir",
+            str(tmp_path / "silver"),
+            "--gold-dir",
+            str(tmp_path / "gold"),
+        ],
+    )
+
+    fetch_public_data.main()
+
+    assert captured["bronze_dir"] == tmp_path / "bronze"
+    assert "user_agent" not in captured
 
 
 def test_fetch_source_assets_downloads_listing_and_refreshes_invalid_cache(
@@ -750,7 +968,7 @@ def test_fetch_source_assets_downloads_listing_and_refreshes_invalid_cache(
         dest: Path,
         *,
         source_name: str,
-        user_agent: str = public_lake.DEFAULT_USER_AGENT,
+        user_agent: str | None = None,
         timeout: int = 120,
         extra_metadata: dict[str, object] | None = None,
         max_retries: int = 5,
@@ -818,9 +1036,7 @@ def test_duckdb_empty_source_and_csv_engine_fallback(
         con.close()
 
     csv_path = tmp_path / "fallback.csv"
-    pd.DataFrame({"d": ["2021-01-01"], "value": [1], "drop_me": [2]}).to_csv(
-        csv_path, index=False
-    )
+    pd.DataFrame({"d": ["2021-01-01"], "value": [1], "drop_me": [2]}).to_csv(csv_path, index=False)
 
     def fail_duckdb_read(*args: object, **kwargs: object) -> pd.DataFrame:
         raise RuntimeError("planned duckdb csv failure")
@@ -1113,15 +1329,18 @@ def test_csv_gz_manifest_archives_and_batch_helpers_cover_resume_guards(
     assert public_lake._parquet_files(single) == [single]
     with pytest.raises(ValueError, match="requires at least one file"):
         public_lake._parquet_source_from_files([])
-    assert public_lake._copy_parquet_query_from_parts(
-        parts_dir=tmp_path / "missing_parts",
-        dest=tmp_path / "out.parquet",
-        query="SELECT * FROM {source}",
-        threads=1,
-        memory_limit="128MB",
-        temp_directory=tmp_path / "duckdb_tmp",
-        max_temp_directory_size="1GB",
-    ) is False
+    assert (
+        public_lake._copy_parquet_query_from_parts(
+            parts_dir=tmp_path / "missing_parts",
+            dest=tmp_path / "out.parquet",
+            query="SELECT * FROM {source}",
+            threads=1,
+            memory_limit="128MB",
+            temp_directory=tmp_path / "duckdb_tmp",
+            max_temp_directory_size="1GB",
+        )
+        is False
+    )
 
     duplicate_parts = tmp_path / "duplicate_parts"
     write_table(pd.DataFrame({"adsh": ["a", "a"]}), duplicate_parts / "part.parquet")
@@ -1992,9 +2211,9 @@ def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path
             },
         ],
     )
-    pd.DataFrame(
-        columns=["issuer_cik", "public_date", "amendment_annotation"]
-    ).to_csv(silver / "amendment_annotation.csv.gz", index=False, compression="gzip")
+    pd.DataFrame(columns=["issuer_cik", "public_date", "amendment_annotation"]).to_csv(
+        silver / "amendment_annotation.csv.gz", index=False, compression="gzip"
+    )
 
     outputs = public_lake.build_partner_risk_histories(
         form_ap_event_path=silver / "form_ap_event.parquet",
@@ -2116,7 +2335,7 @@ def test_fetch_source_assets_uses_cached_files_without_force(
         raise AssertionError("cached source should not be downloaded")
 
     monkeypatch.setattr("src.public_lake._download_file", fail_download)
-    manifest = fetch_source_assets(mode="sec-bulk", bronze_dir=bronze)
+    manifest = fetch_source_assets(mode="sec-bulk", bronze_dir=bronze, user_agent=None)
 
     assert set(manifest["status"]) == {"cached"}
 
@@ -2411,7 +2630,7 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
                     "sic": 1234,
                     "sic_description": "A",
                     "entity_type": "operating",
-                }
+                },
             ]
         ),
         silver / "issuer_dim.parquet",
@@ -2482,8 +2701,18 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
     write_table(
         pd.DataFrame(
             [
-                {"accession": "a-2020", "xbrl_fact_count": 2, "xbrl_unique_tags": 2, "xbrl_unique_units": 1},
-                {"accession": "a-2021", "xbrl_fact_count": 2, "xbrl_unique_tags": 2, "xbrl_unique_units": 1},
+                {
+                    "accession": "a-2020",
+                    "xbrl_fact_count": 2,
+                    "xbrl_unique_tags": 2,
+                    "xbrl_unique_units": 1,
+                },
+                {
+                    "accession": "a-2021",
+                    "xbrl_fact_count": 2,
+                    "xbrl_unique_tags": 2,
+                    "xbrl_unique_units": 1,
+                },
             ]
         ),
         silver / "xbrl_fact_summary.parquet",
@@ -2562,7 +2791,7 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
                     "form_filing_id": "F-other-post",
                     "engagement_partner_id": "P3",
                     "number_of_participants": 20,
-                }
+                },
             ]
         ),
         silver / "form_ap_event.parquet",
@@ -2739,7 +2968,9 @@ def test_parquet_gold_build_matches_csv_gz_gold_build(tmp_path: Path) -> None:
     )
 
     csv_gz_panel = _sort_gold_for_compare(read_table(gold_csv_gz / "issuer_origin_panel.parquet"))
-    parquet_panel = _sort_gold_for_compare(read_table(gold_parquet / "issuer_origin_panel.parquet"))
+    parquet_panel = _sort_gold_for_compare(
+        read_table(gold_parquet / "issuer_origin_panel.parquet")
+    )
     compare_cols = [
         "xbrl_fact_count",
         "xbrl_unique_tags",
