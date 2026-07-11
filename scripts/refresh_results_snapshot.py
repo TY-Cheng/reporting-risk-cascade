@@ -232,6 +232,12 @@ def _bridge_language(
                 "Read Item 4.02 lift with absolute precision/FDR and the broader "
                 "label-contingency matrix."
             ),
+            "key_reading": (
+                "The evidence supports a filing-origin measurement and ranking contribution, "
+                "not a hidden-misconduct detector or calibrated deployment rule. The frozen "
+                "public specification is interpreted against prevalence and calibration, while "
+                "WRDS-validated overlap establishes related but non-identical constructs."
+            ),
             "primary_alignment_interpretation": (
                 "The declared primary ranking-alignment rows are severe-tail diagnostics. "
                 "Lift above one shows enrichment, while low absolute precision and high FDR "
@@ -304,6 +310,12 @@ def _bridge_language(
         "reading_boundary": (
             "Treat all lift, precision/FDR, and contingency rows as diagnostic; the manuscript "
             "claim is deferred pending exact raw bridge validation."
+        ),
+        "key_reading": (
+            "The evidence supports a filing-origin measurement and ranking contribution, "
+            "not a hidden-misconduct detector or calibrated deployment rule. The frozen public "
+            "specification is interpreted against prevalence and calibration; overlap rows "
+            "remain diagnostic until the exact raw bridge contract is validated."
         ),
         "primary_alignment_interpretation": (
             "Lift above one is a numeric pattern in the diagnostic rows; it does not establish "
@@ -1192,6 +1204,49 @@ def _copy_inline_figures(package_dir: Path) -> dict[str, str]:
     return copied
 
 
+def _manifest_format_path(
+    package_dir: Path,
+    entry: Any,
+    format_name: str,
+    fallback: Path,
+) -> Path:
+    """Resolve a canonical manifest format record without exposing external paths."""
+    root = package_dir.resolve()
+    if not fallback.resolve().is_relative_to(root):
+        raise ValueError("manifest fallback escapes manuscript package")
+    declared: Any = None
+    strict_record = False
+    if isinstance(entry, dict):
+        declared = entry.get(format_name)
+    if isinstance(declared, dict):
+        declared = declared.get("path")
+        strict_record = True
+    if strict_record:
+        if not isinstance(declared, str) or not declared:
+            raise ValueError(
+                f"canonical manuscript package manifest is missing {format_name} path"
+            )
+        relative = Path(declared)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("canonical manifest path escapes manuscript package")
+        candidate = (package_dir / relative).resolve()
+        if not candidate.is_relative_to(root):
+            raise ValueError("canonical manifest path escapes manuscript package")
+        if not candidate.is_file():
+            raise ValueError(
+                f"manuscript package manifest declares missing {format_name}: {declared}"
+            )
+        return candidate
+    if isinstance(declared, str) and declared:
+        relative = Path(declared)
+        if not relative.is_absolute() and ".." not in relative.parts:
+            candidate = (package_dir / relative).resolve()
+            if candidate.is_relative_to(root):
+                if candidate.is_file():
+                    return candidate
+    return fallback
+
+
 def _ars_explanation_block(explanation: dict[str, str]) -> list[str]:
     return [
         f"- **ARS claim.** {explanation['claim']}",
@@ -1207,7 +1262,8 @@ def _inline_figure_gallery(
     explanations = explanations or FIGURE_EXPLANATIONS
     figure_paths = _copy_inline_figures(package_dir)
     manifest = _read_json(package_dir / "manifest.json")
-    figure_keys = sorted((manifest.get("figures") or {}).keys()) or sorted(figure_paths)
+    figure_manifest = manifest.get("figures") or {}
+    figure_keys = sorted(figure_manifest.keys()) or sorted(figure_paths)
     lines = [
         "### Inline Figure Gallery",
         "",
@@ -1216,18 +1272,33 @@ def _inline_figure_gallery(
         "",
     ]
     for key in figure_keys:
-        explanation = explanations.get(
-            key,
-            {
-                "title": key.replace("_", " ").title(),
-                "claim": "This figure is part of the generated manuscript evidence package.",
-                "evidence": "The figure file is read from the current manuscript package.",
-                "boundary": "Interpretation should follow the surrounding results section and claim-strength ledger.",
-            },
+        entry = figure_manifest.get(key, {})
+        png_path = _manifest_format_path(
+            package_dir,
+            entry,
+            "png",
+            package_dir / "figures" / f"{key}.png",
         )
-        image_path = figure_paths.get(key)
-        pdf_path = package_dir / "figures" / f"{key}.pdf"
-        png_path = package_dir / "figures" / f"{key}.png"
+        pdf_path = _manifest_format_path(
+            package_dir,
+            entry,
+            "pdf",
+            package_dir / "figures" / f"{key}.pdf",
+        )
+        explanation_key = png_path.stem if png_path.is_file() else key
+        explanation = explanations.get(
+            explanation_key,
+            explanations.get(
+                key,
+                {
+                    "title": explanation_key.replace("_", " ").title(),
+                    "claim": "This figure is part of the generated manuscript evidence package.",
+                    "evidence": "The figure file is read from the current manuscript package.",
+                    "boundary": "Interpretation should follow the surrounding results section and claim-strength ledger.",
+                },
+            ),
+        )
+        image_path = figure_paths.get(png_path.stem)
         lines.extend(
             [
                 f"#### {explanation['title']}",
@@ -1252,7 +1323,8 @@ def _inline_table_gallery(
 ) -> list[str]:
     explanations = explanations or TABLE_EXPLANATIONS
     manifest = _read_json(package_dir / "manifest.json")
-    table_keys = sorted((manifest.get("tables") or {}).keys())
+    table_manifest = manifest.get("tables") or {}
+    table_keys = sorted(table_manifest.keys())
     if not table_keys:
         table_keys = [path.stem for path in sorted((package_dir / "tables").glob("table_*.md"))]
 
@@ -1264,18 +1336,27 @@ def _inline_table_gallery(
         "",
     ]
     for key in table_keys:
-        md_path = package_dir / "tables" / f"{key}.md"
+        md_path = _manifest_format_path(
+            package_dir,
+            table_manifest.get(key, {}),
+            "md",
+            package_dir / "tables" / f"{key}.md",
+        )
+        explanation_key = md_path.stem if md_path.is_file() else key
         explanation = explanations.get(
-            key,
-            {
-                "claim": "This table is part of the generated manuscript evidence package.",
-                "evidence": "The table is read from the current manuscript package Markdown output.",
-                "boundary": "Interpretation should follow the surrounding results section and claim-strength ledger.",
-            },
+            explanation_key,
+            explanations.get(
+                key,
+                {
+                    "claim": "This table is part of the generated manuscript evidence package.",
+                    "evidence": "The table is read from the current manuscript package Markdown output.",
+                    "boundary": "Interpretation should follow the surrounding results section and claim-strength ledger.",
+                },
+            ),
         )
         lines.extend(
             [
-                f"#### `{key}`",
+                f"#### `{explanation_key}`",
                 "",
                 *(_ars_explanation_block(explanation)),
                 "",
@@ -2093,6 +2174,10 @@ def build_snapshot(
         bridge_language["experiment_close"],
         "",
         "## Discussion",
+        "",
+        "### Key Readings",
+        "",
+        bridge_language["key_reading"],
         "",
         "### Answers to the research questions",
         "",

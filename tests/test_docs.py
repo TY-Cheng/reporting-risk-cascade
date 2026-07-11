@@ -823,6 +823,144 @@ def _build_fixture_snapshot(
     )
 
 
+def test_snapshot_galleries_resolve_canonical_manifest_artifact_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "manuscript_package"
+    figures_dir = package_dir / "figures"
+    tables_dir = package_dir / "tables"
+    figures_dir.mkdir(parents=True)
+    tables_dir.mkdir(parents=True)
+    png_path = figures_dir / "figure_01_public_task_pr_auc.png"
+    pdf_path = figures_dir / "figure_01_public_task_pr_auc.pdf"
+    table_path = tables_dir / "table_01_component_status.md"
+    png_path.write_bytes(b"fixture-png")
+    pdf_path.write_bytes(b"fixture-pdf")
+    table_path.write_text(
+        "| Component | Status |\n| --- | --- |\n| benchmark | complete |\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        package_dir / "manifest.json",
+        {
+            "figures": {
+                "figure_01": {
+                    "png": {
+                        "path": "figures/figure_01_public_task_pr_auc.png",
+                        "sha256": "a" * 64,
+                    },
+                    "pdf": {
+                        "path": "figures/figure_01_public_task_pr_auc.pdf",
+                        "sha256": "b" * 64,
+                    },
+                }
+            },
+            "tables": {
+                "table_01": {
+                    "md": {
+                        "path": "tables/table_01_component_status.md",
+                        "sha256": "c" * 64,
+                    }
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(snapshot_module, "DOCS_DIR", tmp_path / "docs")
+
+    figure_gallery = "\n".join(snapshot_module._inline_figure_gallery(package_dir))
+    table_gallery = "\n".join(snapshot_module._inline_table_gallery(package_dir))
+
+    assert "Missing PNG preview" not in figure_gallery
+    assert "figure_01_public_task_pr_auc.png" in figure_gallery
+    assert "![Public task PR-AUC]" in figure_gallery
+    assert "Missing Markdown table" not in table_gallery
+    assert "table_01_component_status.md" in table_gallery
+    assert "| benchmark | complete |" in table_gallery
+
+
+@pytest.mark.parametrize("table_key", ["/private/tmp/secret", "../../secret"])
+def test_snapshot_table_gallery_rejects_manifest_keys_outside_package(
+    tmp_path: Path,
+    table_key: str,
+) -> None:
+    package_dir = tmp_path / "manuscript_package"
+    _write_json(package_dir / "manifest.json", {"tables": {table_key: {}}})
+
+    with pytest.raises(ValueError, match="fallback escapes manuscript package"):
+        snapshot_module._inline_table_gallery(package_dir)
+
+
+def test_snapshot_table_gallery_rejects_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "manuscript_package"
+    tables_dir = package_dir / "tables"
+    outside_dir = tmp_path / "outside"
+    tables_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    (outside_dir / "secret.md").write_text("outside", encoding="utf-8")
+    (tables_dir / "escape").symlink_to(outside_dir, target_is_directory=True)
+    _write_json(
+        package_dir / "manifest.json",
+        {"tables": {"escape/secret": {}}},
+    )
+
+    with pytest.raises(ValueError, match="fallback escapes manuscript package"):
+        snapshot_module._inline_table_gallery(package_dir)
+
+
+@pytest.mark.parametrize("path_kind", ["absolute", "traversal"])
+def test_manifest_format_path_rejects_escaping_canonical_record(
+    tmp_path: Path,
+    path_kind: str,
+) -> None:
+    package_dir = tmp_path / "manuscript_package"
+    fallback = package_dir / "tables" / "table_01.md"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_text("legacy fallback", encoding="utf-8")
+    declared = (
+        str(tmp_path / "outside.md")
+        if path_kind == "absolute"
+        else "../outside.md"
+    )
+
+    with pytest.raises(ValueError, match="canonical manifest path escapes manuscript package"):
+        snapshot_module._manifest_format_path(
+            package_dir,
+            {"md": {"path": declared, "sha256": "a" * 64}},
+            "md",
+            fallback,
+        )
+
+
+def test_manifest_format_path_rejects_canonical_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "manuscript_package"
+    tables_dir = package_dir / "tables"
+    outside_dir = tmp_path / "outside"
+    tables_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    fallback = tables_dir / "table_01.md"
+    fallback.write_text("legacy fallback", encoding="utf-8")
+    (outside_dir / "declared.md").write_text("outside", encoding="utf-8")
+    (tables_dir / "escape").symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="canonical manifest path escapes manuscript package"):
+        snapshot_module._manifest_format_path(
+            package_dir,
+            {
+                "md": {
+                    "path": "tables/escape/declared.md",
+                    "sha256": "a" * 64,
+                }
+            },
+            "md",
+            fallback,
+        )
+
+
 def test_snapshot_construct_rows_read_generated_table_only(tmp_path: Path) -> None:
     package_dir = tmp_path / "manuscript_package"
     tables_dir = package_dir / "tables"
@@ -905,6 +1043,7 @@ def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifac
         "## Results for Experiment 4: Public Cascade Construction",
         "## Results for Experiment 5: Public Cascade Prediction",
         "## Results for Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap",
+        "### Key Readings",
         "### Answers to the research questions",
         "### Comparison with prior literature",
         "### Accounting and institutional interpretation",
