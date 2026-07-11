@@ -36,6 +36,8 @@ PACKAGE_TABLE_KEYS = {
     *(f"table_{index:02d}" for index in range(12, 19)),
 }
 PACKAGE_FIGURE_KEYS = {f"figure_{index:02d}" for index in range(1, 6)}
+STUDY_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+MISSING_COMMIT = object()
 
 
 def _sha256(path: Path) -> str:
@@ -803,7 +805,7 @@ def _write_bound_study_fixture(tmp_path: Path) -> tuple[Path, dict[str, object],
         encoding="utf-8",
     )
     manifest: dict[str, object] = {
-        "repo_commit": "study-commit",
+        "repo_commit": STUDY_COMMIT,
         "public_lake_inputs": {
             key: {
                 "path": str(path),
@@ -889,7 +891,7 @@ def _write_package_manifest_fixture(tmp_path: Path) -> tuple[Path, Path, dict[st
     study_manifest_path = tmp_path / "study" / "study_run_manifest.json"
     study_manifest_path.parent.mkdir()
     study_manifest_path.write_text(
-        json.dumps({"repo_commit": "study-commit"}, indent=2), encoding="utf-8"
+        json.dumps({"repo_commit": STUDY_COMMIT}, indent=2), encoding="utf-8"
     )
     package_dir = tmp_path / "manuscript_package"
     (package_dir / "tables").mkdir(parents=True)
@@ -915,7 +917,7 @@ def _write_package_manifest_fixture(tmp_path: Path) -> tuple[Path, Path, dict[st
     }
     manifest: dict[str, object] = {
         "schema_version": "manuscript-package-v1",
-        "study_commit": "study-commit",
+        "study_commit": STUDY_COMMIT,
         "study_manifest_sha256": _sha256(study_manifest_path),
         "tables": tables,
         "figures": figures,
@@ -932,6 +934,53 @@ def test_exact_package_manifest_and_inventory_validate(tmp_path: Path) -> None:
 
     assert set(validated["tables"]) == PACKAGE_TABLE_KEYS
     assert set(validated["figures"]) == PACKAGE_FIGURE_KEYS
+
+
+def test_package_manifest_accepts_case_insensitive_full_commit_match(tmp_path: Path) -> None:
+    package_dir, study_manifest_path, manifest = _write_package_manifest_fixture(tmp_path)
+    study_manifest = json.loads(study_manifest_path.read_text(encoding="utf-8"))
+    study_manifest["repo_commit"] = STUDY_COMMIT.upper()
+    study_manifest_path.write_text(json.dumps(study_manifest), encoding="utf-8")
+    manifest["study_manifest_sha256"] = _sha256(study_manifest_path)
+    (package_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    manuscript_module._validate_package_tree(package_dir, study_manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("study_commit", "package_commit", "match"),
+    [
+        (MISSING_COMMIT, MISSING_COMMIT, "40-character hexadecimal"),
+        (None, None, "40-character hexadecimal"),
+        ("", "", "40-character hexadecimal"),
+        ("abc123", "abc123", "40-character hexadecimal"),
+        ("g" * 40, "g" * 40, "40-character hexadecimal"),
+        ("+" + "1" * 39, "+" + "1" * 39, "40-character hexadecimal"),
+        ("0x" + "1" * 38, "0x" + "1" * 38, "40-character hexadecimal"),
+        ("1" * 40, "2" * 40, "does not match"),
+    ],
+    ids=["absent", "null", "empty", "short", "nonhex", "plus", "0x", "mismatch"],
+)
+def test_package_manifest_requires_matching_full_commit_hashes(
+    tmp_path: Path,
+    study_commit: object,
+    package_commit: object,
+    match: str,
+) -> None:
+    package_dir, study_manifest_path, manifest = _write_package_manifest_fixture(tmp_path)
+    study_manifest = json.loads(study_manifest_path.read_text(encoding="utf-8"))
+    if study_commit is MISSING_COMMIT:
+        study_manifest.pop("repo_commit")
+        manifest.pop("study_commit")
+    else:
+        study_manifest["repo_commit"] = study_commit
+        manifest["study_commit"] = package_commit
+    study_manifest_path.write_text(json.dumps(study_manifest), encoding="utf-8")
+    manifest["study_manifest_sha256"] = _sha256(study_manifest_path)
+    (package_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=match):
+        manuscript_module._validate_package_tree(package_dir, study_manifest_path)
 
 
 @pytest.mark.parametrize(

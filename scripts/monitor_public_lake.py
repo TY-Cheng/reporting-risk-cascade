@@ -352,9 +352,11 @@ def main() -> None:
     args = parse_args()
     monitor_csv = args.log_dir / "monitor.csv"
     if args.once:
-        row = _snapshot(args, include_row_counts=True)
-        _append_csv(monitor_csv, [row])
         counts, errors = _row_count_report(args.silver_dir, args.gold_dir)
+        row = _snapshot(args)
+        row["row_counts_json"] = json.dumps(counts, sort_keys=True)
+        row["row_count_errors_json"] = json.dumps(errors, sort_keys=True)
+        _append_csv(monitor_csv, [row])
         if args.report_json:
             args.report_json.parent.mkdir(parents=True, exist_ok=True)
             args.report_json.write_text(

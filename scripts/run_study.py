@@ -274,7 +274,14 @@ def _write_summary(
 def main() -> None:
     _bootstrap_repo_root()
 
-    from src import ARTIFACTS_DIR, DATA_DIR, LAKE_GOLD_DIR, LAKE_SILVER_DIR, RAW_DATASET_PATH
+    from src import (
+        ARTIFACTS_DIR,
+        DATA_DIR,
+        LAKE_BRONZE_DIR,
+        LAKE_GOLD_DIR,
+        LAKE_SILVER_DIR,
+        RAW_DATASET_PATH,
+    )
     from src.benchmark import run_benchmark
     from src.bridge import run_bridge_probe
     from src.construct_overlap import run_construct_overlap
@@ -337,6 +344,12 @@ def main() -> None:
     form_ap_source_metadata = _resolve_project_path(
         inputs.get("form_ap_source_metadata"),
         default=LAKE_SILVER_DIR / "form_ap_source_metadata.json",
+        data_dir=DATA_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
+    )
+    public_lake_bronze_dir = _resolve_project_path(
+        inputs.get("public_lake_bronze_dir"),
+        default=LAKE_BRONZE_DIR,
         data_dir=DATA_DIR,
         artifacts_dir=ARTIFACTS_DIR,
     )
@@ -582,6 +595,7 @@ def main() -> None:
         manifest["public_lake_provenance"] = public_lake_provenance(
             public_lake_run_metadata,
             form_ap_source_metadata,
+            bronze_root=public_lake_bronze_dir,
         )
     manifest["claim_maturity"] = _claim_maturity(manifest["components"])
     (args.out_dir / "study_run_manifest.json").write_text(

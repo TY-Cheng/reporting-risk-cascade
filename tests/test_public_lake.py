@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import zipfile
+from argparse import Namespace
 from datetime import date
 from pathlib import Path
 
@@ -42,6 +43,45 @@ FINAL_REPORT_ROW_COUNT_KEYS = {
     "xbrl_core_fact",
     "xbrl_fact_summary",
 }
+
+
+def test_monitor_once_reuses_one_row_count_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = Namespace(
+        bronze_dir=tmp_path / "bronze",
+        silver_dir=tmp_path / "silver",
+        gold_dir=tmp_path / "gold",
+        log_dir=tmp_path / "logs",
+        interval=60.0,
+        pid=0,
+        once=True,
+        report_json=tmp_path / "report.json",
+        write_final_report=False,
+        as_of_date=None,
+    )
+    calls = 0
+
+    def fake_row_count_report(
+        silver_dir: Path,
+        gold_dir: Path,
+    ) -> tuple[dict[str, int], dict[str, str]]:
+        nonlocal calls
+        calls += 1
+        assert silver_dir == args.silver_dir
+        assert gold_dir == args.gold_dir
+        return {"issuer_dim": 7}, {"filing_dim": "unreadable"}
+
+    monkeypatch.setattr(monitor_public_lake, "parse_args", lambda: args)
+    monkeypatch.setattr(monitor_public_lake, "_row_count_report", fake_row_count_report)
+
+    monitor_public_lake.main()
+
+    assert calls == 1
+    report = json.loads(args.report_json.read_text(encoding="utf-8"))
+    assert json.loads(report["snapshot"]["row_counts_json"]) == report["row_counts"]
+    assert json.loads(report["snapshot"]["row_count_errors_json"]) == report["row_count_errors"]
 
 
 def _write_csv_gz(path: Path, rows: list[dict[str, object]]) -> None:

@@ -1595,7 +1595,19 @@ def _validate_package_tree(
     study_manifest = _read_json(Path(study_manifest_path))
     if type(study_manifest) is not dict:
         raise ValueError("study manifest must be a JSON object")
-    if manifest.get("study_commit") != study_manifest.get("repo_commit"):
+
+    def full_commit(value: object, context: str) -> str:
+        if (
+            type(value) is not str
+            or len(value) != 40
+            or any(character not in "0123456789abcdefABCDEF" for character in value)
+        ):
+            raise ValueError(f"{context} must be a full 40-character hexadecimal commit")
+        return value.lower()
+
+    package_commit = full_commit(manifest.get("study_commit"), "package study_commit")
+    study_commit = full_commit(study_manifest.get("repo_commit"), "study repo_commit")
+    if package_commit != study_commit:
         raise ValueError("package study_commit does not match exact study commit")
     if manifest.get("study_manifest_sha256") != sha256_path(Path(study_manifest_path)):
         raise ValueError("package study_manifest_sha256 does not match exact study manifest bytes")

@@ -95,18 +95,45 @@ def _load_json_object(path: Path, context: str) -> dict[str, Any]:
     return payload
 
 
-def _source_metadata_inventory(input_files: list[Any]) -> list[dict[str, Any]]:
+def _contained_bronze_path(
+    path: Path,
+    *,
+    bronze_root: Path,
+    context: str,
+) -> tuple[Path, str]:
+    if ".." in path.parts:
+        raise ValueError(f"{context} must not contain parent traversal ('..')")
+    resolved_root = Path(bronze_root).resolve()
+    resolved_path = path.resolve()
+    try:
+        relative_path = resolved_path.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(f"{context} must be resolved-contained under Bronze root") from exc
+    return resolved_path, relative_path.as_posix()
+
+
+def _source_metadata_inventory(
+    input_files: list[Any],
+    *,
+    bronze_root: Path,
+) -> tuple[list[dict[str, Any]], list[Path]]:
+    if not input_files:
+        raise ValueError(
+            "public lake run metadata.provenance.input_files must contain at least one record"
+        )
     inventory: list[dict[str, Any]] = []
+    payload_paths: list[Path] = []
     for index, raw_record in enumerate(input_files):
         context = f"public lake run metadata.provenance.input_files[{index}]"
         if type(raw_record) is not dict:
             raise ValueError(f"{context} must be a JSON object")
-        path = Path(_required(raw_record, "path", str, context))
+        raw_path = Path(_required(raw_record, "path", str, context))
         metadata_sha256 = _required(raw_record, "sha256", str, context)
-        parts = path.parts
-        relative_name = path.name
-        if "bronze" in parts:
-            relative_name = "/".join(parts[parts.index("bronze") + 1 :])
+        path, relative_name = _contained_bronze_path(
+            raw_path,
+            bronze_root=bronze_root,
+            context=f"{context}.path",
+        )
         item: dict[str, Any] = {
             "metadata_file": relative_name,
             "metadata_sha256": metadata_sha256,
@@ -142,7 +169,11 @@ def _source_metadata_inventory(input_files: list[Any]) -> list[dict[str, Any]]:
                     raise ValueError(
                         f"{context}.size_bytes does not match metadata sidecar byte size"
                     )
-            payload_path = path.with_name(path.name.removesuffix(".meta.json"))
+            payload_path, _ = _contained_bronze_path(
+                path.with_name(path.name.removesuffix(".meta.json")),
+                bronze_root=bronze_root,
+                context=f"{sidecar_context} payload path",
+            )
             if not payload_path.is_file():
                 raise ValueError(f"{sidecar_context} references missing payload: {payload_path}")
             if item["payload_sha256"] != sha256_path(payload_path):
@@ -151,6 +182,7 @@ def _source_metadata_inventory(input_files: list[Any]) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"{sidecar_context} payload size does not match payload byte size"
                 )
+            payload_paths.append(payload_path)
         else:
             if not path.is_file():
                 raise ValueError(f"{context}.path references missing metadata file: {path}")
@@ -161,7 +193,7 @@ def _source_metadata_inventory(input_files: list[Any]) -> list[dict[str, Any]]:
                 if recorded_size != path.stat().st_size:
                     raise ValueError(f"{context}.size_bytes does not match metadata file byte size")
         inventory.append(item)
-    return sorted(inventory, key=lambda item: str(item["metadata_file"]))
+    return sorted(inventory, key=lambda item: str(item["metadata_file"])), payload_paths
 
 
 def _verify_form_ap_member(
@@ -170,20 +202,9 @@ def _verify_form_ap_member(
     archive_sha256: str | None,
     member: str,
     member_sha256: str,
-    input_files: list[Any],
+    payload_paths: list[Path],
     context: str,
 ) -> None:
-    if not input_files:
-        return
-    payload_paths = [
-        Path(str(record["path"])).with_name(
-            Path(str(record["path"])).name.removesuffix(".meta.json")
-        )
-        for record in input_files
-        if type(record) is dict
-        and type(record.get("path")) is str
-        and str(record["path"]).endswith(".meta.json")
-    ]
     expected_name = (
         "FirmFilings.zip" if source_kind == "verified_zip_member" else "FirmFilings.csv"
     )
@@ -216,6 +237,8 @@ def _verify_form_ap_member(
 def public_lake_provenance(
     run_metadata_path: Path,
     form_ap_metadata_path: Path,
+    *,
+    bronze_root: Path,
 ) -> dict[str, Any]:
     run_context = f"public lake run metadata ({run_metadata_path})"
     form_ap_context = f"Form AP source metadata ({form_ap_metadata_path})"
@@ -255,13 +278,16 @@ def public_lake_provenance(
     for field in ("member", "member_sha256"):
         _required(form_ap, field, str, form_ap_context)
 
-    source_metadata_inventory = _source_metadata_inventory(input_files)
+    source_metadata_inventory, payload_paths = _source_metadata_inventory(
+        input_files,
+        bronze_root=bronze_root,
+    )
     _verify_form_ap_member(
         source_kind=source_kind,
         archive_sha256=archive_sha256,
         member=form_ap["member"],
         member_sha256=form_ap["member_sha256"],
-        input_files=input_files,
+        payload_paths=payload_paths,
         context=form_ap_context,
     )
 

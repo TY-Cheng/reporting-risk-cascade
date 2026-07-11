@@ -14,7 +14,7 @@ from scripts.run_study import _claim_maturity
 from src import public_cascade as public_cascade_module
 from src.provenance import (
     input_provenance,
-    public_lake_provenance,
+    public_lake_provenance as _public_lake_provenance,
     sha256_path,
     wrds_export_metadata,
 )
@@ -37,6 +37,19 @@ FINAL_REPORT_ROW_COUNT_KEYS = {
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def public_lake_provenance(
+    run_metadata_path: Path,
+    form_ap_metadata_path: Path,
+    *,
+    bronze_root: Path | None = None,
+) -> dict[str, Any]:
+    return _public_lake_provenance(
+        run_metadata_path,
+        form_ap_metadata_path,
+        bronze_root=bronze_root or run_metadata_path.parent / "bronze",
+    )
 
 
 def _valid_public_lake_run_metadata(
@@ -92,8 +105,10 @@ def _write_public_lake_metadata(
 
 def _write_verified_form_ap_fixture(
     tmp_path: Path,
+    *,
+    bronze_dir: Path | None = None,
 ) -> tuple[Path, Path, Path, Path]:
-    archive = tmp_path / "bronze" / "form-ap" / "FirmFilings.zip"
+    archive = (bronze_dir or tmp_path / "bronze") / "form-ap" / "FirmFilings.zip"
     archive.parent.mkdir(parents=True)
     member_bytes = b"firm_id,filing_date\n1,2026-01-01\n"
     with zipfile.ZipFile(archive, "w") as handle:
@@ -147,16 +162,13 @@ def _write_study_fixture(
         "crosswalk": tmp_path / "crosswalk.csv",
         "public_lake_run_metadata": tmp_path / "public_lake_run_metadata.json",
         "form_ap_source_metadata": tmp_path / "form_ap_source_metadata.json",
+        "public_lake_bronze_dir": tmp_path / "lake-inputs",
         "out_dir": tmp_path / "study",
     }
     paths["issuer_origin_panel"].write_bytes(b"issuer-panel")
-    paths["public_lake_run_metadata"].write_text(
-        json.dumps(_valid_public_lake_run_metadata()),
-        encoding="utf-8",
-    )
-    paths["form_ap_source_metadata"].write_text(
-        json.dumps(_valid_form_ap_metadata()),
-        encoding="utf-8",
+    _write_verified_form_ap_fixture(
+        tmp_path,
+        bronze_dir=paths["public_lake_bronze_dir"],
     )
     paths["public_lake_final_report"].write_text(
         json.dumps(
@@ -184,6 +196,7 @@ def _write_study_fixture(
                     "gvkey_cik_crosswalk": str(paths["crosswalk"]),
                     "public_lake_run_metadata": str(paths["public_lake_run_metadata"]),
                     "form_ap_source_metadata": str(paths["form_ap_source_metadata"]),
+                    "public_lake_bronze_dir": str(paths["public_lake_bronze_dir"]),
                 },
                 "peer_comparison": {"mode": "none", "target": "both"},
             }
@@ -277,6 +290,116 @@ def test_public_lake_provenance_rehashes_sidecar_payload_and_form_ap_member(
         tmp_path / "bronze" / "form-ap" / "FirmFilings.zip.meta.json"
     )
     assert reduced["form_ap"]["member"] == "FirmFilings.csv"
+
+
+def test_public_lake_provenance_rejects_empty_input_inventory(tmp_path: Path) -> None:
+    run_metadata, form_ap_metadata = _write_public_lake_metadata(
+        tmp_path,
+        _valid_public_lake_run_metadata(),
+        _valid_form_ap_metadata(),
+    )
+
+    with pytest.raises(ValueError, match="input_files.*at least one"):
+        public_lake_provenance(run_metadata, form_ap_metadata)
+
+
+def test_public_lake_provenance_uses_arbitrarily_named_bronze_root(tmp_path: Path) -> None:
+    bronze_dir = tmp_path / "lake-inputs"
+    run_metadata, form_ap_metadata, source_sidecar, _ = _write_verified_form_ap_fixture(
+        tmp_path,
+        bronze_dir=bronze_dir,
+    )
+
+    reduced = public_lake_provenance(
+        run_metadata,
+        form_ap_metadata,
+        bronze_root=bronze_dir,
+    )
+
+    assert reduced["source_metadata_inventory"][0]["metadata_file"] == (
+        "form-ap/FirmFilings.zip.meta.json"
+    )
+    assert str(source_sidecar.parent.parent) not in json.dumps(reduced)
+
+
+def test_public_lake_provenance_rejects_absolute_metadata_path_outside_bronze(
+    tmp_path: Path,
+) -> None:
+    bronze_dir = tmp_path / "lake-inputs"
+    bronze_dir.mkdir()
+    run_metadata, form_ap_metadata, _, _ = _write_verified_form_ap_fixture(
+        tmp_path,
+        bronze_dir=tmp_path / "outside",
+    )
+
+    with pytest.raises(ValueError, match="contained under Bronze root"):
+        public_lake_provenance(
+            run_metadata,
+            form_ap_metadata,
+            bronze_root=bronze_dir,
+        )
+
+
+def test_public_lake_provenance_rejects_parent_traversal_in_metadata_path(
+    tmp_path: Path,
+) -> None:
+    bronze_dir = tmp_path / "lake-inputs"
+    run_metadata, form_ap_metadata, sidecar, _ = _write_verified_form_ap_fixture(
+        tmp_path,
+        bronze_dir=bronze_dir,
+    )
+    run_payload = json.loads(run_metadata.read_text(encoding="utf-8"))
+    run_payload["provenance"]["input_files"][0]["path"] = str(
+        bronze_dir / "form-ap" / ".." / "form-ap" / sidecar.name
+    )
+    run_metadata.write_text(json.dumps(run_payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="parent traversal"):
+        public_lake_provenance(
+            run_metadata,
+            form_ap_metadata,
+            bronze_root=bronze_dir,
+        )
+
+
+@pytest.mark.parametrize("escape_kind", ["metadata", "payload"])
+def test_public_lake_provenance_rejects_symlink_escape_from_bronze(
+    tmp_path: Path,
+    escape_kind: str,
+) -> None:
+    bronze_dir = tmp_path / "lake-inputs"
+    outside_dir = tmp_path / "outside"
+    run_metadata, form_ap_metadata, sidecar, archive = _write_verified_form_ap_fixture(
+        tmp_path,
+        bronze_dir=outside_dir,
+    )
+    if escape_kind == "metadata":
+        linked_dir = bronze_dir / "form-ap"
+        linked_dir.parent.mkdir()
+        linked_dir.symlink_to(sidecar.parent, target_is_directory=True)
+        metadata_path = linked_dir / sidecar.name
+    else:
+        inside_dir = bronze_dir / "form-ap"
+        inside_dir.mkdir(parents=True)
+        metadata_path = inside_dir / sidecar.name
+        metadata_path.write_bytes(sidecar.read_bytes())
+        (inside_dir / archive.name).symlink_to(archive)
+    run_payload = json.loads(run_metadata.read_text(encoding="utf-8"))
+    run_payload["provenance"]["input_files"][0].update(
+        {
+            "path": str(metadata_path),
+            "sha256": _sha256(metadata_path),
+            "size_bytes": metadata_path.stat().st_size,
+        }
+    )
+    run_metadata.write_text(json.dumps(run_payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="contained under Bronze root"):
+        public_lake_provenance(
+            run_metadata,
+            form_ap_metadata,
+            bronze_root=bronze_dir,
+        )
 
 
 @pytest.mark.parametrize(
@@ -560,16 +683,37 @@ def test_public_lake_provenance_rejects_invalid_form_ap_values(
 def test_public_lake_provenance_accepts_standalone_form_ap_without_archive_hash(
     tmp_path: Path,
 ) -> None:
+    payload = tmp_path / "bronze" / "form-ap" / "FirmFilings.csv"
+    payload.parent.mkdir(parents=True)
+    payload.write_text("firm_id,filing_date\n1,2026-01-01\n", encoding="utf-8")
+    sidecar = payload.with_name(f"{payload.name}.meta.json")
+    sidecar_payload = _valid_source_sidecar()
+    sidecar_payload.update(
+        {
+            "sha256": _sha256(payload),
+            "size_bytes": payload.stat().st_size,
+        }
+    )
+    sidecar.write_text(json.dumps(sidecar_payload), encoding="utf-8")
     form_ap_payload = _valid_form_ap_metadata()
     form_ap_payload.update(
         {
             "source_kind": "standalone_csv_fallback",
             "archive_sha256": None,
+            "member_sha256": _sha256(payload),
         }
     )
     run_metadata, form_ap_metadata = _write_public_lake_metadata(
         tmp_path,
-        _valid_public_lake_run_metadata(),
+        _valid_public_lake_run_metadata(
+            input_files=[
+                {
+                    "path": str(sidecar),
+                    "sha256": _sha256(sidecar),
+                    "size_bytes": sidecar.stat().st_size,
+                }
+            ]
+        ),
         form_ap_payload,
     )
 
@@ -666,7 +810,11 @@ def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
         ),
         "primary_specification": primary_specification,
     }
-    assert manifest["public_lake_provenance"]["form_ap"]["member_sha256"] == "member-hash"
+    form_ap_metadata = json.loads(paths["form_ap_source_metadata"].read_text(encoding="utf-8"))
+    assert (
+        manifest["public_lake_provenance"]["form_ap"]["member_sha256"]
+        == form_ap_metadata["member_sha256"]
+    )
     assert manifest["claim_maturity"]["public_prediction"] == "reportable"
     input_records = {record["path"]: record for record in manifest["provenance"]["input_files"]}
     for metadata_key in ["public_lake_run_metadata", "form_ap_source_metadata"]:
