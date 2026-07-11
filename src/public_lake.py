@@ -263,9 +263,37 @@ def _validate_sec_user_agent(value: str | None) -> str:
         "your email",
         "your.email",
     )
-    email = re.search(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", contact)
     has_control = any(ord(character) < 32 or ord(character) == 127 for character in raw_contact)
-    if has_control or not contact or email is None or any(marker in folded for marker in rejected):
+    email_valid = False
+    for match in re.finditer(
+        r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~@-])"
+        r"([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+)@([A-Za-z0-9.-]+)"
+        r"(?![A-Za-z0-9.!#$%&'*+/=?^_`{|}~@-])",
+        contact,
+    ):
+        local, domain = match.groups()
+        labels = domain.split(".")
+        email_valid = (
+            len(local) <= 64
+            and not local.startswith(".")
+            and not local.endswith(".")
+            and ".." not in local
+            and len(domain) <= 253
+            and len(labels) >= 2
+            and all(
+                re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                for label in labels
+            )
+            and re.fullmatch(r"[A-Za-z]{2,63}", labels[-1]) is not None
+        )
+        if email_valid:
+            break
+    if (
+        has_control
+        or not contact
+        or not email_valid
+        or any(marker in folded for marker in rejected)
+    ):
         raise ValueError("SEC contact user-agent must identify a real contact and email address")
     return contact
 

@@ -461,7 +461,9 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
         'SEC_USER_AGENT="Poison Contact poison@institution.edu"\n',
         encoding="utf-8",
     )
-    replication_root = tmp_path / 'reviewer $HOME $(touch${IFS}ENV_INJECTION) "quoted" runtime'
+    replication_root = (
+        tmp_path / 'O\'Brien reviewer $HOME $(touch${IFS}ENV_INJECTION) "quoted" runtime'
+    )
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     common_log = (
@@ -616,9 +618,9 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
     pytest_addopts = env_values["PYTEST_ADDOPTS"]
     assert "--basetemp" not in pytest_addopts
     pytest_paths = (replication_root / "pytest-cache",)
+    expected_pytest_args = ["-o", f"cache_dir={pytest_paths[0]}"]
+    assert shlex.split(pytest_addopts) == expected_pytest_args
     for value in pytest_paths:
-        assert str(value) in pytest_addopts
-        assert f"cache_dir={value}" in shlex.split(pytest_addopts)
         value.resolve().relative_to(replication_root.resolve())
         with pytest.raises(ValueError):
             value.resolve().relative_to(source.resolve())
@@ -657,8 +659,9 @@ def test_documented_bootstrap_uses_scrubbed_env_and_creates_clean_derivative_com
                 Path(value).resolve().relative_to(source.resolve())
         command_addopts = (replication_root / f"{command}-pytest-addopts.txt").read_text()
         assert "/poison/" not in command_addopts
-        for value in pytest_paths:
-            assert str(value) in command_addopts
+        assert all(
+            shlex.split(line) == expected_pytest_args for line in command_addopts.splitlines()
+        )
 
     identity = json.loads((replication_root / "replication_identity.json").read_text())
     assert identity["derivative_commit"] == derivative

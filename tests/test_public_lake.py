@@ -707,6 +707,12 @@ def test_low_level_download_and_html_fetch_are_mockable(
         "Researcher researcher@example.com",
         "Researcher researcher@institution.invalid",
         "Your Name your.email@institution.edu",
+        "Research Team a@foo..com",
+        "Research Team a@-foo.com",
+        "Research Team a@foo-.com",
+        "Research Team .a@institution.edu",
+        "Research Team a.@institution.edu",
+        "Research Team a..b@institution.edu",
     ],
 )
 def test_request_boundary_rejects_missing_or_placeholder_sec_contact_before_get(
@@ -723,7 +729,10 @@ def test_request_boundary_rejects_missing_or_placeholder_sec_contact_before_get(
             raise AssertionError("network call must not occur for an invalid SEC contact")
 
     session = Session()
-    monkeypatch.setattr(public_lake, "_LAST_REQUEST_AT", 0.0)
+    sleeps: list[float] = []
+    monkeypatch.setattr(public_lake, "_LAST_REQUEST_AT", 10.0)
+    monkeypatch.setattr(public_lake.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(public_lake.time, "sleep", sleeps.append)
 
     with pytest.raises(ValueError, match="SEC.*user-agent|contact user-agent"):
         public_lake._rate_limited_get(
@@ -733,6 +742,8 @@ def test_request_boundary_rejects_missing_or_placeholder_sec_contact_before_get(
             user_agent=user_agent,
         )
 
+    assert sleeps == []
+    assert session.headers == {}
     assert session.calls == 0
 
 
