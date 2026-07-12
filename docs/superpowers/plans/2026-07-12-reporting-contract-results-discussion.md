@@ -36,7 +36,7 @@
 - Consumes: `_infer_feature_families(panel)` and the filtered, uncensored model panel.
 - Produces: `feature_family_summary[*].display_name`, `.model_eligible_features`, `.reported_as_standalone`, and `summary.reporting_boundaries` with schema `public-reporting-boundaries-v1`.
 
-- [ ] **Step 1: Write failing tests for family display metadata and reporting boundaries**
+- [x] **Step 1: Write failing tests for family display metadata and reporting boundaries**
 
 Assert the existing end-to-end fixture produces:
 
@@ -59,7 +59,7 @@ assert inspection["model_eligible_features"] == []
 
 Add zero and varied partner fixtures and assert computed `rows_evaluated`, `nonmissing_rows`, `nonzero_rows`, `n_distinct_nonmissing`, `minimum`, `maximum`, `is_constant_zero`, `total_equals_item_402_rows`, and `total_equals_item_402_for_all_rows`.
 
-- [ ] **Step 2: Run the focused tests on parent `e38dccf` and record RED**
+- [x] **Step 2: Run the focused tests on parent `8a613a0` and record RED**
 
 Run:
 
@@ -70,7 +70,7 @@ pytest -q tests/test_public_cascade_interfaces.py -k 'reporting_boundar or featu
 
 Expected: failure because the new keys are absent while existing summary/model tests remain green.
 
-- [ ] **Step 3: Add the minimal computed contract**
+- [x] **Step 3: Add the minimal computed contract**
 
 Reuse `families` and the filtered `panel`. Extend each existing family summary rather than creating another family map. Add only this new top-level object:
 
@@ -99,11 +99,11 @@ summary["reporting_boundaries"] = {
 
 The partner scope string is `post-year-proxy uncensored public-model panel`. Do not add Bronze provenance or inspection row counts here.
 
-- [ ] **Step 4: Run focused and full interface tests, Ruff, format, and diff checks**
+- [x] **Step 4: Run focused and full interface tests, Ruff, format, and diff checks**
 
 Run the test file, `ruff check` on the changed files, `ruff format --check` on the changed files, and `git diff --check`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `feat(reporting): expose public claim boundaries`.
 
@@ -115,7 +115,7 @@ Commit message: `feat(reporting): expose public claim boundaries`.
 - Modify: `src/public_cascade.py`
 - Modify: `scripts/run_study.py`
 - Test: `tests/test_public_cascade_interfaces.py`
-- Test: `tests/test_study_interfaces.py` (or the existing study-manifest owner)
+- Test: `tests/test_provenance.py`
 
 **Interfaces:**
 - Consumes: `public_opacity_dml.csv`, its metadata, and the required outcome order `comment_thread`, `amendment`, `8k_402`.
@@ -123,13 +123,15 @@ Commit message: `feat(reporting): expose public claim boundaries`.
 
 - [ ] **Step 1: Write RED tests for all-fit, partly fit, and all-skipped evidence**
 
-Require exact outcome coverage, `status_by_outcome`, `fit_outcomes`, and:
+Require exact ordered outcome coverage, raw `status_by_outcome`, `fit_outcomes`, and:
 
 ```python
 assert maturity == ("diagnostic" if fit_outcomes else "deferred")
 ```
 
 Each non-fit outcome remains `deferred`; a complete public component alone is insufficient.
+For disabled DML, represent all three required outcomes as raw status `disabled` so the
+contract remains complete and `fit_outcomes` is empty. Missing/legacy evidence fails closed.
 
 - [ ] **Step 2: Run focused tests on the Task 1 commit and record RED**
 
@@ -137,7 +139,13 @@ Expected: current `_claim_maturity` marks every complete public component diagno
 
 - [ ] **Step 3: Implement one authority chain**
 
-Write evidence once in the public summary, copy it into `components.public_cascade.opacity_dml_evidence`, and make `_claim_maturity(components)` consume that copy. Do not independently re-read or reclassify DML inside the package.
+Write evidence once from the in-memory DML rows/meta into the public summary, copy it into
+`components.public_cascade.opacity_dml_evidence`, and make `_claim_maturity(components)`
+consume that copy. Validate the non-disabled outcome sequence exactly as
+`["comment_thread", "amendment", "8k_402"]`; preserve raw skip statuses and define
+`fit_outcomes` only where status is exactly `fit`. Do not add package-layer maturity
+derivation in Task 2. Task 3 will copy and attest upstream evidence and maturity; existing
+raw-CSV reconstruction of Table 12 remains a display-integrity path.
 
 - [ ] **Step 4: Run focused tests, full related suites, Ruff/format/diff, and commit**
 
