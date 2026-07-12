@@ -121,7 +121,7 @@ Commit message: `feat(reporting): expose public claim boundaries`.
 - Consumes: `public_opacity_dml.csv`, its metadata, and the required outcome order `comment_thread`, `amendment`, `8k_402`.
 - Produces: public summary/component `opacity_dml_evidence` and study-manifest `claim_maturity.opacity_dml`.
 
-- [ ] **Step 1: Write RED tests for all-fit, partly fit, and all-skipped evidence**
+- [x] **Step 1: Write RED tests for all-fit, partly fit, and all-skipped evidence**
 
 Require exact ordered outcome coverage, raw `status_by_outcome`, `fit_outcomes`, and:
 
@@ -133,11 +133,11 @@ Each non-fit outcome remains `deferred`; a complete public component alone is in
 For disabled DML, represent all three required outcomes as raw status `disabled` so the
 contract remains complete and `fit_outcomes` is empty. Missing/legacy evidence fails closed.
 
-- [ ] **Step 2: Run focused tests on the Task 1 commit and record RED**
+- [x] **Step 2: Run focused tests on the Task 1 commit and record RED**
 
 Expected: current `_claim_maturity` marks every complete public component diagnostic.
 
-- [ ] **Step 3: Implement one authority chain**
+- [x] **Step 3: Implement one authority chain**
 
 Write evidence once from the in-memory DML rows/meta into the public summary, copy it into
 `components.public_cascade.opacity_dml_evidence`, and make `_claim_maturity(components)`
@@ -147,7 +147,7 @@ consume that copy. Validate the non-disabled outcome sequence exactly as
 derivation in Task 2. Task 3 will copy and attest upstream evidence and maturity; existing
 raw-CSV reconstruction of Table 12 remains a display-integrity path.
 
-- [ ] **Step 4: Run focused tests, full related suites, Ruff/format/diff, and commit**
+- [x] **Step 4: Run focused tests, full related suites, Ruff/format/diff, and commit**
 
 Commit message: `fix(reporting): derive DML maturity from fitted outcomes`.
 
@@ -158,6 +158,7 @@ Commit message: `fix(reporting): derive DML maturity from fitted outcomes`.
 **Files:**
 - Modify: `scripts/build_manuscript_package.py`
 - Modify: `scripts/verify_canonical_run.py`
+- Modify: `tests/canonical_fixture.py`
 - Test: `tests/test_manuscript_package.py`
 - Test: `tests/test_canonical_run.py`
 - Test: `tests/test_reviewer_package.py`
@@ -188,15 +189,40 @@ ARTIFACT_OWNERSHIP = {
 }
 ```
 
-Flattened keys must equal the package artifact keys exactly with no duplicate. Mutation of proxy flags, oversight features, inspection predictor status, partner variation, ownership, or DML evidence must fail verification.
+Flattened keys must equal the package artifact keys exactly with no duplicate. The exact
+contract shape is:
+
+```python
+reporting_contract = {
+    "reporting_boundaries": public_summary["reporting_boundaries"],
+    "feature_family_summary": public_summary["feature_family_summary"],
+    "opacity_dml_evidence": public_component["opacity_dml_evidence"],
+    "claim_maturity": study_manifest["claim_maturity"],
+    "artifact_ownership": ARTIFACT_OWNERSHIP,
+}
+```
+
+Require summary evidence to equal the component copy before packaging. Mutation of proxy
+flags, oversight features, inspection predictor status, partner variation, ownership, DML
+evidence, or DML maturity must fail verification. Include valid diagnostic and valid
+all-skipped/deferred fixtures.
 
 - [ ] **Step 2: Implement the smallest versioned package contract**
 
-Set `MANUSCRIPT_PACKAGE_SCHEMA = "manuscript-package-v2"`; copy upstream facts without recomputation. Add a single display-name helper used by Tables 4/14 and Figure 2. Table 17/18 labels must state the sample proxy accurately. Remove winner/leaderboard prose and generate DML/nonadmin caveats from artifacts.
+Set `MANUSCRIPT_PACKAGE_SCHEMA = "manuscript-package-v2"`; keep
+`ATTESTATION_SCHEMA = "canonical-attestation-v1"` and set only
+`VERIFIER_VERSION = "5"`. Copy upstream facts without recomputation. Add
+`public_cascade_task_status.csv`, `public_opacity_dml.csv`, and
+`public_opacity_dml_meta.json` to the package's early required-artifact list. Update the
+shared canonical fixture and the independent package-manifest fixture.
 
 - [ ] **Step 3: Make verifier v5 reconstruct and compare the same contract**
 
 Keep all existing canonical gates. Add only exact contract reconstruction/comparison and ownership completeness checks.
+The package-manifest hash already attests the contract, so do not duplicate it into the
+attestation. Replace the hard-coded diagnostic DML gate with consistency against the
+artifact-derived study maturity. Reviewer production code remains unchanged; add ZIP
+readback assertions for package v2/contract and verifier version 5.
 
 - [ ] **Step 4: Run package/canonical/reviewer tests, full suite, Ruff/format/diff, and commit**
 
@@ -204,7 +230,41 @@ Commit message: `feat(reporting): attest package claim contract`.
 
 ---
 
-### Task 4: Restructure the plan and generated Results and Discussion
+### Task 4: Align package labels and evidence caveats
+
+**Files:**
+- Modify: `scripts/build_manuscript_package.py`
+- Test: `tests/test_manuscript_package.py`
+
+**Interfaces:**
+- Consumes: the Task 3 reporting contract and existing package tables/figures/narrative.
+- Produces: safe paper-facing display labels and artifact-derived DML/partner caveats while preserving raw CSV keys.
+
+- [ ] **Step 1: Write RED display and narrative tests**
+
+Require Tables 4/14 to display family names while their CSV `Feature_Set` keys remain raw.
+Require Figure 2 fold dots to remain after tick-label substitution. Require Table 17 to
+describe the observed same-year FPI-form indicator and Table 18 to display the exact sample
+proxy label. Require diagnostic/deferred DML and constant/varied partner narrative cases;
+forbid peer winner/leader prose.
+
+- [ ] **Step 2: Add one scalar display-name helper**
+
+Use the upstream `feature_family_summary` display name in Markdown/LaTeX and plot ticks only.
+Preserve raw keys for CSVs and Figure 2 fold-row matching.
+
+- [ ] **Step 3: Generate caveats from the contract**
+
+Build DML prose from all four evidence fields plus aggregate maturity. Build the partner
+caveat from scope/count/range/constant/equality fields. Remove highest/leader wording.
+
+- [ ] **Step 4: Run package tests, full related suites, Ruff/format/diff, and commit**
+
+Commit message: `fix(reporting): align package labels and caveats`.
+
+---
+
+### Task 5: Restructure the plan and generated Results and Discussion
 
 **Files:**
 - Modify: `docs/paper_plan.md`
@@ -234,16 +294,16 @@ Commit message: `docs: align plan and generated results discussion`.
 
 ---
 
-### Task 5: Produce the final canonical empirical/report chain
+### Task 6: Produce the final canonical empirical/report chain
 
 **Files:** generated/ignored artifacts only until the six-path report commit.
 
 **Interfaces:**
-- Consumes: clean Task 4 commit, accepted Run G/H inventories, cached Bronze, raw benchmark, and WRDS crosswalk input.
+- Consumes: clean Task 5 commit, accepted Run G/H inventories, cached Bronze, raw benchmark, and WRDS crosswalk input.
 - Produces: Run I, one linkage, full peer study, package v2, generated snapshot, verifier attestation, report child commit, and reviewer ZIP.
 
 - [ ] **Step 1: Run full source gates and commit any review fixes before data execution**
-- [ ] **Step 2: Fresh-build Run I at the clean Task 4 commit**
+- [ ] **Step 2: Fresh-build Run I at the clean Task 5 commit**
 - [ ] **Step 3: Prove Run I scientific files, schemas, counts, and semantic profiles equal accepted G/H; only commit-bound provenance may differ**
 - [ ] **Step 4: Archive the old `artifacts/full_with_peer` plus its bound crosswalk/package/attestation without deletion**
 - [ ] **Step 5: Run `uv run python scripts/build_linkage_bridge.py` exactly once**
@@ -260,7 +320,7 @@ just task study raw artifacts/full_with_peer \
 
 ---
 
-### Task 6: Synchronize, review, and finalize the manuscript
+### Task 7: Synchronize, review, and finalize the manuscript
 
 **Files:**
 - Modify selectively in sibling repo: `main.tex`, curated `tables/*.tex`, figures/provenance, README/highlights/cover letter/checklists as evidence requires.
@@ -286,5 +346,5 @@ SYNC_NEW_TABLE_TEX=0 make sync-artifacts \
 ## Self-Review
 
 - Spec coverage: all user-requested data/model/result truth checks, docs structure, canonical execution, manuscript review, cross-model review, Serena synchronization, and legacy audit have an owner.
-- Placeholder scan: no implementation step is deferred; every later empirical value is intentionally generated by Task 5 rather than frozen in this plan.
-- Type/contract consistency: Task 1 owns public facts; Task 2 owns DML maturity; Task 3 copies/attests; Task 4 renders; Tasks 5/6 regenerate and review.
+- Placeholder scan: no implementation step is deferred; every later empirical value is intentionally generated by Task 6 rather than frozen in this plan.
+- Type/contract consistency: Task 1 owns public facts; Task 2 owns DML maturity; Task 3 copies/attests; Task 4 labels; Task 5 renders; Tasks 6/7 regenerate and review.
