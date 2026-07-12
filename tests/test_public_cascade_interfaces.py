@@ -470,14 +470,54 @@ def test_public_dml_matrix_normalizes_categorical_missingness_within_training_fo
     assert sum("__MISSING__" in name for name in used_controls) == 1
 
 
-def test_public_cascade_omitted_sample_end_year_includes_2024(
+@pytest.mark.parametrize(
+    ("partner_counts", "item_402_counts", "expected_partner_boundary"),
+    [
+        pytest.param(
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            {
+                "rows_evaluated": 5,
+                "nonmissing_rows": 5,
+                "nonzero_rows": 0,
+                "n_distinct_nonmissing": 1,
+                "minimum": 0,
+                "maximum": 0,
+                "is_constant_zero": True,
+                "total_equals_item_402_rows": 5,
+                "total_equals_item_402_for_all_rows": True,
+            },
+            id="constant-zero",
+        ),
+        pytest.param(
+            [0, 2, None, 3, 3],
+            [0, 1, 2, 3, 3],
+            {
+                "rows_evaluated": 5,
+                "nonmissing_rows": 4,
+                "nonzero_rows": 3,
+                "n_distinct_nonmissing": 3,
+                "minimum": 0,
+                "maximum": 3,
+                "is_constant_zero": False,
+                "total_equals_item_402_rows": 3,
+                "total_equals_item_402_for_all_rows": False,
+            },
+            id="varied",
+        ),
+    ],
+)
+def test_public_cascade_feature_family_and_reporting_boundaries(
     tmp_path: Path,
+    partner_counts: list[int | None],
+    item_402_counts: list[int],
+    expected_partner_boundary: dict[str, object],
 ) -> None:
     panel_path = tmp_path / "issuer_origin_panel.parquet"
     config_path = tmp_path / "public_cascade.yaml"
     out_dir = tmp_path / "out"
     rows = []
-    for year in [2011, 2012, 2013, 2014, 2024]:
+    for row_index, year in enumerate([2011, 2012, 2013, 2014, 2024]):
         rows.append(
             {
                 "issuer_cik": "0000000001",
@@ -495,6 +535,11 @@ def test_public_cascade_omitted_sample_end_year_includes_2024(
                 "label_8k_402_365": 0,
                 "censored_365": 0,
                 "xbrl_fact_count": 10 + year,
+                "prior_filing_count": year - 2010,
+                "auditor_partner_prior_other_issuer_nonadmin_amendment_count": (
+                    partner_counts[row_index]
+                ),
+                "auditor_partner_prior_other_issuer_8k_402_count": item_402_counts[row_index],
             }
         )
     rows.append(
@@ -559,6 +604,34 @@ model:
     assert set(task_status["status"]) == {"skipped_one_class_train"}
     assert set(task_status["task"]) == {"comment_thread", "amendment", "8k_402"}
     assert summary["cascade_readiness_level"] == "metadata_baseline"
+    oversight = summary["feature_family_summary"]["oversight"]
+    assert oversight["display_name"] == ("Prior-filing history (legacy artifact key: oversight)")
+    assert oversight["model_eligible_features"] == ["prior_filing_count"]
+    assert oversight["reported_as_standalone"] is True
+
+    boundaries = summary["reporting_boundaries"]
+    assert boundaries["schema_version"] == "public-reporting-boundaries-v1"
+    proxy = boundaries["sample_proxy"]
+    assert proxy["artifact_field"] == "is_domestic_us_gaap_proxy"
+    assert proxy["validates_fpi_status"] is False
+    assert proxy["validates_domicile"] is False
+    assert proxy["validates_us_gaap"] is False
+
+    inspection = boundaries["pcaob_inspection_predictors"]
+    assert inspection["inspection_event_joined_to_gold"] is False
+    assert inspection["model_eligible_features"] == []
+
+    partner = boundaries["partner_nonadministrative_amendment"]
+    assert partner["artifact_field"] == (
+        "auditor_partner_prior_other_issuer_nonadmin_amendment_count"
+    )
+    assert partner["item_402_comparison_field"] == (
+        "auditor_partner_prior_other_issuer_8k_402_count"
+    )
+    assert partner["scope"] == "post-year-proxy uncensored public-model panel"
+    for field, expected in expected_partner_boundary.items():
+        assert partner[field] == expected
+
     assert summary["visibility_history_metric_rows"] == int(
         metrics["feature_set"].eq("visibility_history").sum()
     )

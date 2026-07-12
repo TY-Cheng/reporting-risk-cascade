@@ -975,6 +975,15 @@ def run_public_cascade(
     metadata_family = set(families.get("metadata", []))
     feature_family_summary = {
         family: {
+            "display_name": (
+                "Prior-filing history (legacy artifact key: oversight)"
+                if family == "oversight"
+                else "XBRL"
+                if family == "xbrl"
+                else family.replace("_", " ").capitalize()
+            ),
+            "model_eligible_features": list(cols),
+            "reported_as_standalone": family != "text",
             "n_features": int(len(cols)),
             "empty": bool(len(cols) == 0),
             "same_as_metadata": bool(set(cols) == metadata_family),
@@ -1189,6 +1198,42 @@ def run_public_cascade(
     xbrl_aggregate_only_blocker = bool(
         feature_family_summary["xbrl"]["n_features"] > 0 and not has_xbrl_ratio_features
     )
+    partner_field = "auditor_partner_prior_other_issuer_nonadmin_amendment_count"
+    item_402_field = "auditor_partner_prior_other_issuer_8k_402_count"
+    partner_values = pd.to_numeric(
+        panel.get(partner_field, pd.Series(index=panel.index, dtype="float64")),
+        errors="coerce",
+    )
+    item_402_values = pd.to_numeric(
+        panel.get(item_402_field, pd.Series(index=panel.index, dtype="float64")),
+        errors="coerce",
+    )
+    partner_nonmissing = partner_values.dropna()
+    rows_evaluated = int(len(panel))
+    nonmissing_rows = int(partner_values.notna().sum())
+    total_equals_item_402_rows = int(
+        (
+            partner_values.notna() & item_402_values.notna() & partner_values.eq(item_402_values)
+        ).sum()
+    )
+    partner_boundary = {
+        "artifact_field": partner_field,
+        "item_402_comparison_field": item_402_field,
+        "scope": "post-year-proxy uncensored public-model panel",
+        "rows_evaluated": rows_evaluated,
+        "nonmissing_rows": nonmissing_rows,
+        "nonzero_rows": int((partner_values.notna() & partner_values.ne(0)).sum()),
+        "n_distinct_nonmissing": int(partner_nonmissing.nunique()),
+        "minimum": int(partner_nonmissing.min()) if not partner_nonmissing.empty else None,
+        "maximum": int(partner_nonmissing.max()) if not partner_nonmissing.empty else None,
+        "is_constant_zero": bool(
+            rows_evaluated and nonmissing_rows == rows_evaluated and partner_values.eq(0).all()
+        ),
+        "total_equals_item_402_rows": total_equals_item_402_rows,
+        "total_equals_item_402_for_all_rows": bool(
+            rows_evaluated and total_equals_item_402_rows == rows_evaluated
+        ),
+    }
     summary: Dict[str, object] = {
         "n_rows": int(len(panel)),
         "sample_attrition": sample_attrition_df.to_dict(orient="records"),
@@ -1203,6 +1248,26 @@ def run_public_cascade(
         "task_exclusion_counts": task_exclusion_counts,
         "zero_positive_tasks": zero_positive_tasks,
         "feature_family_summary": feature_family_summary,
+        "reporting_boundaries": {
+            "schema_version": "public-reporting-boundaries-v1",
+            "sample_proxy": {
+                "artifact_field": "is_domestic_us_gaap_proxy",
+                "display_name": "10-K/10-K/A with no observed same-year FPI-form proxy",
+                "definition": (
+                    "selected 10-K or 10-K/A with no observed 20-F, 40-F, or 6-K "
+                    "mapped to the same issuer fiscal year"
+                ),
+                "validates_fpi_status": False,
+                "validates_domicile": False,
+                "validates_us_gaap": False,
+            },
+            "pcaob_inspection_predictors": {
+                "inspection_event_joined_to_gold": False,
+                "model_eligible_features": [],
+                "excluded_availability_markers": ["source_available_pcaob_inspections"],
+            },
+            "partner_nonadministrative_amendment": partner_boundary,
+        },
         "primary_specification_status": "revision_frozen",
         "primary_specification": primary_specification,
         "primary_metric_rows": int(len(primary_metrics)),
