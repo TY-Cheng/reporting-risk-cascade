@@ -1616,13 +1616,130 @@ def _plot_construct_lift(
     }
 
 
+def _validated_narrative_contract(
+    reporting_contract: dict[str, Any],
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    error = "narrative reporting contract is malformed or internally inconsistent"
+    if type(reporting_contract) is not dict:
+        raise ValueError(error)
+    evidence = reporting_contract.get("opacity_dml_evidence")
+    required_outcomes = ["comment_thread", "amendment", "8k_402"]
+    if type(evidence) is not dict or set(evidence) != {
+        "required_outcomes",
+        "status_by_outcome",
+        "fit_outcomes",
+        "maturity_by_outcome",
+    }:
+        raise ValueError(error)
+    status_by_outcome = evidence.get("status_by_outcome")
+    maturity_by_outcome = evidence.get("maturity_by_outcome")
+    if (
+        evidence.get("required_outcomes") != required_outcomes
+        or type(status_by_outcome) is not dict
+        or list(status_by_outcome) != required_outcomes
+        or any(type(status_by_outcome[outcome]) is not str for outcome in required_outcomes)
+        or type(maturity_by_outcome) is not dict
+        or list(maturity_by_outcome) != required_outcomes
+    ):
+        raise ValueError(error)
+    expected_fit = [
+        outcome for outcome in required_outcomes if status_by_outcome[outcome] == "fit"
+    ]
+    expected_maturity = {
+        outcome: "diagnostic" if status_by_outcome[outcome] == "fit" else "deferred"
+        for outcome in required_outcomes
+    }
+    claim_maturity = reporting_contract.get("claim_maturity")
+    dml_maturity = (
+        claim_maturity.get("opacity_dml") if type(claim_maturity) is dict else None
+    )
+    if (
+        evidence.get("fit_outcomes") != expected_fit
+        or maturity_by_outcome != expected_maturity
+        or dml_maturity != ("diagnostic" if expected_fit else "deferred")
+    ):
+        raise ValueError(error)
+
+    boundaries = reporting_contract.get("reporting_boundaries")
+    partner = (
+        boundaries.get("partner_nonadministrative_amendment")
+        if type(boundaries) is dict
+        else None
+    )
+    count_fields = {
+        "rows_evaluated",
+        "nonmissing_rows",
+        "nonzero_rows",
+        "n_distinct_nonmissing",
+        "total_equals_item_402_rows",
+    }
+    required_partner = {
+        "scope",
+        *count_fields,
+        "minimum",
+        "maximum",
+        "is_constant_zero",
+        "total_equals_item_402_for_all_rows",
+    }
+    if (
+        type(partner) is not dict
+        or not required_partner <= set(partner)
+        or partner.get("scope") != "post-year-proxy uncensored public-model panel"
+        or any(type(partner.get(field)) is not int for field in count_fields)
+        or any(partner[field] < 0 for field in count_fields)
+        or type(partner.get("is_constant_zero")) is not bool
+        or type(partner.get("total_equals_item_402_for_all_rows")) is not bool
+    ):
+        raise ValueError(error)
+    rows = partner["rows_evaluated"]
+    nonmissing = partner["nonmissing_rows"]
+    nonzero = partner["nonzero_rows"]
+    distinct = partner["n_distinct_nonmissing"]
+    equal_rows = partner["total_equals_item_402_rows"]
+    minimum = partner["minimum"]
+    maximum = partner["maximum"]
+    if (
+        nonmissing > rows
+        or nonzero > nonmissing
+        or distinct > nonmissing
+        or equal_rows > rows
+        or (nonmissing == 0 and (distinct != 0 or minimum is not None or maximum is not None))
+        or (
+            nonmissing > 0
+            and (
+                type(minimum) is not int
+                or type(maximum) is not int
+                or minimum < 0
+                or minimum > maximum
+                or distinct == 0
+                or (nonzero == 0 and (minimum != 0 or maximum != 0))
+                or (nonzero > 0 and maximum == 0)
+            )
+        )
+    ):
+        raise ValueError(error)
+    expected_constant_zero = bool(
+        rows > 0
+        and nonmissing == rows
+        and nonzero == 0
+        and distinct == 1
+        and minimum == 0
+        and maximum == 0
+    )
+    expected_equal = bool(rows > 0 and equal_rows == rows)
+    if (
+        partner["is_constant_zero"] is not expected_constant_zero
+        or partner["total_equals_item_402_for_all_rows"] is not expected_equal
+    ):
+        raise ValueError(error)
+    return evidence, dml_maturity, partner
+
+
 def _result_narrative(
     *,
     manifest: dict[str, Any],
     public_summary: dict[str, Any],
     public_task: pd.DataFrame,
-    benchmark_peer: pd.DataFrame,
-    public_peer: pd.DataFrame,
     construct_alignment: pd.DataFrame,
     construct_manifest: dict[str, Any],
     reporting_contract: dict[str, Any],
@@ -1641,12 +1758,13 @@ def _result_narrative(
     generated = manifest.get("generated_at_utc", "")
     public_out_dir = manifest.get("components", {}).get("public_cascade", {}).get("out_dir", "")
     public_out_dir_display = _rel(public_out_dir) if public_out_dir else ""
-    dml_evidence = reporting_contract["opacity_dml_evidence"]
+    dml_evidence, dml_maturity, partner = _validated_narrative_contract(
+        reporting_contract
+    )
     required_outcomes = dml_evidence["required_outcomes"]
     status_by_outcome = dml_evidence["status_by_outcome"]
     fit_outcomes = dml_evidence["fit_outcomes"]
     maturity_by_outcome = dml_evidence["maturity_by_outcome"]
-    dml_maturity = reporting_contract["claim_maturity"]["opacity_dml"]
     required_display = ", ".join(required_outcomes)
     statuses_display = ", ".join(
         f"{outcome}={status_by_outcome[outcome]}" for outcome in required_outcomes
@@ -1665,9 +1783,6 @@ def _result_narrative(
             "No required outcome is currently fitted; the adjusted-association analysis "
             "therefore remains deferred."
         )
-    partner = reporting_contract["reporting_boundaries"][
-        "partner_nonadministrative_amendment"
-    ]
     partner_constant = str(partner["is_constant_zero"]).lower()
     partner_equal = str(partner["total_equals_item_402_for_all_rows"]).lower()
     if partner["is_constant_zero"] is True:
@@ -2329,8 +2444,6 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             manifest=manifest,
             public_summary=public_summary,
             public_task=public_task,
-            benchmark_peer=benchmark_peer,
-            public_peer=public_peer,
             construct_alignment=construct_alignment,
             construct_manifest=construct_manifest,
             reporting_contract=reporting_contract,

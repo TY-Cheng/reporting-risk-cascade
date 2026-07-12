@@ -398,8 +398,6 @@ def test_results_narrative_renders_external_component_path_privately(
             "primary_specification": {"feature_set": "all", "train_window": "expanding"}
         },
         public_task=public_task,
-        benchmark_peer=pd.DataFrame(),
-        public_peer=pd.DataFrame(),
         construct_alignment=pd.DataFrame(),
         construct_manifest={"validation_tier": "fixture"},
         reporting_contract=_narrative_reporting_contract(),
@@ -439,8 +437,6 @@ def test_candidate_bridge_package_notes_and_narrative_are_nonassertive() -> None
             "primary_specification": {"feature_set": "all", "train_window": "expanding"}
         },
         public_task=public_task,
-        benchmark_peer=pd.DataFrame(),
-        public_peer=pd.DataFrame(),
         construct_alignment=pd.DataFrame(),
         construct_manifest=construct_manifest,
         reporting_contract=_narrative_reporting_contract(),
@@ -522,9 +518,18 @@ def test_sample_attrition_table_preserves_raw_stage_and_displays_exact_proxy_lab
         assert expected in (tmp_path / records[fmt]["path"]).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "display_name",
+    [
+        "Prior-filing history (legacy artifact key: oversight)",
+        "Metadata",
+    ],
+    ids=["horizontal", "vertical"],
+)
 def test_figure_display_labels_preserve_raw_fold_dot_matching(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    display_name: str,
 ) -> None:
     import matplotlib.axes
 
@@ -532,6 +537,7 @@ def test_figure_display_labels_preserve_raw_fold_dot_matching(
     tick_labels: list[str] = []
     original_scatter = matplotlib.axes.Axes.scatter
     original_set_yticks = matplotlib.axes.Axes.set_yticks
+    original_set_xticks = matplotlib.axes.Axes.set_xticks
 
     def scatter_spy(self, x, y, *args, **kwargs):  # type: ignore[no-untyped-def]
         scatter_calls.append((list(x), kwargs.get("s")))
@@ -542,9 +548,14 @@ def test_figure_display_labels_preserve_raw_fold_dot_matching(
             tick_labels.extend(str(label) for label in labels)
         return original_set_yticks(self, ticks, labels, *args, **kwargs)
 
+    def set_xticks_spy(self, ticks, labels=None, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if labels is not None:
+            tick_labels.extend(str(label) for label in labels)
+        return original_set_xticks(self, ticks, labels, *args, **kwargs)
+
     monkeypatch.setattr(matplotlib.axes.Axes, "scatter", scatter_spy)
     monkeypatch.setattr(matplotlib.axes.Axes, "set_yticks", set_yticks_spy)
-    display_name = "Prior-filing history (legacy artifact key: oversight)"
+    monkeypatch.setattr(matplotlib.axes.Axes, "set_xticks", set_xticks_spy)
     summary = pd.DataFrame(
         {
             "Feature_Set": ["oversight"],
@@ -589,9 +600,12 @@ def test_figure_display_labels_preserve_raw_fold_dot_matching(
                 "fit outcomes: comment_thread",
                 "comment_thread=diagnostic",
                 "12 rows evaluated",
+                "12 nonmissing",
                 "0 nonzero",
+                "1 distinct nonmissing",
                 "range [0, 0]",
                 "is_constant_zero=true",
+                "total_equals_item_402_rows=12",
                 "total_equals_item_402_for_all_rows=true",
                 "no standalone variation",
             ],
@@ -604,9 +618,12 @@ def test_figure_display_labels_preserve_raw_fold_dot_matching(
                 "no required outcome is currently fitted",
                 "fit outcomes: none",
                 "comment_thread=deferred",
+                "12 nonmissing",
                 "4 nonzero",
+                "4 distinct nonmissing",
                 "range [0, 3]",
                 "is_constant_zero=false",
+                "total_equals_item_402_rows=7",
                 "total_equals_item_402_for_all_rows=false",
                 "varies in this vintage",
             ],
@@ -633,8 +650,6 @@ def test_results_narrative_uses_dml_and_partner_contract_without_ranking_languag
                 "Mean_PR_AUC": ["0.3000", "0.2000", "0.1000"],
             }
         ),
-        benchmark_peer=pd.DataFrame({"Model": ["benchmark winner"], "Mean_PR_AUC": ["0.9999"]}),
-        public_peer=pd.DataFrame({"Model": ["public leader"], "Mean_PR_AUC": ["0.9999"]}),
         construct_alignment=pd.DataFrame(),
         construct_manifest={"validation_tier": "fixture"},
         reporting_contract=_narrative_reporting_contract(
@@ -647,6 +662,55 @@ def test_results_narrative_uses_dml_and_partner_contract_without_ranking_languag
         assert phrase in narrative
     for forbidden in ["highest mean pr-auc", "leads on mean pr-auc", "winner", "leader"]:
         assert forbidden not in narrative
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (
+            (
+                "reporting_boundaries",
+                "partner_nonadministrative_amendment",
+                "is_constant_zero",
+            ),
+            1,
+        ),
+        (("opacity_dml_evidence", "fit_outcomes"), []),
+    ],
+    ids=["non-boolean-partner-flag", "inconsistent-dml-fit-outcomes"],
+)
+def test_results_narrative_fails_closed_on_malformed_nested_contract(
+    path: tuple[str, ...],
+    replacement: object,
+) -> None:
+    contract = json.loads(json.dumps(_narrative_reporting_contract()))
+    cursor = contract
+    for key in path[:-1]:
+        cursor = cursor[key]
+    cursor[path[-1]] = replacement
+
+    with pytest.raises(ValueError, match="narrative reporting contract"):
+        _result_narrative(
+            manifest={
+                "generated_at_utc": "2026-07-10T00:00:00Z",
+                "components": {"public_cascade": {"out_dir": "artifacts/public_cascade"}},
+            },
+            public_summary={
+                "primary_specification": {
+                    "feature_set": "all",
+                    "train_window": "expanding",
+                }
+            },
+            public_task=pd.DataFrame(
+                {
+                    "Task": ["comment_thread", "amendment", "8k_402"],
+                    "Mean_PR_AUC": ["0.3000", "0.2000", "0.1000"],
+                }
+            ),
+            construct_alignment=pd.DataFrame(),
+            construct_manifest={"validation_tier": "fixture"},
+            reporting_contract=contract,
+        )
 
 
 @pytest.mark.parametrize(
