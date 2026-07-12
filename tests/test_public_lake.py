@@ -9,7 +9,7 @@ import subprocess
 import sys
 import zipfile
 from argparse import Namespace
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -2271,6 +2271,119 @@ def test_form_ap_materialization_replaces_stale_csv_from_verified_zip(tmp_path: 
     event = read_table(event_path)
     assert set(event["form_filing_id"].astype(str)) == {"new"}
     assert "old" not in set(event["form_filing_id"].astype(str))
+
+
+def test_form_ap_materialization_inherits_archive_acquisition_timestamp_deterministically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bronze_root = tmp_path / "bronze"
+    form_ap_dir = bronze_root / "form-ap"
+    silver_dir = tmp_path / "silver"
+    form_ap_dir.mkdir(parents=True)
+    archive = form_ap_dir / "FirmFilings.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("FirmFilings.csv", "Form Filing ID\nnew\n")
+    public_lake._write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
+    archive_meta_path = public_lake._metadata_path(archive)
+    archive_metadata = json.loads(archive_meta_path.read_text(encoding="utf-8"))
+    acquisition_timestamp = "2025-01-02T03:04:05+00:00"
+    archive_metadata["downloaded_at_utc"] = acquisition_timestamp
+    archive_meta_path.write_text(
+        json.dumps(archive_metadata, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    class FakeDatetime:
+        current = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+        @classmethod
+        def now(cls, tz: timezone | None = None) -> datetime:
+            del tz
+            return cls.current
+
+    monkeypatch.setattr(public_lake, "datetime", FakeDatetime)
+
+    csv_path, _ = public_lake._materialize_form_ap_csv(
+        form_ap_dir=form_ap_dir,
+        silver_dir=silver_dir,
+    )
+    derived_meta_path = public_lake._metadata_path(csv_path)
+    first_meta_bytes = derived_meta_path.read_bytes()
+    first_metadata = json.loads(first_meta_bytes)
+    first_input = public_lake.input_provenance(public_lake._source_metadata_paths(bronze_root))
+
+    FakeDatetime.current = datetime(2040, 2, 2, tzinfo=timezone.utc)
+    second_csv_path, second_silver_meta_path = public_lake._materialize_form_ap_csv(
+        form_ap_dir=form_ap_dir,
+        silver_dir=silver_dir,
+    )
+    second_meta_bytes = public_lake._metadata_path(second_csv_path).read_bytes()
+    second_metadata = json.loads(second_meta_bytes)
+    second_input = public_lake.input_provenance(public_lake._source_metadata_paths(bronze_root))
+    silver_metadata = json.loads(second_silver_meta_path.read_text(encoding="utf-8"))
+
+    assert first_meta_bytes == second_meta_bytes
+    assert first_metadata["downloaded_at_utc"] == acquisition_timestamp
+    assert second_metadata["downloaded_at_utc"] == acquisition_timestamp
+    assert first_metadata["sha256"] == second_metadata["sha256"]
+    assert first_metadata["sha256"] == public_lake._hash_file(second_csv_path)
+    assert silver_metadata["member_sha256"] == second_metadata["sha256"]
+    assert first_input["input_hash"] == second_input["input_hash"]
+    assert first_input == second_input
+
+
+@pytest.mark.parametrize(
+    ("timestamp_mode", "timestamp_value"),
+    [
+        pytest.param("missing", None, id="missing"),
+        pytest.param("empty", "", id="empty"),
+    ],
+)
+def test_form_ap_materialization_rejects_archive_without_acquisition_timestamp_before_mutation(
+    tmp_path: Path,
+    timestamp_mode: str,
+    timestamp_value: str | None,
+) -> None:
+    form_ap_dir = tmp_path / "bronze" / "form-ap"
+    silver_dir = tmp_path / "silver"
+    form_ap_dir.mkdir(parents=True)
+    stale = form_ap_dir / "FirmFilings.csv"
+    stale_contents = "Form Filing ID\nold\n"
+    stale.write_text(stale_contents, encoding="utf-8")
+    archive = form_ap_dir / "FirmFilings.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("FirmFilings.csv", "Form Filing ID\nnew\n")
+    public_lake._write_metadata(
+        path=archive,
+        source_url=public_lake.PCAOB_FORM_AP_ZIP_URL,
+        source_name="form-ap",
+    )
+    archive_meta_path = public_lake._metadata_path(archive)
+    archive_metadata = json.loads(archive_meta_path.read_text(encoding="utf-8"))
+    if timestamp_mode == "missing":
+        archive_metadata.pop("downloaded_at_utc")
+    else:
+        archive_metadata["downloaded_at_utc"] = timestamp_value
+    archive_meta_path.write_text(
+        json.dumps(archive_metadata, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="downloaded_at_utc"):
+        public_lake._materialize_form_ap_csv(
+            form_ap_dir=form_ap_dir,
+            silver_dir=silver_dir,
+        )
+
+    assert stale.read_text(encoding="utf-8") == stale_contents
+    assert not public_lake._metadata_path(stale).exists()
+    assert not (silver_dir / "form_ap_source_metadata.json").exists()
+    assert list(form_ap_dir.glob("FirmFilings.*.tmp")) == []
 
 
 def test_form_ap_materialization_fails_when_verified_zip_lacks_member(tmp_path: Path) -> None:

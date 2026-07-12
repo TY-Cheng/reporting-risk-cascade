@@ -454,9 +454,15 @@ def _materialize_form_ap_csv(
     if archive_path.exists():
         if not _verify_metadata_hash(archive_path):
             raise ValueError(f"Missing verified metadata sidecar for {archive_path}")
+        archive_metadata = json.loads(_metadata_path(archive_path).read_text(encoding="utf-8"))
+        archive_downloaded_at_utc = archive_metadata.get("downloaded_at_utc")
+        if not isinstance(archive_downloaded_at_utc, str) or not archive_downloaded_at_utc.strip():
+            raise ValueError(
+                f"Archive metadata for {archive_path} must contain a nonempty string "
+                "downloaded_at_utc"
+            )
         form_ap_dir.mkdir(parents=True, exist_ok=True)
         temp_path: Path | None = None
-        archive_metadata = json.loads(_metadata_path(archive_path).read_text(encoding="utf-8"))
         member_name = ""
         try:
             with zipfile.ZipFile(archive_path) as zf:
@@ -494,6 +500,7 @@ def _materialize_form_ap_csv(
             source_url=str(archive_metadata.get("source_url") or PCAOB_FORM_AP_ZIP_URL),
             source_name="form-ap-derived",
             extra={
+                "downloaded_at_utc": archive_downloaded_at_utc,
                 "derived_from": archive_path.name,
                 "derived_from_sha256": archive_sha256,
                 "zip_member": member_name,
