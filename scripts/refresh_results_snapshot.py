@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 from src import ARTIFACTS_DIR, DOCS_DIR, PROJECT_ROOT  # noqa: E402
 from src.linkage import WRDS_VALIDATED_TIER  # noqa: E402
 from src.provenance import sha256_path  # noqa: E402
+from scripts.build_manuscript_package import _reporting_contract  # noqa: E402
 from scripts.monitor_public_lake import _validate_public_lake_final_report  # noqa: E402
 
 
@@ -39,19 +40,6 @@ MODERN_PUBLIC_LAKE_INPUT_LABELS = {
     "issuer_origin_panel": "issuer-origin panel",
     "form_ap_source_metadata": "Form AP source metadata",
 }
-
-PUBLIC_LAKE_ROW_SPECS = [
-    ("Silver", "filing_dim", "normalized public filing index"),
-    ("Silver", "issuer_dim", "normalized issuer dimension"),
-    ("Silver", "xbrl_core_fact", "controlled XBRL core facts"),
-    ("Silver", "xbrl_fact_summary", "accession-level fact coverage"),
-    ("Silver", "note_summary", "Notes summary mode"),
-    ("Silver", "comment_thread", "SEC comment-thread signal"),
-    ("Silver", "correction_event", "amended-filing/correction signal"),
-    ("Gold", "issuer_origin_panel", "annual issuer-year modeling table"),
-    ("Gold", "filing_origin_panel", "filing-origin provenance table"),
-]
-
 
 FULL_REQUIRED_ARTIFACTS = [
     "study_run_manifest.json",
@@ -260,17 +248,6 @@ def _bridge_language(
                 "Headline claims should describe filing-origin measurement, prevalence-aware "
                 "ranking, and construct overlap within the stated bridge tier."
             ),
-            "evidence_map_label": (
-                '    B["Experiment 6<br/>raw-only bridge and construct overlap"]'
-            ),
-            "reading_support": (
-                "The WRDS-validated bridge shows related-but-non-identical overlap, "
-                "especially in severe public correction states."
-            ),
-            "reading_boundary": (
-                "Read Item 4.02 lift with absolute precision/FDR and the broader "
-                "label-contingency matrix."
-            ),
             "key_reading": (
                 "The evidence supports a filing-origin measurement and ranking contribution, "
                 "not a hidden-misconduct detector or calibrated deployment rule. The frozen "
@@ -338,17 +315,6 @@ def _bridge_language(
             "Headline claims should describe filing-origin measurement and prevalence-aware "
             "ranking; construct-overlap headline claims are deferred, and candidate bridge "
             "rows remain diagnostic."
-        ),
-        "evidence_map_label": (
-            '    B["Experiment 6<br/>candidate bridge diagnostics; claim deferred"]'
-        ),
-        "reading_support": (
-            f"The `{tier}` crosswalk yields diagnostic overlap rows; no cross-construct claim "
-            "matures from them."
-        ),
-        "reading_boundary": (
-            "Treat all lift, precision/FDR, and contingency rows as diagnostic; the manuscript "
-            "claim is deferred pending exact raw bridge validation."
         ),
         "key_reading": (
             "The evidence supports a filing-origin measurement and ranking contribution, "
@@ -695,22 +661,6 @@ def _load_public_lake_report(
     )
 
 
-def _component_rows(manifest: dict[str, Any]) -> list[list[str]]:
-    rows: list[list[str]] = []
-    for name, payload in manifest.get("components", {}).items():
-        if not isinstance(payload, dict):
-            rows.append([name, str(payload), "", "`False`"])
-            continue
-        status = payload.get("status") or payload.get("run_status") or ""
-        tier = payload.get("validation_tier") or ""
-        artifact_declared = any(
-            payload.get(field)
-            for field in ("out_dir", "summary_json", "manifest", "sample_attrition_csv")
-        )
-        rows.append([name, _code(status), _code(tier), _code(str(artifact_declared))])
-    return rows
-
-
 def _source_role_rows(resolved_inputs: dict[str, dict[str, Any]]) -> list[list[str]]:
     rows = []
     for role, input_key in INPUT_SOURCE_ROLES:
@@ -783,39 +733,6 @@ def _canonical_status(
     return ("CANONICAL" if not failures else "NON-CANONICAL", failures)
 
 
-def _public_lake_rows(report: dict[str, Any]) -> list[list[str]]:
-    row_counts = report.get("row_counts", {})
-    if not isinstance(row_counts, dict):
-        row_counts = {}
-    rows = []
-    for layer, artifact, note in PUBLIC_LAKE_ROW_SPECS:
-        rows.append([layer, f"`{artifact}`", _fmt(row_counts.get(artifact)), note])
-    return rows
-
-
-def _best_equal_task_config(metrics: pd.DataFrame) -> pd.Series | None:
-    if metrics.empty:
-        return None
-    required = {"feature_set", "train_window", "task", "pr_auc"}
-    if not required.issubset(metrics.columns):
-        return None
-    headline = metrics.copy()
-    task_level = (
-        headline.groupby(["feature_set", "train_window", "task"], dropna=False)["pr_auc"]
-        .mean()
-        .reset_index()
-    )
-    equal_task = (
-        task_level.groupby(["feature_set", "train_window"], dropna=False)["pr_auc"]
-        .mean()
-        .reset_index(name="mean_pr_auc")
-        .sort_values("mean_pr_auc", ascending=False)
-    )
-    if equal_task.empty:
-        return None
-    return equal_task.iloc[0]
-
-
 def _public_task_frame(manuscript_package: Path) -> pd.DataFrame:
     frame = _read_csv(manuscript_package / "tables" / "table_03_public_task_metrics.csv")
     required = {
@@ -856,115 +773,6 @@ def _public_task_rows(manuscript_package: Path) -> list[list[str]]:
     ]
 
 
-def _public_feature_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list[list[str]]:
-    if metrics.empty or "feature_set" not in metrics.columns:
-        return []
-    grouped = (
-        metrics.groupby("feature_set", dropna=False)
-        .agg(
-            rows=("pr_auc", "size"),
-            mean_pr_auc=("pr_auc", "mean"),
-            mean_roc_auc=("roc_auc", "mean"),
-        )
-        .reset_index()
-        .sort_values("mean_pr_auc", ascending=False)
-    )
-    family = summary.get("feature_family_summary", {})
-    rows = []
-    for _, row in grouped.iterrows():
-        feature_set = str(row["feature_set"])
-        meta = family.get(feature_set, {}) if isinstance(family, dict) else {}
-        rows.append(
-            [
-                _code(feature_set),
-                _fmt(meta.get("n_features")),
-                _fmt(meta.get("n_xbrl_ratio_features")),
-                _fmt(meta.get("n_xbrl_coverage_features")),
-                _fmt(row["mean_pr_auc"]),
-                _fmt(row["mean_roc_auc"]),
-                _fmt(row["rows"], digits=0),
-            ]
-        )
-    return rows
-
-
-def _public_fold_support_rows(metrics: pd.DataFrame) -> list[list[str]]:
-    required = {"task", "test_year", "n_test", "positive_rate_test"}
-    if metrics.empty or not required.issubset(metrics.columns):
-        return []
-    grouped = (
-        metrics.groupby(["task", "test_year"], dropna=False)
-        .agg(
-            configs=("pr_auc", "size"),
-            test_rows=("n_test", "first"),
-            prevalence=("positive_rate_test", "mean"),
-        )
-        .reset_index()
-    )
-    grouped["positives"] = (grouped["test_rows"] * grouped["prevalence"]).round().astype("Int64")
-    grouped["sparse_excluded"] = grouped["positives"].lt(10)
-    rows = []
-    for _, row in grouped.sort_values(["task", "test_year"]).iterrows():
-        rows.append(
-            [
-                _code(row["task"]),
-                _fmt_year(row["test_year"]),
-                _fmt(row["configs"], digits=0),
-                _fmt(row["test_rows"]),
-                _fmt(row["positives"]),
-                _fmt(row["prevalence"]),
-                "Yes" if bool(row["sparse_excluded"]) else "No",
-            ]
-        )
-    return rows
-
-
-def _task_feature_family_rows(metrics: pd.DataFrame) -> list[list[str]]:
-    required = {
-        "task",
-        "feature_set",
-        "test_year",
-        "positive_rate_test",
-        "pr_auc",
-        "roc_auc",
-    }
-    if metrics.empty or not required.issubset(metrics.columns):
-        return []
-    agg_spec = {
-        "metric_rows": ("pr_auc", "size"),
-        "n_folds": ("test_year", "nunique"),
-        "mean_prevalence": ("positive_rate_test", "mean"),
-        "mean_pr_auc": ("pr_auc", "mean"),
-        "mean_roc_auc": ("roc_auc", "mean"),
-    }
-    if "brier_skill_score" in metrics.columns:
-        agg_spec["mean_brier_skill"] = ("brier_skill_score", "mean")
-    if "ece" in metrics.columns:
-        agg_spec["mean_ece"] = ("ece", "mean")
-    grouped = (
-        metrics.groupby(["task", "feature_set"], dropna=False)
-        .agg(**agg_spec)
-        .reset_index()
-        .sort_values(["task", "mean_pr_auc"], ascending=[True, False])
-    )
-    rows = []
-    for _, row in grouped.iterrows():
-        rows.append(
-            [
-                _code(row["task"]),
-                _code(row["feature_set"]),
-                _fmt(row["mean_prevalence"]),
-                _fmt(row["mean_pr_auc"]),
-                _fmt(row["mean_roc_auc"]),
-                _fmt(row.get("mean_brier_skill")),
-                _fmt(row.get("mean_ece")),
-                _fmt(row["n_folds"], digits=0),
-                _fmt(row["metric_rows"], digits=0),
-            ]
-        )
-    return rows
-
-
 def _benchmark_panel_rows(study_dir: Path) -> list[list[str]]:
     summary = _read_text(study_dir / "benchmark" / "benchmark_summary.md")
     if not summary:
@@ -981,70 +789,6 @@ def _benchmark_panel_rows(study_dir: Path) -> list[list[str]]:
         match = re.search(rf"^- {re.escape(label)}: (.+)$", summary, flags=re.MULTILINE)
         if match:
             rows.append([label, match.group(1)])
-    return rows
-
-
-def _benchmark_timing_rows(metrics: pd.DataFrame) -> list[list[str]]:
-    if metrics.empty or not {"label_mode", "window", "pr_auc"}.issubset(metrics.columns):
-        return []
-    grouped = (
-        metrics.groupby(["label_mode", "window"], dropna=False)
-        .agg(
-            pr_auc=("pr_auc", "mean"),
-            roc_auc=("roc_auc", "mean"),
-            top_100_precision=("top_100_precision", "mean"),
-            retained_positive_share=("retained_positive_train_share", "mean"),
-        )
-        .reset_index()
-    )
-    best = (
-        grouped.sort_values("pr_auc", ascending=False)
-        .groupby("label_mode", as_index=False)
-        .head(1)
-    )
-    rows = []
-    for _, row in best.sort_values("pr_auc", ascending=False).iterrows():
-        rows.append(
-            [
-                _code(row["label_mode"]),
-                _code(row["window"]),
-                _fmt(row["pr_auc"]),
-                _fmt(row["roc_auc"]),
-                _fmt(row["top_100_precision"]),
-                _fmt(row["retained_positive_share"]),
-            ]
-        )
-    return rows
-
-
-def _peer_model_rows(path: Path) -> list[list[str]]:
-    metrics = _read_csv(path)
-    if metrics.empty:
-        return []
-    model_col = "peer_model_id" if "peer_model_id" in metrics.columns else "model_id"
-    if model_col not in metrics.columns:
-        return []
-    agg_spec = {
-        "rows": ("pr_auc", "size"),
-        "mean_pr_auc": ("pr_auc", "mean"),
-        "mean_roc_auc": ("roc_auc", "mean"),
-        "max_pr_auc": ("pr_auc", "max"),
-    }
-    if "brier" in metrics.columns:
-        agg_spec["mean_brier"] = ("brier", "mean")
-    grouped = metrics.groupby(model_col, dropna=False).agg(**agg_spec).reset_index()
-    rows = []
-    for _, row in grouped.sort_values("mean_pr_auc", ascending=False).iterrows():
-        rows.append(
-            [
-                _code(row[model_col]),
-                _fmt(row["rows"], digits=0),
-                _fmt(row["mean_pr_auc"]),
-                _fmt(row["mean_roc_auc"]),
-                _fmt(row["max_pr_auc"]),
-                _fmt(row.get("mean_brier")),
-            ]
-        )
     return rows
 
 
@@ -1184,30 +928,6 @@ def _feature_importance_rows(study_dir: Path, *, max_rows: int = 12) -> list[lis
     return rows
 
 
-def _opacity_rows(study_dir: Path) -> list[list[str]]:
-    path = study_dir / "opacity_validation_refresh" / "opacity_diagnostics_summary.csv"
-    if not path.exists():
-        path = study_dir / "public_cascade" / "public_opacity_dml.csv"
-    frame = _read_csv(path)
-    if frame.empty:
-        return []
-    rows = []
-    for _, row in frame.iterrows():
-        rows.append(
-            [
-                _code(row.get("outcome")),
-                _fmt(row.get("n_obs")),
-                _fmt(row.get("prevalence")),
-                _fmt(row.get("mean_treatment")),
-                _fmt(row.get("coef")),
-                _fmt(row.get("std_err")),
-                _fmt(row.get("p_value")),
-                _code(row.get("status")),
-            ]
-        )
-    return rows
-
-
 def _simple_csv_rows(
     path: Path, columns: list[str], *, max_rows: int | None = None
 ) -> list[list[str]]:
@@ -1224,81 +944,6 @@ def _simple_csv_rows(
                 if col not in {"public_label", "bridge_tier", "label_pattern", "metric_status"}
                 else _code(row.get(col))
                 for col in columns
-            ]
-        )
-    return rows
-
-
-def _overlap_sample_flow_rows(study_dir: Path) -> list[list[str]]:
-    return _simple_csv_rows(
-        study_dir / "construct_overlap" / "overlap_sample_flow.csv",
-        ["bridge_tier", "rows", "benchmark_positives"],
-    )
-
-
-def _label_contingency_rows(study_dir: Path) -> list[list[str]]:
-    frame = _read_csv(study_dir / "construct_overlap" / "label_contingency_lift.csv")
-    if frame.empty:
-        return []
-    columns = [
-        "public_label",
-        "bridge_tier",
-        "n",
-        "benchmark_positive_rows",
-        "public_positive_rows",
-        "both_positive_rows",
-        "benchmark_prevalence",
-        "public_prevalence",
-        "public_rate_given_benchmark_pos",
-        "benchmark_rate_given_public_pos",
-        "lift_public_given_benchmark",
-        "lift_benchmark_given_public",
-    ]
-    if not set(columns).issubset(frame.columns):
-        return []
-    rows = []
-    for _, row in frame.iterrows():
-        rows.append(
-            [
-                _code(row["public_label"]),
-                _code(row["bridge_tier"]),
-                _fmt(row["n"]),
-                _fmt(row["benchmark_positive_rows"]),
-                _fmt(row["public_positive_rows"]),
-                _fmt(row["both_positive_rows"]),
-                _fmt(row["benchmark_prevalence"]),
-                _fmt(row["public_prevalence"]),
-                _fmt(row["public_rate_given_benchmark_pos"]),
-                _fmt(row["benchmark_rate_given_public_pos"]),
-                _fmt(row["lift_public_given_benchmark"]),
-                _fmt(row["lift_benchmark_given_public"]),
-            ]
-        )
-    return rows
-
-
-def _selection_profile_rows(manuscript_package: Path) -> list[list[str]]:
-    frame = _read_csv(manuscript_package / "tables" / "table_17_selection_profile.csv")
-    required = {
-        "Stratum",
-        "Group",
-        "Issuer_Years",
-        "Comment_Rate",
-        "Amendment_Rate",
-        "Item_4_02_Rate",
-    }
-    if frame.empty or not required.issubset(frame.columns):
-        return []
-    rows = []
-    for _, row in frame.iterrows():
-        rows.append(
-            [
-                str(row["Stratum"]),
-                str(row["Group"]),
-                _fmt(row["Issuer_Years"]),
-                _fmt(row["Comment_Rate"]),
-                _fmt(row["Amendment_Rate"]),
-                _fmt(row["Item_4_02_Rate"]),
             ]
         )
     return rows
@@ -1334,32 +979,6 @@ def _event_time_rows(study_dir: Path) -> list[list[str]]:
                 _fmt(bool(row["balanced_window"])),
             ]
         )
-    return rows
-
-
-def _manifest_inventory(root: Path) -> list[str]:
-    if not root.exists():
-        return [f"- `{_rel(root)}` (missing)"]
-    files = [
-        path
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != ".DS_Store" and "__pycache__" not in path.parts
-    ]
-    return [f"- `{_rel(path)}`" for path in files]
-
-
-def _table_figure_rows(package_dir: Path) -> list[list[str]]:
-    rows = []
-    for kind, subdir in [("Table", "tables"), ("Figure", "figures")]:
-        root = package_dir / subdir
-        if not root.exists():
-            rows.append([kind, _code(subdir), "missing"])
-            continue
-        files = sorted(
-            path for path in root.iterdir() if path.is_file() and path.name != ".DS_Store"
-        )
-        for path in files:
-            rows.append([kind, _code(path.name), _rel(path)])
     return rows
 
 
@@ -1426,153 +1045,6 @@ def _explanation_block(explanation: dict[str, str]) -> list[str]:
         f"- **Evidence.** {explanation['evidence']}",
         f"- **Boundary.** {explanation['boundary']}",
     ]
-
-
-def _inline_figure_gallery(
-    package_dir: Path,
-    explanations: dict[str, dict[str, str]] | None = None,
-) -> list[str]:
-    explanations = explanations or FIGURE_EXPLANATIONS
-    figure_paths = _copy_inline_figures(package_dir)
-    manifest = _read_json(package_dir / "manifest.json")
-    figure_manifest = manifest.get("figures") or {}
-    figure_keys = sorted(figure_manifest.keys()) or sorted(figure_paths)
-    lines = [
-        "### Inline Figure Gallery",
-        "",
-        "The figures below are rendered directly from the current manuscript package "
-        "PNG assets. The adjacent PDF files remain the LaTeX manuscript copies.",
-        "",
-    ]
-    for key in figure_keys:
-        entry = figure_manifest.get(key, {})
-        png_path = _manifest_format_path(
-            package_dir,
-            entry,
-            "png",
-            package_dir / "figures" / f"{key}.png",
-        )
-        pdf_path = _manifest_format_path(
-            package_dir,
-            entry,
-            "pdf",
-            package_dir / "figures" / f"{key}.pdf",
-        )
-        explanation_key = png_path.stem if png_path.is_file() else key
-        explanation = explanations.get(
-            explanation_key,
-            explanations.get(
-                key,
-                {
-                    "title": explanation_key.replace("_", " ").title(),
-                    "claim": "This figure is part of the generated manuscript evidence package.",
-                    "evidence": "The figure file is read from the current manuscript package.",
-                    "boundary": "Interpretation should follow the surrounding results section and claim-strength ledger.",
-                },
-            ),
-        )
-        image_path = figure_paths.get(png_path.stem)
-        lines.extend(
-            [
-                f"#### {explanation['title']}",
-                "",
-                *(_explanation_block(explanation)),
-                "",
-            ]
-        )
-        if image_path:
-            figure_note = FIGURE_NOTES.get(key, FIGURE_NOTES.get(explanation_key, ""))
-            lines.extend(
-                [
-                    f"![{explanation['title']}]({image_path})",
-                    "",
-                    f"**Figure note.** {figure_note}",
-                    "",
-                ]
-            )
-        else:
-            lines.extend([f"_Missing PNG preview for `{key}`._", ""])
-        lines.extend(
-            [
-                f"- **Source PNG.** `{_rel(png_path)}`",
-                f"- **Manuscript PDF.** `{_rel(pdf_path)}`",
-                "",
-            ]
-        )
-    return lines
-
-
-def _inline_table_gallery(
-    package_dir: Path,
-    explanations: dict[str, dict[str, str]] | None = None,
-) -> list[str]:
-    explanations = explanations or TABLE_EXPLANATIONS
-    manifest = _read_json(package_dir / "manifest.json")
-    table_manifest = manifest.get("tables") or {}
-    table_keys = sorted(table_manifest.keys())
-    if not table_keys:
-        table_keys = [path.stem for path in sorted((package_dir / "tables").glob("table_*.md"))]
-
-    lines = [
-        "### Inline Table Gallery",
-        "",
-        "The tables below are expanded directly from the current manuscript package "
-        "Markdown table files. CSV and TeX copies remain listed in the provenance index.",
-        "",
-    ]
-    for key in table_keys:
-        md_path = _manifest_format_path(
-            package_dir,
-            table_manifest.get(key, {}),
-            "md",
-            package_dir / "tables" / f"{key}.md",
-        )
-        explanation_key = md_path.stem if md_path.is_file() else key
-        explanation = explanations.get(
-            explanation_key,
-            explanations.get(
-                key,
-                {
-                    "claim": "This table is part of the generated manuscript evidence package.",
-                    "evidence": "The table is read from the current manuscript package Markdown output.",
-                    "boundary": "Interpretation should follow the surrounding results section and claim-strength ledger.",
-                },
-            ),
-        )
-        lines.extend(
-            [
-                f"#### `{explanation_key}`",
-                "",
-                *(_explanation_block(explanation)),
-                "",
-                f"- **Source table.** `{_rel(md_path)}`",
-                "",
-            ]
-        )
-        table_md = _read_text(md_path).strip()
-        if table_md:
-            lines.extend([table_md, ""])
-        else:
-            lines.extend([f"_Missing Markdown table for `{key}`._", ""])
-    return lines
-
-
-def _bridge_coverage_rows(path: Path) -> list[list[str]]:
-    coverage = _read_csv(path)
-    if coverage.empty or not {"metric", "value"}.issubset(coverage.columns):
-        return []
-    wanted = [
-        "raw_rows",
-        "raw_firms",
-        "matched_raw_rows",
-        "matched_raw_firms",
-        "row_coverage_rate",
-        "firm_coverage_rate",
-        "raw_positive_rows",
-        "matched_positive_rows",
-    ]
-    values = dict(zip(coverage["metric"], coverage["value"], strict=False))
-    return [[metric, _fmt(values.get(metric))] for metric in wanted if metric in values]
 
 
 def _construct_alignment_frame(manuscript_package: Path) -> pd.DataFrame:
@@ -1661,33 +1133,6 @@ def _exploratory_maxima_rows(
     return rows
 
 
-def _artifact_index(study_dir: Path) -> list[str]:
-    wanted = [
-        "study_summary.md",
-        "study_run_manifest.json",
-        "benchmark/benchmark_summary.md",
-        "benchmark/rolling_metrics.csv",
-        "public_cascade/public_cascade_summary.md",
-        "public_cascade/public_cascade_metrics.csv",
-        "peer_comparison/peer_comparison_summary.md",
-        "peer_comparison/detected_misstatement_model_family_metrics.csv",
-        "public_peer_comparison/public_model_family_summary.md",
-        "public_peer_comparison/public_model_family_metrics.csv",
-        "bridge_probe/bridge_probe_summary.json",
-        "bridge_probe/coverage_report.csv",
-        "construct_overlap/construct_overlap_summary.md",
-        "construct_overlap/public_score_benchmark_ranking.csv",
-        "construct_overlap/reciprocal_alignment.csv",
-        "opacity_validation_refresh/opacity_diagnostics_summary.csv",
-    ]
-    lines = []
-    for rel_path in wanted:
-        path = study_dir / rel_path
-        marker = "present" if path.exists() else "missing"
-        lines.append(f"- `{_rel(path)}` ({marker})")
-    return lines
-
-
 def build_snapshot(
     study_dir: Path,
     *,
@@ -1695,7 +1140,8 @@ def build_snapshot(
     allow_partial: bool,
 ) -> str:
     manuscript_package = manuscript_package or ARTIFACTS_DIR / "manuscript_package"
-    manifest = _read_json(study_dir / "study_run_manifest.json")
+    study_manifest_path = study_dir / "study_run_manifest.json"
+    manifest = _read_json(study_manifest_path)
     resolved_inputs = _resolve_input_records(manifest)
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
     bridge_summary = _read_json(study_dir / "bridge_probe" / "bridge_probe_summary.json")
@@ -1710,25 +1156,52 @@ def build_snapshot(
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     study_rel = _rel(study_dir)
     bridge_language = _bridge_language(manifest, construct_manifest)
-    _validate_package_bridge_claim_boundary(manuscript_package, bridge_language)
     validation_tier = bridge_language["tier"]
     figure_explanations, table_explanations = _bridge_artifact_explanations(bridge_language)
     package_manifest = _read_json(manuscript_package / "manifest.json")
     if package_manifest.get("schema_version") != "manuscript-package-v2":
         raise ValueError("results snapshot requires manuscript-package-v2")
+
+    def full_commit(value: object, context: str) -> str:
+        if (
+            type(value) is not str
+            or len(value) != 40
+            or any(character not in "0123456789abcdefABCDEF" for character in value)
+        ):
+            raise ValueError(f"{context} must be a full 40-character hexadecimal commit")
+        return value.lower()
+
+    package_commit = full_commit(package_manifest.get("study_commit"), "package study_commit")
+    study_commit = full_commit(manifest.get("repo_commit"), "study repo_commit")
+    if package_commit != study_commit:
+        raise ValueError("package study_commit does not match exact study commit")
+    if package_manifest.get("study_manifest_sha256") != sha256_path(study_manifest_path):
+        raise ValueError("package study_manifest_sha256 does not match exact study manifest bytes")
+
     reporting_contract = package_manifest.get("reporting_contract")
-    if not isinstance(reporting_contract, dict):
+    if type(reporting_contract) is not dict:
         raise ValueError("manuscript package reporting_contract must be an object")
     artifact_ownership = reporting_contract.get("artifact_ownership")
     owner_names = {"reproducibility", *(f"experiment_{index}" for index in range(1, 7))}
-    if not isinstance(artifact_ownership, dict) or set(artifact_ownership) != owner_names:
+    if type(artifact_ownership) is not dict or set(artifact_ownership) != owner_names:
         raise ValueError("reporting contract artifact_ownership must declare six experiments")
-    owned_tables = [
-        key for owner in artifact_ownership.values() for key in owner.get("tables", [])
-    ]
-    owned_figures = [
-        key for owner in artifact_ownership.values() for key in owner.get("figures", [])
-    ]
+    if any(
+        type(owner) is not dict
+        or set(owner) != {"tables", "figures"}
+        or type(owner["tables"]) is not list
+        or type(owner["figures"]) is not list
+        for owner in artifact_ownership.values()
+    ):
+        raise ValueError(
+            "reporting contract artifact_ownership members must be objects with tables/figures lists"
+        )
+    if reporting_contract != _reporting_contract(manifest, public_summary):
+        raise ValueError(
+            "manuscript package reporting contract must exactly match upstream study facts"
+        )
+    _validate_package_bridge_claim_boundary(manuscript_package, bridge_language)
+    owned_tables = [key for owner in artifact_ownership.values() for key in owner["tables"]]
+    owned_figures = [key for owner in artifact_ownership.values() for key in owner["figures"]]
     if (
         len(owned_tables) != len(set(owned_tables))
         or set(owned_tables) != set(package_manifest.get("tables", {}))
@@ -1891,121 +1364,6 @@ def build_snapshot(
         "public reporting-risk states and evaluates prevalence-aware ranking. It does not "
         "identify hidden misconduct, causal regulatory effects, or same-estimand "
         "superiority over detected-misstatement studies.",
-        "",
-        "## Reproducibility Metadata",
-        "",
-        _table(
-            ["Field", "Value"],
-            [
-                ["Artifact generation time", _code(manifest.get("generated_at_utc"))],
-                ["Snapshot generation time", _code(generated_at)],
-                ["Snapshot mode", _code("partial" if allow_partial else "full")],
-                ["Study commit", _code(manifest.get("repo_commit"))],
-                ["Git dirty", _code(str(manifest.get("git_dirty")))],
-                ["Config hash", _code(provenance.get("config_hash"))],
-                ["Input hash", _code(provenance.get("input_hash"))],
-                ["uv.lock hash", _code(provenance.get("uv_lock_hash"))],
-                ["Public-data as-of date", _code(public_lake.get("as_of_date"))],
-                ["Public-lake fresh build", _code(str(public_lake.get("fresh_build")))],
-                ["Public-lake commit", _code(public_lake.get("commit_sha"))],
-                ["Public-lake Git dirty", _code(str(public_lake.get("git_dirty")))],
-                ["Public-lake config hash", _code(public_lake.get("config_hash"))],
-                ["Public-lake input hash", _code(public_lake.get("input_hash"))],
-                ["Public-lake uv.lock hash", _code(public_lake.get("uv_lock_hash"))],
-                ["Form AP source kind", _code(form_ap.get("source_kind"))],
-                ["Form AP archive hash", _code(form_ap.get("archive_sha256"))],
-                ["Form AP member", _code(form_ap.get("member"))],
-                ["Form AP member hash", _code(form_ap.get("member_sha256"))],
-                ["WRDS source", _code(_summarize_wrds_sources(wrds.get("source_values")))],
-                ["WRDS version", _code(wrds.get("source_version_values"))],
-                ["WRDS extraction time", _code(wrds.get("extracted_at_values"))],
-                ["WRDS hash", _code(wrds.get("sha256"))],
-                ["Canonical status", _code(canonical_status)],
-                [
-                    "Canonical predicate failures",
-                    "; ".join(canonical_failures) if canonical_failures else _code("none"),
-                ],
-                [
-                    "Public-lake final-report schema",
-                    _code(public_lake_report.get("schema_version")),
-                ],
-                ["Peer comparison mode", _code(peer_status)],
-                ["Bridge status", _code(bridge_status)],
-                ["Construct-overlap validation tier", _code(validation_tier)],
-            ],
-        ),
-        "",
-        "### Source roles and hashes",
-        "",
-        "Local input paths are intentionally omitted; stable roles, availability, and "
-        "content hashes identify the evidence inputs.",
-        "",
-        _table(
-            ["Source role", "Available", "SHA-256"],
-            _source_role_rows(resolved_inputs),
-        ),
-        "",
-        "### Component status",
-        "",
-        _table(
-            ["Component", "Status", "Tier", "Artifact declared"],
-            _component_rows(manifest),
-        ),
-        "",
-        "### Claim maturity",
-        "",
-        _table(
-            ["Claim", "Status"],
-            _claim_maturity_rows(manifest, bridge_language),
-        ),
-        "",
-        "### Evidence Map",
-        "",
-        "```mermaid",
-        "flowchart LR",
-        '    L["Experiment 1-2<br/>benchmark timing and drift"]',
-        '    O["Experiment 3<br/>opacity and public labels"]',
-        '    P["Experiment 4-5<br/>public cascade construction and prediction"]',
-        bridge_language["evidence_map_label"],
-        '    D["Discussion<br/>claim boundary and manuscript tables/figures"]',
-        "    L --> D",
-        "    O --> D",
-        "    P --> D",
-        "    B --> D",
-        "```",
-        "",
-        "### Manuscript Reading Guide",
-        "",
-        _table(
-            ["Evidence block", "What it supports", "How to bound the claim"],
-            [
-                [
-                    "Public task metrics and Figure 1",
-                    "Filing-origin public information ranks later public review-and-correction labels above task prevalence.",
-                    "Annual-fold intervals describe evaluation-period dispersion; weak calibration rules out deployment-ready probability claims.",
-                ],
-                [
-                    "Feature-family metrics and Figure 2",
-                    "Feature fusion helps, while metadata remains a strong public information set.",
-                    "Treat feature families as information-set evidence, not structural mechanisms or source dominance.",
-                ],
-                [
-                    "Peer-compatible model-family tables and Figures 3-4",
-                    "Detected-misstatement and public-label suites share metric language and transferable model families.",
-                    "These rows are not original-study replications and do not establish same-estimand superiority.",
-                ],
-                [
-                    "Construct-overlap tables and Figure 5",
-                    bridge_language["reading_support"],
-                    bridge_language["reading_boundary"],
-                ],
-                [
-                    "Selection profile and DML opacity diagnostics",
-                    "Public labels include selected public scrutiny and source-availability states.",
-                    "The evidence is descriptive or adjusted-association evidence, not causal selection correction.",
-                ],
-            ],
-        ),
         "",
         "## Results for Experiment 1: Label Observability and Detection Timing",
         "",
@@ -2449,11 +1807,6 @@ def build_snapshot(
             _claim_maturity_rows(manifest, bridge_language),
         ),
         "",
-    ]
-    del lines[
-        lines.index("## Reproducibility Metadata") : lines.index(
-            "## Results for Experiment 1: Label Observability and Detection Timing"
-        )
     ]
     if rendered_tables != set(package_manifest["tables"]) or rendered_figures != set(
         package_manifest["figures"]
