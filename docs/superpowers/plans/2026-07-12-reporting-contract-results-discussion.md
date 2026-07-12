@@ -167,7 +167,7 @@ Commit message: `fix(reporting): derive DML maturity from fitted outcomes`.
 - Consumes: exact public boundaries, extended family summary, DML evidence/maturity, and the existing 16 table/5 figure package.
 - Produces: `manuscript-package-v2`, canonical verifier version 5, and one `reporting_contract` object.
 
-- [ ] **Step 1: Write RED validation/mutation tests**
+- [x] **Step 1: Write RED validation/mutation tests**
 
 Require exact-copy public boundaries and family metadata, artifact-derived DML evidence, and this ownership map:
 
@@ -207,7 +207,7 @@ flags, oversight features, inspection predictor status, partner variation, owner
 evidence, or DML maturity must fail verification. Include valid diagnostic and valid
 all-skipped/deferred fixtures.
 
-- [ ] **Step 2: Implement the smallest versioned package contract**
+- [x] **Step 2: Implement the smallest versioned package contract**
 
 Set `MANUSCRIPT_PACKAGE_SCHEMA = "manuscript-package-v2"`; keep
 `ATTESTATION_SCHEMA = "canonical-attestation-v1"` and set only
@@ -216,7 +216,7 @@ Set `MANUSCRIPT_PACKAGE_SCHEMA = "manuscript-package-v2"`; keep
 `public_opacity_dml_meta.json` to the package's early required-artifact list. Update the
 shared canonical fixture and the independent package-manifest fixture.
 
-- [ ] **Step 3: Make verifier v5 reconstruct and compare the same contract**
+- [x] **Step 3: Make verifier v5 reconstruct and compare the same contract**
 
 Keep all existing canonical gates. Add only exact contract reconstruction/comparison and ownership completeness checks.
 The package-manifest hash already attests the contract, so do not duplicate it into the
@@ -224,7 +224,7 @@ attestation. Replace the hard-coded diagnostic DML gate with consistency against
 artifact-derived study maturity. Reviewer production code remains unchanged; add ZIP
 readback assertions for package v2/contract and verifier version 5.
 
-- [ ] **Step 4: Run package/canonical/reviewer tests, full suite, Ruff/format/diff, and commit**
+- [x] **Step 4: Run package/canonical/reviewer tests, full suite, Ruff/format/diff, and commit**
 
 Commit message: `feat(reporting): attest package claim contract`.
 
@@ -246,17 +246,21 @@ Require Tables 4/14 to display family names while their CSV `Feature_Set` keys r
 Require Figure 2 fold dots to remain after tick-label substitution. Require Table 17 to
 describe the observed same-year FPI-form indicator and Table 18 to display the exact sample
 proxy label. Require diagnostic/deferred DML and constant/varied partner narrative cases;
-forbid peer winner/leader prose.
+forbid `highest mean PR-AUC`, `leads on mean PR-AUC`, `winner`, and `leader` prose.
 
 - [ ] **Step 2: Add one scalar display-name helper**
 
 Use the upstream `feature_family_summary` display name in Markdown/LaTeX and plot ticks only.
-Preserve raw keys for CSVs and Figure 2 fold-row matching.
+Preserve raw keys for CSVs and Figure 2 fold-row matching. Table 17 owns the observed
+`issuer_has_fpi_form_year` indicator and must not reuse the sample-proxy label. Table 18 maps
+its raw stage `domestic_us_gaap_proxy` to the contract display name only in Markdown/LaTeX;
+the contract artifact field is `is_domestic_us_gaap_proxy` and is not the raw stage key.
 
 - [ ] **Step 3: Generate caveats from the contract**
 
 Build DML prose from all four evidence fields plus aggregate maturity. Build the partner
-caveat from scope/count/range/constant/equality fields. Remove highest/leader wording.
+caveat from scope/count/range/constant/equality fields. Remove ranking language while
+retaining the peer transfer/estimand boundary.
 
 - [ ] **Step 4: Run package tests, full related suites, Ruff/format/diff, and commit**
 
