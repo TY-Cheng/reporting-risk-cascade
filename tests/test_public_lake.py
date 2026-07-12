@@ -383,7 +383,13 @@ def _sort_gold_for_compare(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _write_submissions_zip(path: Path) -> None:
+def _write_submissions_zip(
+    path: Path,
+    *,
+    form: str = "10-K",
+    primary_document: str = "alpha-20211231.htm",
+    primary_doc_description: str = "10-K",
+) -> None:
     payload = {
         "cik": "1",
         "name": "Alpha Beta Corp",
@@ -396,15 +402,15 @@ def _write_submissions_zip(path: Path) -> None:
                 "reportDate": ["2021-12-31"],
                 "acceptanceDateTime": ["2022-03-01T10:00:00.000Z"],
                 "act": ["34"],
-                "form": ["10-K"],
+                "form": [form],
                 "fileNumber": ["001-00001"],
                 "filmNumber": ["221111"],
                 "items": [""],
                 "size": [100],
                 "isXBRL": [1],
                 "isInlineXBRL": [1],
-                "primaryDocument": ["alpha-20211231.htm"],
-                "primaryDocDescription": ["10-K"],
+                "primaryDocument": [primary_document],
+                "primaryDocDescription": [primary_doc_description],
             }
         },
     }
@@ -413,7 +419,14 @@ def _write_submissions_zip(path: Path) -> None:
         zf.writestr("CIK0000000001.json", json.dumps(payload))
 
 
-def _write_fsds_zip(path: Path, adsh: str, tag: str, *, ddate: object = "20211231") -> None:
+def _write_fsds_zip(
+    path: Path,
+    adsh: str,
+    tag: str,
+    *,
+    ddate: object = "20211231",
+    num_rows: list[dict[str, object]] | None = None,
+) -> None:
     sub = pd.DataFrame(
         [
             {
@@ -433,7 +446,8 @@ def _write_fsds_zip(path: Path, adsh: str, tag: str, *, ddate: object = "2021123
         ]
     )
     num = pd.DataFrame(
-        [
+        num_rows
+        or [
             {
                 "adsh": adsh,
                 "tag": tag,
@@ -441,8 +455,9 @@ def _write_fsds_zip(path: Path, adsh: str, tag: str, *, ddate: object = "2021123
                 "ddate": ddate,
                 "qtrs": 4,
                 "uom": "USD",
-                "value": 1.0,
+                "segments": "",
                 "coreg": "",
+                "value": 1.0,
                 "footnote": "",
             }
         ]
@@ -1275,6 +1290,588 @@ def test_build_public_lake_writes_parquet_fsds_and_notes_summary(tmp_path: Path)
     assert all("source_year=" not in str(path) for path in (silver / "xbrl_core_fact").rglob("*"))
 
 
+def test_build_public_lake_resume_rebinds_manifests_and_rebuilds_gold(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    accession = "0000000001-22-000001"
+    _write_submissions_zip(bronze / "sec-bulk" / "submissions.zip")
+    fsds_a = bronze / "fsds" / "a.zip"
+    fsds_b = bronze / "fsds" / "b.zip"
+    notes_a = bronze / "notes" / "a.zip"
+    notes_b = bronze / "notes" / "b.zip"
+    _write_fsds_zip(fsds_a, accession, "Assets")
+    _write_fsds_zip(fsds_b, accession, "Liabilities")
+    _write_notes_zip(notes_a, accession, "DebtTextBlock")
+    _write_notes_zip(notes_b, accession, "TaxTextBlock")
+    fsds_manifest = bronze / "fsds" / "manifest.csv"
+    notes_manifest = bronze / "notes" / "manifest.csv"
+    pd.DataFrame({"local_path": [str(fsds_a)]}).to_csv(fsds_manifest, index=False)
+    pd.DataFrame({"local_path": [str(notes_a)]}).to_csv(notes_manifest, index=False)
+
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+    )
+    first_gold = read_table(gold / "issuer_origin_panel.parquet")
+    first_note_chars = int(
+        read_table(silver / "note_summary.parquet").loc[0, "note_text_char_count"]
+    )
+    assert first_gold.loc[0, "xbrl_coverage_assets"] == 1
+    assert first_gold.loc[0, "xbrl_coverage_liabilities"] == 0
+
+    pd.DataFrame({"local_path": [str(fsds_b)]}).to_csv(fsds_manifest, index=False)
+    pd.DataFrame({"local_path": [str(notes_b)]}).to_csv(notes_manifest, index=False)
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        resume=True,
+    )
+
+    assert read_table(silver / "xbrl_core_fact")["tag"].tolist() == ["Liabilities"]
+    second_note_chars = int(
+        read_table(silver / "note_summary.parquet").loc[0, "note_text_char_count"]
+    )
+    assert second_note_chars != first_note_chars
+    second_gold = read_table(gold / "issuer_origin_panel.parquet")
+    assert second_gold.loc[0, "xbrl_coverage_assets"] == 0
+    assert second_gold.loc[0, "xbrl_coverage_liabilities"] == 1
+    assert int(second_gold.loc[0, "note_text_char_count"]) == second_note_chars
+
+    _write_fsds_zip(fsds_b, accession, "Revenues")
+    _write_notes_zip(notes_b, accession, "RevenueTextBlock")
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        resume=True,
+    )
+    assert read_table(silver / "xbrl_core_fact")["tag"].tolist() == ["Revenues"]
+    third_gold = read_table(gold / "issuer_origin_panel.parquet")
+    assert third_gold.loc[0, "xbrl_coverage_liabilities"] == 0
+    assert third_gold.loc[0, "xbrl_coverage_revenues"] == 1
+
+    raw_outputs = build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        notes_mode="raw",
+        resume=True,
+    )
+    assert raw_outputs["note_text"].exists()
+    assert read_table(raw_outputs["note_text"])["tag"].tolist() == ["RevenueTextBlock"]
+
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2027-04-23",
+        notes_mode="raw",
+        resume=True,
+    )
+    gold_metadata = json.loads((gold / "gold_metadata.json").read_text(encoding="utf-8"))
+    assert gold_metadata["as_of_date"] == "2027-04-23"
+
+    skip_outputs = build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2027-04-23",
+        notes_mode="skip",
+        resume=True,
+    )
+    assert "note_summary" not in skip_outputs
+    assert not (silver / "note_summary.parquet").exists()
+    assert not (silver / "notes_filing_dim.parquet").exists()
+    assert not (silver / "note_text").exists()
+    skip_gold = read_table(gold / "issuer_origin_panel.parquet")
+    assert "note_text_count" not in skip_gold.columns
+
+    pd.DataFrame(columns=["local_path"]).to_csv(fsds_manifest, index=False)
+    pd.DataFrame(columns=["local_path"]).to_csv(notes_manifest, index=False)
+    empty_outputs = build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2027-04-23",
+        notes_mode="skip",
+        resume=True,
+    )
+    assert "xbrl_fact_summary" not in empty_outputs
+    assert not (silver / "filing_xbrl_dim.parquet").exists()
+    assert not (silver / "xbrl_fact_summary.parquet").exists()
+    assert not (silver / "xbrl_core_fact").exists()
+    assert not (silver / "._fsds_parquet_parts").exists()
+    empty_gold = read_table(gold / "issuer_origin_panel.parquet")
+    assert "xbrl_coverage_revenues" not in empty_gold.columns
+    assert "note_text_count" not in empty_gold.columns
+
+
+def test_public_lake_csv_gz_empty_fsds_and_notes_skip_clear_stale_artifacts(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    _write_submissions_zip(bronze / "sec-bulk" / "submissions.zip")
+    fsds_manifest = bronze / "fsds" / "manifest.csv"
+    fsds_manifest.parent.mkdir(parents=True)
+    pd.DataFrame(columns=["local_path"]).to_csv(fsds_manifest, index=False)
+    notes_archive = bronze / "notes" / "notes.zip"
+    _write_notes_zip(notes_archive, "0000000001-22-000001", "DebtTextBlock")
+    pd.DataFrame({"local_path": [str(notes_archive)]}).to_csv(
+        bronze / "notes" / "manifest.csv", index=False
+    )
+    _write_csv_gz(
+        silver / "xbrl_fact.csv.gz",
+        [{"adsh": "stale", "tag": "Assets", "value": 1}],
+    )
+    _write_csv_gz(
+        silver / "note_text.csv.gz",
+        [{"adsh": "stale", "tag": "DebtTextBlock", "note_text": "stale"}],
+    )
+    _write_csv_gz(
+        silver / "note_summary.csv.gz",
+        [{"adsh": "stale", "note_text_count": 1, "note_text_char_count": 5}],
+    )
+
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        storage_format="csv-gz",
+        notes_mode="skip",
+    )
+
+    assert not (silver / "xbrl_fact.csv.gz").exists()
+    assert not (silver / "note_text.csv.gz").exists()
+    assert not (silver / "note_summary.csv.gz").exists()
+
+
+def test_public_lake_resume_rebuilds_amendment_docs_and_downstream_gold(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    _write_submissions_zip(
+        bronze / "sec-bulk" / "submissions.zip",
+        form="10-K/A",
+        primary_document="amendment.htm",
+        primary_doc_description="Part III proxy amendment",
+    )
+    amendment_dir = bronze / "amendment-primary-docs"
+    amendment_dir.mkdir(parents=True)
+    amendment_doc = amendment_dir / "amendment.htm"
+    amendment_doc.write_text(
+        "EXPLANATORY NOTE This amendment only supplies Part III information. ITEM 1.",
+        encoding="utf-8",
+    )
+
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+    )
+    first_annotation = pd.read_csv(silver / "amendment_annotation.csv.gz")
+    assert first_annotation.loc[0, "financial_override"] == 0
+    first_marker = json.loads(
+        (silver / ".public_lake_dag" / "derived_tables.done.json").read_text(encoding="utf-8")
+    )
+    gold_metadata_path = gold / "gold_metadata.json"
+    stale_gold_metadata = json.loads(gold_metadata_path.read_text(encoding="utf-8"))
+    stale_gold_metadata["sentinel"] = "stale"
+    gold_metadata_path.write_text(json.dumps(stale_gold_metadata), encoding="utf-8")
+
+    amendment_doc.write_text(
+        "EXPLANATORY NOTE We correct an error in the financial statements. SIGNATURES",
+        encoding="utf-8",
+    )
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        resume=True,
+    )
+
+    second_annotation = pd.read_csv(silver / "amendment_annotation.csv.gz")
+    assert second_annotation.loc[0, "financial_override"] == 1
+    second_marker = json.loads(
+        (silver / ".public_lake_dag" / "derived_tables.done.json").read_text(encoding="utf-8")
+    )
+    assert first_marker["input_signature"] != second_marker["input_signature"]
+    assert (
+        second_marker["input_signature"]["amendment_primary_documents"][0]["relative_path"]
+        == "amendment.htm"
+    )
+    assert "sentinel" not in json.loads(gold_metadata_path.read_text(encoding="utf-8"))
+
+
+def test_public_lake_v2_batch_markers_reject_legacy_schema(tmp_path: Path) -> None:
+    output = tmp_path / "output.parquet"
+    write_table(pd.DataFrame({"id": [1]}), output)
+    input_path = tmp_path / "input.zip"
+    different_path = tmp_path / "different.zip"
+    input_path.write_bytes(b"input")
+    different_path.write_bytes(b"different")
+    state = tmp_path / "state"
+    public_lake._write_batch_marker(
+        state_dir=state,
+        batch_name="batch_0000",
+        archive_paths=[input_path],
+        outputs={"output": output},
+        context={"notes_mode": "summary"},
+    )
+    marker = state / "batch_0000.done.json"
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+
+    assert public_lake.PARSER_VERSION == "public-lake-v2"
+    assert public_lake.SCHEMA_VERSION == "public-lake-v2"
+    assert payload["parser_version"] == "public-lake-v2"
+    assert payload["schema_version"] == "public-lake-v2"
+    assert public_lake._batch_marker_outputs_exist(marker)
+    assert public_lake._batch_marker_outputs_exist(
+        marker,
+        archive_paths=[input_path],
+        context={"notes_mode": "summary"},
+    )
+    assert not public_lake._batch_marker_outputs_exist(
+        marker,
+        archive_paths=[different_path],
+        context={"notes_mode": "summary"},
+    )
+    assert not public_lake._batch_marker_outputs_exist(
+        marker,
+        archive_paths=[input_path],
+        context={"notes_mode": "raw"},
+    )
+
+    payload["schema_version"] = "public-lake-v1"
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    assert not public_lake._batch_marker_outputs_exist(marker)
+
+
+def test_fsds_compact_core_preserves_context_and_evolves_legacy_headers(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    legacy = bronze / "legacy.zip"
+    modern = bronze / "modern.zip"
+    _write_fsds_zip(
+        legacy,
+        "legacy-adsh",
+        "Assets",
+        num_rows=[
+            {
+                "adsh": "legacy-adsh",
+                "tag": "Assets",
+                "ddate": "20211231",
+                "qtrs": 0,
+                "uom": "USD",
+                "value": "100.00",
+            }
+        ],
+    )
+    _write_fsds_zip(
+        modern,
+        "modern-adsh",
+        "Assets",
+        num_rows=[
+            {
+                "adsh": "modern-adsh",
+                "tag": "Assets",
+                "version": " us-gaap/2025 ",
+                "ddate": "20251231",
+                "qtrs": 0,
+                "uom": "USD",
+                "segments": " ",
+                "coreg": " ",
+                "value": "200.000",
+            }
+        ],
+    )
+    manifest = bronze / "manifest.csv"
+    pd.DataFrame({"local_path": [str(legacy), str(modern)]}).to_csv(manifest, index=False)
+
+    outputs = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        batch_size=1,
+    )
+    core = read_table(outputs["xbrl_core_fact"]).set_index("adsh")
+
+    assert {"taxonomy_version", "segments", "coreg", "value_text"}.issubset(core.columns)
+    assert pd.isna(core.loc["legacy-adsh", "taxonomy_version"])
+    assert pd.isna(core.loc["legacy-adsh", "segments"])
+    assert pd.isna(core.loc["legacy-adsh", "coreg"])
+    assert core.loc["modern-adsh", "taxonomy_version"] == "us-gaap/2025"
+    assert pd.isna(core.loc["modern-adsh", "segments"])
+    assert pd.isna(core.loc["modern-adsh", "coreg"])
+    assert core.loc["modern-adsh", "value_text"] == "200.000"
+    conflicts = read_table(outputs["xbrl_context_conflicts"])
+    assert conflicts.empty
+
+
+def test_fsds_compact_core_excludes_conflicting_normalized_num_keys(tmp_path: Path) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    archive = bronze / "conflict.zip"
+    shared = {
+        "adsh": "conflict-adsh",
+        "tag": "Assets",
+        "version": "us-gaap/2025",
+        "ddate": "20251231",
+        "qtrs": 0,
+        "uom": "USD",
+        "segments": "",
+        "coreg": "",
+    }
+    _write_fsds_zip(
+        archive,
+        "conflict-adsh",
+        "Assets",
+        num_rows=[{**shared, "value": "100.0"}, {**shared, "value": "200.0"}],
+    )
+    manifest = bronze / "manifest.csv"
+    pd.DataFrame({"local_path": [str(archive)]}).to_csv(manifest, index=False)
+
+    outputs = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        batch_size=1,
+    )
+
+    assert read_table(outputs["xbrl_core_fact"]).empty
+    conflicts = read_table(outputs["xbrl_context_conflicts"])
+    assert len(conflicts) == 1
+    assert int(conflicts.loc[0, "distinct_numeric_values"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("raw_values", "expected_core_rows", "expected_conflict_rows"),
+    [
+        pytest.param(("40.0", "40.00"), 1, 0, id="same-exact-numeric-value"),
+        pytest.param(("100.0", "200.0"), 0, 1, id="different-values"),
+    ],
+)
+def test_fsds_compact_core_reconciles_full_keys_across_archive_batches(
+    tmp_path: Path,
+    raw_values: tuple[str, str],
+    expected_core_rows: int,
+    expected_conflict_rows: int,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    shared = {
+        "adsh": "cross-batch-adsh",
+        "tag": "Assets",
+        "version": "us-gaap/2025",
+        "ddate": "20251231",
+        "qtrs": 0,
+        "uom": "USD",
+        "segments": "",
+        "coreg": "",
+    }
+    archives = [bronze / "first.zip", bronze / "second.zip"]
+    for archive, raw_value in zip(archives, raw_values, strict=True):
+        _write_fsds_zip(
+            archive,
+            "cross-batch-adsh",
+            "Assets",
+            num_rows=[{**shared, "value": raw_value}],
+        )
+    manifest = bronze / "manifest.csv"
+    pd.DataFrame({"local_path": [str(path) for path in archives]}).to_csv(manifest, index=False)
+
+    outputs = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=4,
+        batch_size=1,
+    )
+    combined_outputs = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=tmp_path / "silver_combined_batch",
+        duckdb_threads=1,
+        batch_size=2,
+    )
+
+    assert len(read_table(outputs["filing_xbrl_dim"])) == 1
+    assert len(read_table(outputs["xbrl_fact_summary"])) == 1
+    core = read_table(outputs["xbrl_core_fact"])
+    assert len(core) == expected_core_rows
+    assert "part_batch" not in core.columns
+    conflicts = read_table(outputs["xbrl_context_conflicts"])
+    assert len(conflicts) == expected_conflict_rows
+    if expected_conflict_rows:
+        assert int(conflicts.loc[0, "distinct_numeric_values"]) == 2
+    pd.testing.assert_frame_equal(
+        core.reset_index(drop=True),
+        read_table(combined_outputs["xbrl_core_fact"]).reset_index(drop=True),
+        check_dtype=False,
+    )
+    pd.testing.assert_frame_equal(
+        conflicts.reset_index(drop=True),
+        read_table(combined_outputs["xbrl_context_conflicts"]).reset_index(drop=True),
+        check_dtype=False,
+    )
+    pd.testing.assert_frame_equal(
+        read_table(outputs["xbrl_fact_summary"]).reset_index(drop=True),
+        read_table(combined_outputs["xbrl_fact_summary"]).reset_index(drop=True),
+        check_dtype=False,
+    )
+    assert (
+        hashlib.sha256(outputs["xbrl_fact_summary"].read_bytes()).hexdigest()
+        == hashlib.sha256(combined_outputs["xbrl_fact_summary"].read_bytes()).hexdigest()
+    )
+    for marker in sorted(
+        (silver / ".public_lake_dag" / "normalize_fsds_batches").glob("*.done.json")
+    ):
+        marker_outputs = json.loads(marker.read_text(encoding="utf-8"))["outputs"]
+        assert "xbrl_core_candidate_part" in marker_outputs
+        assert "xbrl_fact_summary_candidate_part" in marker_outputs
+        assert "xbrl_core_fact_part" not in marker_outputs
+
+
+def test_fsds_summary_is_batch_invariant_for_disjoint_keys_of_same_filing(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    archives = [bronze / "assets.zip", bronze / "liabilities.zip"]
+    _write_fsds_zip(archives[0], "split-adsh", "Assets")
+    _write_fsds_zip(archives[1], "split-adsh", "Liabilities")
+    manifest = bronze / "manifest.csv"
+    pd.DataFrame({"local_path": [str(path) for path in archives]}).to_csv(manifest, index=False)
+
+    separate = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=tmp_path / "silver_separate",
+        duckdb_threads=4,
+        batch_size=1,
+    )
+    combined = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=tmp_path / "silver_combined",
+        duckdb_threads=1,
+        batch_size=2,
+    )
+
+    expected = [
+        {
+            "adsh": "split-adsh",
+            "xbrl_fact_count": 2,
+            "xbrl_unique_tags": 2,
+            "xbrl_unique_units": 1,
+        }
+    ]
+    separate_summary = read_table(separate["xbrl_fact_summary"])
+    combined_summary = read_table(combined["xbrl_fact_summary"])
+    assert separate_summary.to_dict("records") == expected
+    pd.testing.assert_frame_equal(separate_summary, combined_summary, check_dtype=False)
+    assert (
+        hashlib.sha256(separate["xbrl_fact_summary"].read_bytes()).hexdigest()
+        == hashlib.sha256(combined["xbrl_fact_summary"].read_bytes()).hexdigest()
+    )
+
+
+def test_fsds_compact_core_retains_all_units_and_audits_non_usd_conflicts(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    archive = bronze / "eur.zip"
+    common = {
+        "adsh": "eur-adsh",
+        "version": "us-gaap/2025",
+        "ddate": "20251231",
+        "qtrs": 0,
+        "uom": "EUR",
+        "segments": "",
+        "coreg": "",
+    }
+    _write_fsds_zip(
+        archive,
+        "eur-adsh",
+        "Assets",
+        num_rows=[
+            {**common, "tag": "Assets", "value": "100.0"},
+            {**common, "tag": "Assets", "value": "200.0"},
+            {**common, "tag": "Liabilities", "value": "40.0"},
+        ],
+    )
+    manifest = bronze / "manifest.csv"
+    pd.DataFrame({"local_path": [str(archive)]}).to_csv(manifest, index=False)
+
+    outputs = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        batch_size=1,
+    )
+
+    core = read_table(outputs["xbrl_core_fact"])
+    assert core[["tag", "unit"]].to_dict("records") == [{"tag": "Liabilities", "unit": "EUR"}]
+    conflicts = read_table(outputs["xbrl_context_conflicts"])
+    assert conflicts[["tag", "unit", "distinct_numeric_values"]].to_dict("records") == [
+        {"tag": "Assets", "unit": "EUR", "distinct_numeric_values": 2}
+    ]
+
+
+def test_fsds_compact_core_uses_exact_sec_numeric_identity_above_float_precision(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    archive = bronze / "large-values.zip"
+    shared = {
+        "adsh": "large-value-adsh",
+        "tag": "Assets",
+        "version": "us-gaap/2025",
+        "ddate": "20251231",
+        "qtrs": 0,
+        "uom": "USD",
+        "segments": "",
+        "coreg": "",
+    }
+    _write_fsds_zip(
+        archive,
+        "large-value-adsh",
+        "Assets",
+        num_rows=[
+            {**shared, "value": "9007199254740992"},
+            {**shared, "value": "9007199254740993"},
+        ],
+    )
+    manifest = bronze / "manifest.csv"
+    pd.DataFrame({"local_path": [str(archive)]}).to_csv(manifest, index=False)
+
+    outputs = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        batch_size=1,
+    )
+
+    assert read_table(outputs["xbrl_core_fact"]).empty
+    conflicts = read_table(outputs["xbrl_context_conflicts"])
+    assert len(conflicts) == 1
+    assert int(conflicts.loc[0, "distinct_numeric_values"]) == 2
+
+
 def test_fsds_parquet_batch_resume_skips_completed_batches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1327,6 +1924,130 @@ def test_fsds_parquet_batch_resume_skips_completed_batches(
     assert outputs["xbrl_fact_summary"].exists()
     xbrl_summary = read_table(outputs["xbrl_fact_summary"])
     assert int(xbrl_summary["xbrl_fact_count"].sum()) == 2
+
+
+def test_fsds_resume_rebinds_changed_layout_and_prunes_orphan_batches(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    archives = [bronze / "a.zip", bronze / "b.zip"]
+    _write_fsds_zip(archives[0], "A", "Assets")
+    _write_fsds_zip(archives[1], "B", "Liabilities")
+    manifest = tmp_path / "manifest.csv"
+    pd.DataFrame({"local_path": [str(path) for path in archives]}).to_csv(manifest, index=False)
+
+    _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        batch_size=1,
+    )
+    pd.DataFrame({"local_path": [str(archives[0])]}).to_csv(manifest, index=False)
+    shrunk = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        batch_size=1,
+        resume=True,
+    )
+    assert read_table(shrunk["xbrl_fact_summary"])["adsh"].tolist() == ["A"]
+    assert not list((silver / "._fsds_parquet_parts").rglob("part_batch=batch_0001"))
+
+    pd.DataFrame({"local_path": [str(path) for path in reversed(archives)]}).to_csv(
+        manifest, index=False
+    )
+    regrouped = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        batch_size=2,
+        resume=True,
+    )
+    assert read_table(regrouped["xbrl_fact_summary"])["adsh"].tolist() == ["A", "B"]
+    markers = list((silver / ".public_lake_dag" / "normalize_fsds_batches").glob("*.done.json"))
+    assert len(markers) == 1
+    marker = json.loads(markers[0].read_text(encoding="utf-8"))
+    assert [entry["path"] for entry in marker["inputs"]] == [
+        str(path.resolve()) for path in reversed(archives)
+    ]
+    assert all(len(entry["sha256"]) == 64 for entry in marker["inputs"])
+
+    pd.DataFrame(columns=["local_path"]).to_csv(manifest, index=False)
+    emptied = _normalize_fsds_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        batch_size=2,
+        resume=True,
+    )
+    assert emptied == {}
+    assert not (silver / "xbrl_fact_summary.parquet").exists()
+    assert not (silver / "._fsds_parquet_parts").exists()
+
+
+def test_notes_resume_rebinds_changed_layout_and_prunes_orphan_batches(
+    tmp_path: Path,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    archives = [bronze / "a.zip", bronze / "b.zip"]
+    _write_notes_zip(archives[0], "A", "DebtTextBlock")
+    _write_notes_zip(archives[1], "B", "TaxTextBlock")
+    manifest = tmp_path / "manifest.csv"
+    pd.DataFrame({"local_path": [str(path) for path in archives]}).to_csv(manifest, index=False)
+
+    public_lake._normalize_notes_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        notes_mode="summary",
+        batch_size=1,
+    )
+    pd.DataFrame({"local_path": [str(archives[0])]}).to_csv(manifest, index=False)
+    shrunk = public_lake._normalize_notes_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        notes_mode="summary",
+        batch_size=1,
+        resume=True,
+    )
+    assert read_table(shrunk["note_summary"])["adsh"].tolist() == ["A"]
+    assert not list((silver / "._notes_parquet_parts").rglob("part_batch=batch_0001"))
+
+    pd.DataFrame({"local_path": [str(path) for path in reversed(archives)]}).to_csv(
+        manifest, index=False
+    )
+    regrouped = public_lake._normalize_notes_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        notes_mode="summary",
+        batch_size=2,
+        resume=True,
+    )
+    assert read_table(regrouped["note_summary"])["adsh"].tolist() == ["A", "B"]
+    markers = list((silver / ".public_lake_dag" / "normalize_notes_batches").glob("*.done.json"))
+    assert len(markers) == 1
+    marker = json.loads(markers[0].read_text(encoding="utf-8"))
+    assert [entry["path"] for entry in marker["inputs"]] == [
+        str(path.resolve()) for path in reversed(archives)
+    ]
+    assert all(len(entry["sha256"]) == 64 for entry in marker["inputs"])
+
+    pd.DataFrame(columns=["local_path"]).to_csv(manifest, index=False)
+    emptied = public_lake._normalize_notes_manifest_parquet(
+        manifest_csv=manifest,
+        silver_dir=silver,
+        duckdb_threads=1,
+        notes_mode="summary",
+        batch_size=2,
+        resume=True,
+    )
+    assert emptied == {}
+    assert not (silver / "note_summary.parquet").exists()
+    assert not (silver / "._notes_parquet_parts").exists()
 
 
 def test_csv_gz_manifest_archives_and_batch_helpers_cover_resume_guards(
@@ -1401,19 +2122,6 @@ def test_csv_gz_manifest_archives_and_batch_helpers_cover_resume_guards(
         )
         is False
     )
-
-    duplicate_parts = tmp_path / "duplicate_parts"
-    write_table(pd.DataFrame({"adsh": ["a", "a"]}), duplicate_parts / "part.parquet")
-    with pytest.raises(ValueError, match="duplicate adsh"):
-        public_lake._assert_no_duplicate_parquet_key(
-            parts_dir=duplicate_parts,
-            key="adsh",
-            label="toy",
-            threads=1,
-            memory_limit="128MB",
-            temp_directory=tmp_path / "duckdb_tmp",
-            max_temp_directory_size="1GB",
-        )
 
     empty_zip = tmp_path / "empty_num.zip"
     with zipfile.ZipFile(empty_zip, "w") as zf:
@@ -1866,6 +2574,134 @@ def test_xbrl_core_features_build_stable_ratios_and_safe_denominators() -> None:
     assert pd.isna(features.loc["zero-denom", "xbrl_ratio_leverage"])
 
 
+@pytest.mark.parametrize("reverse", [False, True], ids=["source-order", "reversed"])
+def test_xbrl_core_features_select_only_consolidated_usd_context(reverse: bool) -> None:
+    common = {
+        "adsh": "a-context",
+        "tag": "Assets",
+        "taxonomy_version": "us-gaap/2025",
+        "quarters": 0,
+        "fact_date": "2025-12-31",
+    }
+    rows = [
+        {**common, "unit": "USD", "segments": "Axis=SegmentA;", "coreg": None, "value": 10.0},
+        {**common, "unit": "USD", "segments": None, "coreg": "0000000002", "value": 20.0},
+        {**common, "unit": None, "segments": None, "coreg": None, "value": 90.0},
+        {**common, "unit": "USD", "segments": None, "coreg": None, "value": 100.0},
+        {**common, "unit": "EUR", "segments": None, "coreg": None, "value": 999.0},
+        {
+            **common,
+            "tag": "Liabilities",
+            "unit": "USD",
+            "segments": None,
+            "coreg": None,
+            "value": 40.0,
+        },
+    ]
+    if reverse:
+        rows.reverse()
+
+    features = build_xbrl_core_features(pd.DataFrame(rows)).set_index("accession")
+
+    assert features.loc["a-context", "xbrl_value_assets"] == 100.0
+    assert features.loc["a-context", "xbrl_ratio_leverage"] == 0.4
+    assert features.attrs["xbrl_context_conflict_count"] == 0
+
+
+def test_xbrl_core_features_excludes_conflicting_full_context_but_deduplicates_same_value() -> (
+    None
+):
+    common = {
+        "adsh": "a-conflict",
+        "taxonomy_version": "us-gaap/2025",
+        "quarters": 0,
+        "fact_date": "2025-12-31",
+        "unit": "USD",
+        "segments": None,
+        "coreg": None,
+    }
+    facts = pd.DataFrame(
+        [
+            {**common, "tag": "Assets", "value": 100.0, "value_text": "100.0"},
+            {**common, "tag": "Assets", "value": 200.0, "value_text": "200.0"},
+            {**common, "tag": "Liabilities", "value": 40.0, "value_text": "40.0"},
+            {**common, "tag": "Liabilities", "value": 40.0, "value_text": "40.00"},
+        ]
+    )
+
+    features = build_xbrl_core_features(facts).set_index("accession")
+
+    assert pd.isna(features.loc["a-conflict", "xbrl_value_assets"])
+    assert features.loc["a-conflict", "xbrl_coverage_assets"] == 0
+    assert features.loc["a-conflict", "xbrl_value_liabilities"] == 40.0
+    assert features.attrs["xbrl_context_conflict_count"] == 1
+
+
+def test_xbrl_core_features_uses_exact_value_text_for_conflict_identity() -> None:
+    common = {
+        "adsh": "a-large-conflict",
+        "tag": "Assets",
+        "taxonomy_version": "us-gaap/2025",
+        "quarters": 0,
+        "fact_date": "2025-12-31",
+        "unit": "USD",
+        "segments": None,
+        "coreg": None,
+    }
+    rounded_float = float(9_007_199_254_740_992)
+    facts = pd.DataFrame(
+        [
+            {**common, "value": rounded_float, "value_text": "9007199254740992"},
+            {**common, "value": rounded_float, "value_text": "9007199254740993"},
+            {
+                **common,
+                "tag": "Liabilities",
+                "value": 40.0,
+                "value_text": "40.00",
+            },
+        ]
+    )
+
+    features = build_xbrl_core_features(facts).set_index("accession")
+
+    assert pd.isna(features.loc["a-large-conflict", "xbrl_value_assets"])
+    assert features.loc["a-large-conflict", "xbrl_coverage_assets"] == 0
+    assert features.attrs["xbrl_context_conflict_count"] == 1
+
+
+def test_xbrl_core_features_ranks_tag_and_period_before_unit_preference() -> None:
+    common = {
+        "adsh": "a-ranking",
+        "taxonomy_version": "us-gaap/2025",
+        "quarters": 4,
+        "fact_date": "2025-12-31",
+        "segments": None,
+        "coreg": None,
+    }
+    facts = pd.DataFrame(
+        [
+            {
+                **common,
+                "tag": "Revenues",
+                "uom": None,
+                "value": 100.0,
+                "value_text": "100.0",
+            },
+            {
+                **common,
+                "tag": "SalesRevenueNet",
+                "uom": "USD",
+                "value": 200.0,
+                "value_text": "200.0",
+            },
+        ]
+    )
+
+    features = build_xbrl_core_features(facts).set_index("accession")
+
+    assert features.loc["a-ranking", "xbrl_value_revenues"] == pytest.approx(100.0)
+
+
 def test_xbrl_and_event_helpers_cover_empty_and_filter_branches(tmp_path: Path) -> None:
     assert build_xbrl_core_features(pd.DataFrame({"tag": ["Assets"]})).empty
     assert build_xbrl_core_features(pd.DataFrame({"adsh": ["a"], "tag": ["NotCore"]})).empty
@@ -1962,6 +2798,15 @@ def test_xbrl_yoy_uses_prior_fiscal_year_not_same_year_amendment() -> None:
                 "xbrl_value_assets": 121.0,
                 "xbrl_value_revenues": 71.0,
             },
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2021,
+                "origin_date": "2021-11-15",
+                "accession": "q-2021",
+                "form": "10-Q",
+                "xbrl_value_assets": 110.0,
+                "xbrl_value_revenues": 55.0,
+            },
         ]
     )
 
@@ -1971,6 +2816,105 @@ def test_xbrl_yoy_uses_prior_fiscal_year_not_same_year_amendment() -> None:
     assert featured.loc["a-2021-amend", "xbrl_ratio_assets_yoy_change"] == pytest.approx(0.21)
     assert featured.loc["a-2021-amend", "xbrl_ratio_revenue_yoy_change"] == pytest.approx(0.42)
     assert featured.loc["a-2021-amend", "xbrl_coverage_assets_yoy"] == 1
+    assert pd.isna(featured.loc["q-2021", "xbrl_ratio_assets_yoy_change"])
+    assert pd.isna(featured.loc["q-2021", "xbrl_ratio_revenue_yoy_change"])
+    assert featured.loc["q-2021", "xbrl_coverage_assets_yoy"] == 0
+    assert featured.loc["q-2021", "xbrl_coverage_revenues_yoy"] == 0
+
+
+def test_xbrl_yoy_requires_prior_consecutive_annual_filing() -> None:
+    filing = pd.DataFrame(
+        [
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2020,
+                "origin_date": "2021-02-15",
+                "accession": "a-2020",
+                "form": "10-K",
+                "xbrl_value_assets": 100.0,
+                "xbrl_value_revenues": 50.0,
+            },
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2021,
+                "origin_date": "2021-11-15",
+                "accession": "q-2021",
+                "form": "10-Q",
+                "xbrl_value_assets": 150.0,
+                "xbrl_value_revenues": 75.0,
+            },
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2022,
+                "origin_date": "2023-02-15",
+                "accession": "a-2022",
+                "form": "10-K",
+                "xbrl_value_assets": 200.0,
+                "xbrl_value_revenues": 100.0,
+            },
+        ]
+    )
+
+    featured = public_lake.add_xbrl_yoy_ratio_features(filing).set_index("accession")
+
+    assert pd.isna(featured.loc["q-2021", "xbrl_ratio_assets_yoy_change"])
+    assert pd.isna(featured.loc["q-2021", "xbrl_ratio_revenue_yoy_change"])
+    assert featured.loc["q-2021", "xbrl_coverage_assets_yoy"] == 0
+    assert featured.loc["q-2021", "xbrl_coverage_revenues_yoy"] == 0
+    assert pd.isna(featured.loc["a-2022", "xbrl_ratio_assets_yoy_change"])
+    assert pd.isna(featured.loc["a-2022", "xbrl_ratio_revenue_yoy_change"])
+    assert featured.loc["a-2022", "xbrl_coverage_assets_yoy"] == 0
+    assert featured.loc["a-2022", "xbrl_coverage_revenues_yoy"] == 0
+
+
+def test_duckdb_xbrl_yoy_requires_current_row_to_be_annual() -> None:
+    filing = pd.DataFrame(
+        [
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2020,
+                "origin_date": "2021-02-15",
+                "acceptance_datetime": "2021-02-15",
+                "accession": "a-2020",
+                "form": "10-K",
+                "xbrl_value_assets": 100.0,
+                "xbrl_value_revenues": 50.0,
+            },
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2021,
+                "origin_date": "2022-02-15",
+                "acceptance_datetime": "2022-02-15",
+                "accession": "a-2021",
+                "form": "10-K",
+                "xbrl_value_assets": 120.0,
+                "xbrl_value_revenues": 70.0,
+            },
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_year": 2021,
+                "origin_date": "2021-11-15",
+                "acceptance_datetime": "2021-11-15",
+                "accession": "q-2021",
+                "form": "10-Q",
+                "xbrl_value_assets": 110.0,
+                "xbrl_value_revenues": 55.0,
+            },
+        ]
+    )
+    con = _duckdb_connect(threads=1)
+    try:
+        con.register("filing_yoy_input", filing)
+        featured = con.execute(public_lake._duckdb_xbrl_yoy_query("filing_yoy_input")).fetchdf()
+    finally:
+        con.close()
+    featured = featured.set_index("accession")
+
+    assert featured.loc["a-2021", "xbrl_ratio_assets_yoy_change"] == pytest.approx(0.20)
+    assert pd.isna(featured.loc["q-2021", "xbrl_ratio_assets_yoy_change"])
+    assert pd.isna(featured.loc["q-2021", "xbrl_ratio_revenue_yoy_change"])
+    assert featured.loc["q-2021", "xbrl_coverage_assets_yoy"] == 0
+    assert featured.loc["q-2021", "xbrl_coverage_revenues_yoy"] == 0
 
 
 def test_8k_item_parser_uses_items_metadata_only(tmp_path: Path) -> None:
@@ -2521,6 +3465,8 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
     silver = tmp_path / "silver"
     gold_pandas = tmp_path / "gold_pandas"
     gold_duckdb = tmp_path / "gold_duckdb"
+    gold_duckdb_thread4 = tmp_path / "gold_duckdb_thread4"
+    gold_duckdb_shuffled = tmp_path / "gold_duckdb_shuffled"
     write_table(
         pd.DataFrame(
             [
@@ -2540,16 +3486,52 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
             [
                 {
                     "issuer_cik": "0000000001",
+                    "accession": "z-annual",
+                    "accession_nodash": "zannual",
+                    "filing_date": "2022-03-01",
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": "2022-03-01 08:00:00",
+                    "form": " 10-k ",
+                    "items": "",
+                    "primary_document": "z.htm",
+                    "primary_doc_description": "10-K",
+                },
+                {
+                    "issuer_cik": "0000000001",
+                    "accession": "zz-annual",
+                    "accession_nodash": "zzannual",
+                    "filing_date": "2022-03-01",
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": "2022-03-01 08:00:00",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "zz.htm",
+                    "primary_doc_description": "10-K",
+                },
+                {
+                    "issuer_cik": "0000000001",
                     "accession": "a-annual",
                     "accession_nodash": "aannual",
                     "filing_date": "2022-03-01",
                     "report_date": "2021-12-31",
-                    "acceptance_datetime": "2022-03-01",
+                    "acceptance_datetime": "2022-03-01 09:00:00",
                     "form": "10-K",
                     "items": "",
                     "primary_document": "a.htm",
                     "primary_doc_description": "10-K",
-                }
+                },
+                {
+                    "issuer_cik": "0000000001",
+                    "accession": "0-null-acceptance",
+                    "accession_nodash": "0nullacceptance",
+                    "filing_date": "2022-03-01",
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": None,
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "null.htm",
+                    "primary_doc_description": "10-K",
+                },
             ]
         ),
         silver / "filing_dim.parquet",
@@ -2609,18 +3591,90 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         silver / "xbrl_fact.csv.gz",
         [
             {
-                "adsh": "a-annual",
+                "adsh": "z-annual",
                 "tag": "Assets",
-                "unit": "USD",
+                "uom": "USD",
+                "taxonomy_version": "us-gaap/2025",
+                "segments": "segment-a",
+                "coreg": None,
+                "value": 999.0,
+                "quarters": 4,
+                "fact_date": "2021-12-31",
+            },
+            {
+                "adsh": "z-annual",
+                "tag": "Assets",
+                "uom": "USD",
+                "taxonomy_version": "us-gaap/2025",
+                "segments": None,
+                "coreg": None,
                 "value": 100.0,
                 "quarters": 4,
                 "fact_date": "2021-12-31",
             },
             {
-                "adsh": "a-annual",
+                "adsh": "z-annual",
                 "tag": "Liabilities",
-                "unit": "USD",
+                "uom": "USD",
+                "taxonomy_version": "us-gaap/2025",
+                "segments": None,
+                "coreg": None,
                 "value": 40.0,
+                "quarters": 4,
+                "fact_date": "2021-12-31",
+            },
+            {
+                "adsh": "z-annual",
+                "tag": "Revenues",
+                "uom": None,
+                "taxonomy_version": "us-gaap/2025",
+                "segments": None,
+                "coreg": None,
+                "value": 100.0,
+                "quarters": 4,
+                "fact_date": "2021-12-31",
+            },
+            {
+                "adsh": "z-annual",
+                "tag": "SalesRevenueNet",
+                "uom": "USD",
+                "taxonomy_version": "us-gaap/2025",
+                "segments": None,
+                "coreg": None,
+                "value": 200.0,
+                "quarters": 4,
+                "fact_date": "2021-12-31",
+            },
+            {
+                "adsh": "z-annual",
+                "tag": "NetIncomeLoss",
+                "uom": "USD",
+                "taxonomy_version": "us-gaap/2025",
+                "segments": None,
+                "coreg": None,
+                "value": 50.0,
+                "quarters": 4,
+                "fact_date": "2021-12-31",
+            },
+            {
+                "adsh": "z-annual",
+                "tag": "InventoryNet",
+                "uom": "USD",
+                "taxonomy_version": "us-gaap/2025",
+                "segments": None,
+                "coreg": None,
+                "value": "9007199254740992.0000",
+                "quarters": 4,
+                "fact_date": "2021-12-31",
+            },
+            {
+                "adsh": "z-annual",
+                "tag": "InventoryNet",
+                "uom": "USD",
+                "taxonomy_version": "us-gaap/2025",
+                "segments": None,
+                "coreg": None,
+                "value": "9007199254740993.0000",
                 "quarters": 4,
                 "fact_date": "2021-12-31",
             },
@@ -2628,8 +3682,12 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
     )
     _write_csv_gz(
         silver / "note_text.csv.gz",
-        [{"adsh": "a-annual", "tag": "DebtTextBlock", "note_text": "short note"}],
+        [{"adsh": "z-annual", "tag": "DebtTextBlock", "note_text": "short note"}],
     )
+    xbrl_header = pd.read_csv(silver / "xbrl_fact.csv.gz", nrows=0).columns
+    assert "value_text" not in xbrl_header
+    assert "unit" not in xbrl_header
+    assert "uom" in xbrl_header
     build_gold_panels(
         silver_dir=silver,
         gold_dir=gold_pandas,
@@ -2643,8 +3701,31 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         engine="duckdb",
         duckdb_threads=1,
     )
+    build_gold_panels(
+        silver_dir=silver,
+        gold_dir=gold_duckdb_thread4,
+        as_of_date="2026-04-23",
+        engine="duckdb",
+        duckdb_threads=4,
+    )
+    xbrl_path = silver / "xbrl_fact.csv.gz"
+    shuffled_xbrl = pd.read_csv(xbrl_path, dtype=str).iloc[::-1].reset_index(drop=True)
+    shuffled_xbrl.to_csv(xbrl_path, index=False, compression="gzip")
+    build_gold_panels(
+        silver_dir=silver,
+        gold_dir=gold_duckdb_shuffled,
+        as_of_date="2026-04-23",
+        engine="duckdb",
+        duckdb_threads=4,
+    )
     pandas_panel = _sort_gold_for_compare(read_table(gold_pandas / "issuer_origin_panel.parquet"))
     duckdb_panel = _sort_gold_for_compare(read_table(gold_duckdb / "issuer_origin_panel.parquet"))
+    duckdb_thread4_panel = _sort_gold_for_compare(
+        read_table(gold_duckdb_thread4 / "issuer_origin_panel.parquet")
+    )
+    duckdb_shuffled_panel = _sort_gold_for_compare(
+        read_table(gold_duckdb_shuffled / "issuer_origin_panel.parquet")
+    )
     compare_cols = [
         "fiscal_year",
         "label_comment_thread_365",
@@ -2654,10 +3735,13 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         "censored_365",
         "xbrl_fact_count",
         "xbrl_unique_tags",
+        "xbrl_unique_units",
         "xbrl_ratio_leverage",
+        "xbrl_value_revenues",
         "xbrl_ratio_assets_yoy_change",
         "xbrl_coverage_assets_yoy",
         "xbrl_coverage_assets",
+        "xbrl_coverage_inventory",
         "note_text_count",
         "note_text_char_count",
     ]
@@ -2666,6 +3750,44 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
         pandas_panel[compare_cols].reset_index(drop=True),
         duckdb_panel[compare_cols].reset_index(drop=True),
         check_dtype=False,
+    )
+    pd.testing.assert_frame_equal(
+        duckdb_panel[compare_cols].reset_index(drop=True),
+        duckdb_thread4_panel[compare_cols].reset_index(drop=True),
+        check_dtype=False,
+    )
+    pd.testing.assert_frame_equal(
+        duckdb_panel[compare_cols].reset_index(drop=True),
+        duckdb_shuffled_panel[compare_cols].reset_index(drop=True),
+        check_dtype=False,
+    )
+    assert pandas_panel["accession"].tolist() == ["z-annual"]
+    assert duckdb_panel["accession"].tolist() == ["z-annual"]
+    assert duckdb_thread4_panel["accession"].tolist() == ["z-annual"]
+    assert duckdb_shuffled_panel["accession"].tolist() == ["z-annual"]
+    assert pandas_panel.loc[0, "xbrl_value_assets"] == pytest.approx(100.0)
+    assert pandas_panel.loc[0, "xbrl_value_revenues"] == pytest.approx(100.0)
+    assert pandas_panel.loc[0, "xbrl_unique_units"] == 1
+    assert pandas_panel.loc[0, "xbrl_coverage_inventory"] == 0
+    for output_dir in (
+        gold_pandas,
+        gold_duckdb,
+        gold_duckdb_thread4,
+        gold_duckdb_shuffled,
+    ):
+        metadata = json.loads((output_dir / "gold_metadata.json").read_text(encoding="utf-8"))
+        assert metadata["xbrl_context_conflict_count"] == 1
+    assert (
+        hashlib.sha256((gold_duckdb / "issuer_origin_panel.parquet").read_bytes()).hexdigest()
+        == hashlib.sha256(
+            (gold_duckdb_thread4 / "issuer_origin_panel.parquet").read_bytes()
+        ).hexdigest()
+    )
+    assert (
+        hashlib.sha256((gold_duckdb / "issuer_origin_panel.parquet").read_bytes()).hexdigest()
+        == hashlib.sha256(
+            (gold_duckdb_shuffled / "issuer_origin_panel.parquet").read_bytes()
+        ).hexdigest()
     )
 
 
@@ -3174,3 +4296,135 @@ def test_simple_dag_stops_downstream_after_upstream_failure(tmp_path: Path) -> N
 
     assert calls == ["fail"]
     assert not (tmp_path / "state" / "downstream.done.json").exists()
+
+
+def test_simple_dag_resume_invalidates_legacy_schema_marker(tmp_path: Path) -> None:
+    output = tmp_path / "output.parquet"
+    calls: list[str] = []
+
+    def task_action() -> dict[str, Path]:
+        calls.append("run")
+        write_table(pd.DataFrame({"run": [len(calls)]}), output)
+        return {"output": output}
+
+    state_dir = tmp_path / "state"
+    task = DagTask("versioned", (), task_action)
+    SimpleDagRunner(state_dir=state_dir, resume=False).run([task])
+    marker = state_dir / "versioned.done.json"
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    assert payload["parser_version"] == public_lake.PARSER_VERSION
+    assert payload["schema_version"] == public_lake.SCHEMA_VERSION
+
+    payload["schema_version"] = "public-lake-v1"
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    SimpleDagRunner(state_dir=state_dir, resume=True).run([task])
+
+    assert calls == ["run", "run"]
+    refreshed = json.loads(marker.read_text(encoding="utf-8"))
+    assert refreshed["schema_version"] == "public-lake-v2"
+
+
+def test_simple_dag_resume_binds_input_signature_and_propagates_execution(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    upstream_output = tmp_path / "upstream.parquet"
+    downstream_output = tmp_path / "downstream.parquet"
+    calls: list[str] = []
+
+    def upstream_action() -> dict[str, Path]:
+        calls.append("upstream")
+        write_table(pd.DataFrame({"value": [len(calls)]}), upstream_output)
+        return {"upstream": upstream_output}
+
+    def downstream_action() -> dict[str, Path]:
+        calls.append("downstream")
+        write_table(pd.DataFrame({"value": [len(calls)]}), downstream_output)
+        return {"downstream": downstream_output}
+
+    def tasks(version: int) -> list[DagTask]:
+        return [
+            DagTask(
+                "upstream",
+                (),
+                upstream_action,
+                input_signature={"version": version},
+            ),
+            DagTask("downstream", ("upstream",), downstream_action),
+        ]
+
+    SimpleDagRunner(state_dir=state_dir, resume=False).run(tasks(1))
+    SimpleDagRunner(state_dir=state_dir, resume=True).run(tasks(1))
+    assert calls == ["upstream", "downstream"]
+
+    SimpleDagRunner(state_dir=state_dir, resume=True).run(tasks(2))
+    assert calls == ["upstream", "downstream", "upstream", "downstream"]
+    marker = json.loads((state_dir / "upstream.done.json").read_text(encoding="utf-8"))
+    assert marker["input_signature"] == {"version": 2}
+
+
+def test_simple_dag_prunes_outputs_removed_by_successful_rerun(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    stale_output = tmp_path / "stale.parquet"
+
+    def write_output() -> dict[str, Path]:
+        write_table(pd.DataFrame({"value": [1]}), stale_output)
+        return {"stale": stale_output}
+
+    SimpleDagRunner(state_dir=state_dir, resume=False).run(
+        [DagTask("changing", (), write_output, input_signature={"version": 1})]
+    )
+    assert stale_output.exists()
+
+    SimpleDagRunner(state_dir=state_dir, resume=True).run(
+        [DagTask("changing", (), lambda: {}, input_signature={"version": 2})]
+    )
+    assert not stale_output.exists()
+    marker = json.loads((state_dir / "changing.done.json").read_text(encoding="utf-8"))
+    assert marker["outputs"] == {}
+
+
+def test_simple_dag_never_prunes_marker_paths_outside_allowed_roots(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside.parquet"
+    state_dir = allowed / "state"
+
+    def write_outside() -> dict[str, Path]:
+        write_table(pd.DataFrame({"value": [1]}), outside)
+        return {"outside": outside}
+
+    SimpleDagRunner(
+        state_dir=state_dir,
+        resume=False,
+        allowed_output_roots=(allowed,),
+    ).run([DagTask("changing", (), write_outside, input_signature={"version": 1})])
+    SimpleDagRunner(
+        state_dir=state_dir,
+        resume=True,
+        allowed_output_roots=(allowed,),
+    ).run([DagTask("changing", (), lambda: {}, input_signature={"version": 2})])
+
+    assert outside.exists()
+
+    SimpleDagRunner(
+        state_dir=state_dir,
+        resume=True,
+        allowed_output_roots=(allowed,),
+    ).run(
+        [
+            DagTask(
+                "changing",
+                (),
+                lambda: {"root": allowed},
+                input_signature={"version": 3},
+            )
+        ]
+    )
+    SimpleDagRunner(
+        state_dir=state_dir,
+        resume=True,
+        allowed_output_roots=(allowed,),
+    ).run([DagTask("changing", (), lambda: {}, input_signature={"version": 4})])
+
+    assert allowed.exists()
+    assert state_dir.exists()

@@ -23,6 +23,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -42,8 +43,8 @@ from .table_io import (
     write_table,
 )
 
-PARSER_VERSION = "public-lake-v1"
-SCHEMA_VERSION = "public-lake-v1"
+PARSER_VERSION = "public-lake-v2"
+SCHEMA_VERSION = "public-lake-v2"
 SEC_REQUEST_INTERVAL_SECONDS = 0.15
 CSV_CHUNKSIZE = 250_000
 DEFAULT_FSDS_BATCH_SIZE = 4
@@ -168,29 +169,62 @@ class DagTask:
     name: str
     deps: Sequence[str]
     action: Callable[[], Dict[str, Path]]
+    input_signature: Any = None
 
 
 class SimpleDagRunner:
-    def __init__(self, *, state_dir: Path, resume: bool) -> None:
+    def __init__(
+        self,
+        *,
+        state_dir: Path,
+        resume: bool,
+        allowed_output_roots: Optional[Sequence[Path]] = None,
+    ) -> None:
         self.state_dir = state_dir
         self.resume = bool(resume)
+        roots = allowed_output_roots or (state_dir.parent,)
+        self.allowed_output_roots = tuple(Path(root).expanduser().resolve() for root in roots)
         self.completed: set[str] = set()
+        self.executed: set[str] = set()
         self.outputs: Dict[str, Path] = {}
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
     def _marker_path(self, name: str) -> Path:
         return self.state_dir / f"{name}.done.json"
 
+    def _output_path_is_allowed(self, path: Path) -> bool:
+        resolved = Path(path).expanduser().resolve()
+        state_root = self.state_dir.expanduser().resolve()
+        if resolved == state_root or state_root in resolved.parents:
+            return False
+        return any(root in resolved.parents for root in self.allowed_output_roots)
+
     def _load_marker(self, name: str) -> Dict[str, Path]:
         payload = json.loads(self._marker_path(name).read_text(encoding="utf-8"))
         return {key: Path(value) for key, value in payload.get("outputs", {}).items()}
 
-    def _write_marker(self, name: str, outputs: Dict[str, Path]) -> None:
-        self._marker_path(name).write_text(
+    def _marker_is_current(self, task: DagTask) -> bool:
+        try:
+            payload = json.loads(self._marker_path(task.name).read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return False
+        if payload.get("parser_version") != PARSER_VERSION:
+            return False
+        if payload.get("schema_version") != SCHEMA_VERSION:
+            return False
+        if payload.get("input_signature") != task.input_signature:
+            return False
+        return all(Path(value).exists() for value in payload.get("outputs", {}).values())
+
+    def _write_marker(self, task: DagTask, outputs: Dict[str, Path]) -> None:
+        self._marker_path(task.name).write_text(
             json.dumps(
                 {
-                    "task": name,
+                    "task": task.name,
                     "completed_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "parser_version": PARSER_VERSION,
+                    "schema_version": SCHEMA_VERSION,
+                    "input_signature": task.input_signature,
                     "outputs": {key: str(value) for key, value in outputs.items()},
                 },
                 indent=2,
@@ -205,11 +239,33 @@ class SimpleDagRunner:
             if missing:
                 raise RuntimeError(f"Task {task.name} cannot run before dependencies {missing}")
             marker = self._marker_path(task.name)
-            if self.resume and marker.exists():
+            dependency_executed = any(dep in self.executed for dep in task.deps)
+            if (
+                self.resume
+                and not dependency_executed
+                and marker.exists()
+                and self._marker_is_current(task)
+            ):
                 task_outputs = self._load_marker(task.name)
             else:
+                previous_outputs: Dict[str, Path] = {}
+                if marker.exists():
+                    try:
+                        previous_outputs = self._load_marker(task.name)
+                    except (json.JSONDecodeError, OSError):
+                        previous_outputs = {}
                 task_outputs = task.action()
-                self._write_marker(task.name, task_outputs)
+                current_paths = {
+                    Path(path).expanduser().resolve() for path in task_outputs.values()
+                }
+                for old_path in previous_outputs.values():
+                    old_resolved = old_path.expanduser().resolve()
+                    if old_resolved not in current_paths and self._output_path_is_allowed(
+                        old_resolved
+                    ):
+                        remove_table_path(old_path)
+                self._write_marker(task, task_outputs)
+                self.executed.add(task.name)
             self.outputs.update(task_outputs)
             self.completed.add(task.name)
         return self.outputs
@@ -736,26 +792,26 @@ def _read_table_auto(path: Path) -> pd.DataFrame:
     raise ValueError(f"Unsupported table file type: {path}")
 
 
-def _extract_zip_member_table(zip_path: Path, member: str) -> pd.DataFrame:
+def _extract_zip_member_table(zip_path: Path, member: str, *, dtype: Any = None) -> pd.DataFrame:
     with tempfile.TemporaryDirectory(prefix="public-lake-zip-") as tmp:
         tmp_path = Path(tmp) / Path(member).name
         with zipfile.ZipFile(zip_path) as zf:
             with zf.open(member) as source, tmp_path.open("wb") as dest:
                 shutil.copyfileobj(source, dest)
-        return _read_delimited_table(tmp_path)
+        return _read_delimited_table(tmp_path, dtype=dtype)
 
 
 def _read_table_sample(path: Path) -> List[str]:
     return path.read_text(encoding="utf-8", errors="ignore").splitlines()[:20]
 
 
-def _read_delimited_table(path: Path) -> pd.DataFrame:
+def _read_delimited_table(path: Path, *, dtype: Any = None) -> pd.DataFrame:
     sample = _read_table_sample(path)
     if any("\t" in line for line in sample):
-        return pd.read_csv(path, sep="\t", low_memory=False)
+        return pd.read_csv(path, sep="\t", low_memory=False, dtype=dtype)
     if any("|" in line for line in sample):
-        return pd.read_csv(path, sep="|", low_memory=False)
-    return pd.read_csv(path, low_memory=False)
+        return pd.read_csv(path, sep="|", low_memory=False, dtype=dtype)
+    return pd.read_csv(path, low_memory=False, dtype=dtype)
 
 
 def _extract_zip_member_to_path(zf: zipfile.ZipFile, member: str, dest_dir: Path) -> Path:
@@ -904,7 +960,7 @@ def _duckdb_copy_query_to_csv(
         con.close()
 
 
-def _duckdb_csv_source(paths: Sequence[Path] | Path) -> str:
+def _duckdb_csv_source(paths: Sequence[Path] | Path, *, all_varchar: bool = False) -> str:
     if isinstance(paths, Path):
         source_path = f"'{_duckdb_path(paths)}'"
     else:
@@ -912,13 +968,22 @@ def _duckdb_csv_source(paths: Sequence[Path] | Path) -> str:
         if not paths:
             raise ValueError("DuckDB CSV source requires at least one path")
         source_path = _duckdb_path_list(paths)
-    return f"read_csv_auto({source_path}, union_by_name=true, sample_size=-1)"
+    options = ["union_by_name=true", "sample_size=-1"]
+    if all_varchar:
+        options.append("all_varchar=true")
+    return f"read_csv_auto({source_path}, {', '.join(options)})"
 
 
 def _duckdb_table_source(path: Path) -> str:
     if path.suffix.lower() == ".parquet" or path.is_dir():
         return parquet_scan_sql(path)
     return f"read_csv_auto('{_duckdb_path(path)}', union_by_name=true, sample_size=-1)"
+
+
+def _duckdb_xbrl_table_source(path: Path) -> str:
+    if path.suffix.lower() == ".parquet" or path.is_dir():
+        return _duckdb_table_source(path)
+    return _duckdb_csv_source(path, all_varchar=True)
 
 
 def _preferred_table_path(directory: Path, stem: str) -> Path:
@@ -936,6 +1001,7 @@ def _duckdb_copy_query_to_parquet(
     threads: int,
     partition_by: Sequence[str] = (),
     overwrite: bool = True,
+    preserve_order: bool = False,
     memory_limit: str | None = DEFAULT_DUCKDB_MEMORY_LIMIT,
     temp_directory: Path | str | None = None,
     max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
@@ -946,8 +1012,10 @@ def _duckdb_copy_query_to_parquet(
     options = ["FORMAT PARQUET", "COMPRESSION ZSTD"]
     if partition_by:
         options.append("PARTITION_BY (" + ", ".join(partition_by) + ")")
+    if preserve_order:
+        options.append("PRESERVE_ORDER true")
     con = _duckdb_connect(
-        threads=threads,
+        threads=1 if preserve_order else threads,
         memory_limit=memory_limit,
         temp_directory=temp_directory,
         max_temp_directory_size=max_temp_directory_size,
@@ -1166,7 +1234,7 @@ def normalize_fsds_archive(
         if not sub_members or not num_members:
             raise ValueError(f"Could not find sub/num tables in {archive_path}")
         sub_df = _extract_zip_member_table(archive_path, sub_members[0])
-        num_df = _extract_zip_member_table(archive_path, num_members[0])
+        num_df = _extract_zip_member_table(archive_path, num_members[0], dtype=str)
 
     filing_xbrl = sub_df.rename(
         columns={
@@ -1203,6 +1271,22 @@ def normalize_fsds_archive(
             "footnote": "footnote",
         }
     )
+    if "value" in xbrl_fact.columns:
+        xbrl_fact["value_text"] = xbrl_fact["value"].astype("string").str.strip()
+        xbrl_fact["value"] = xbrl_fact["value_text"].map(_sec_num_decimal)
+    if "quarters" in xbrl_fact.columns:
+        xbrl_fact["quarters"] = pd.to_numeric(xbrl_fact["quarters"], errors="coerce").astype(
+            "Int64"
+        )
+    if "unit" in xbrl_fact.columns:
+        xbrl_fact["unit"] = (
+            xbrl_fact["unit"].astype("string").str.strip().str.upper().replace("", pd.NA)
+        )
+    for context_column in ("segments", "coreg"):
+        if context_column in xbrl_fact.columns:
+            xbrl_fact[context_column] = (
+                xbrl_fact[context_column].astype("string").str.strip().replace("", pd.NA)
+            )
     if "fact_date" in xbrl_fact.columns:
         xbrl_fact["fact_date"] = _parse_sec_date_series(xbrl_fact["fact_date"])
     silver_dir.mkdir(parents=True, exist_ok=True)
@@ -1261,20 +1345,30 @@ def _normalize_fsds_archive_duckdb(
         fact_path = silver_dir / "xbrl_fact.parquet"
         write_table(filing_xbrl, filing_path)
 
-        source = (
-            f"read_csv_auto('{_duckdb_path(num_path_tmp)}', union_by_name=true, sample_size=-1)"
-        )
+        source = _duckdb_csv_source(num_path_tmp, all_varchar=True)
+        num_columns = {
+            column.strip().lower(): column.strip() for column in _read_header_columns(num_path_tmp)
+        }
+
+        def optional_num_text(column: str) -> str:
+            source_column = num_columns.get(column)
+            if source_column is None:
+                return "CAST(NULL AS VARCHAR)"
+            return f"nullif(trim(CAST({_duckdb_identifier(source_column)} AS VARCHAR)), '')"
+
         fact_query = f"""
             SELECT
-                adsh,
-                tag,
-                version AS taxonomy_version,
+                nullif(trim(CAST(adsh AS VARCHAR)), '') AS adsh,
+                nullif(trim(CAST(tag AS VARCHAR)), '') AS tag,
+                {optional_num_text("version")} AS taxonomy_version,
                 {_duckdb_sec_date_expr("ddate")} AS fact_date,
-                qtrs AS quarters,
-                uom AS unit,
-                try_cast(value AS DOUBLE) AS value,
-                coreg,
-                footnote
+                try_cast(qtrs AS INTEGER) AS quarters,
+                nullif(upper(trim(CAST(uom AS VARCHAR))), '') AS unit,
+                trim(CAST(value AS VARCHAR)) AS value_text,
+                try_cast(value AS DECIMAL(28, 4)) AS value,
+                {optional_num_text("segments")} AS segments,
+                {optional_num_text("coreg")} AS coreg,
+                {optional_num_text("footnote")} AS footnote
             FROM {source}
         """
         _duckdb_copy_query_to_parquet(query=fact_query, dest=fact_path, threads=duckdb_threads)
@@ -1564,6 +1658,23 @@ def _manifest_archive_paths(manifest_csv: Path) -> List[Path]:
     return paths
 
 
+def _manifest_task_input_signature(
+    manifest_csv: Path,
+    *,
+    settings: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+    manifest_path = Path(manifest_csv).expanduser().resolve()
+    archive_paths = _manifest_archive_paths(manifest_csv) if manifest_csv.exists() else []
+    archive_identities = _archive_input_identities(archive_paths)
+    signature = {
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": _hash_file(manifest_csv) if manifest_csv.exists() else None,
+        "archives": archive_identities,
+        "settings": settings,
+    }
+    return signature, archive_identities
+
+
 def _batch_name(batch_index: int) -> str:
     return f"batch_{batch_index:04d}"
 
@@ -1580,6 +1691,7 @@ def _extract_archive_members_batch(
     staging_dir: Path,
     required_stem: str,
     optional_stems: Sequence[str] = (),
+    verify_metadata: bool = True,
 ) -> Dict[str, List[Path]]:
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
@@ -1589,7 +1701,8 @@ def _extract_archive_members_batch(
         extracted[stem] = []
 
     for idx, archive_path in enumerate(archive_paths):
-        _verify_metadata_hash(archive_path)
+        if verify_metadata:
+            _verify_metadata_hash(archive_path)
         archive_dir = staging_dir / f"archive_{idx:04d}"
         archive_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(archive_path) as zf:
@@ -1612,15 +1725,131 @@ def _batch_marker_path(state_dir: Path, batch_name: str) -> Path:
     return state_dir / f"{batch_name}.done.json"
 
 
-def _batch_marker_outputs_exist(marker_path: Path) -> bool:
+def _archive_input_identities(archive_paths: Sequence[Path]) -> List[Dict[str, str]]:
+    identities: List[Dict[str, str]] = []
+    for path in archive_paths:
+        resolved = Path(path).expanduser().resolve()
+        actual_hash = _hash_file(resolved)
+        meta_path = _metadata_path(resolved)
+        if meta_path.exists():
+            expected_hash = json.loads(meta_path.read_text(encoding="utf-8")).get("sha256")
+            if expected_hash and actual_hash != expected_hash:
+                raise ValueError(
+                    f"Hash mismatch for {resolved}: metadata sha256={expected_hash}, "
+                    f"actual sha256={actual_hash}"
+                )
+        identities.append({"path": str(resolved), "sha256": actual_hash})
+    return identities
+
+
+def _optional_file_identity(path: Path) -> Optional[Dict[str, str]]:
+    return _archive_input_identities([path])[0] if path.exists() else None
+
+
+def _directory_file_identities(directory: Path) -> List[Dict[str, str]]:
+    root = Path(directory).expanduser().resolve()
+    if not root.exists():
+        return []
+    files = sorted(
+        (path for path in root.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
+    return [
+        {
+            "relative_path": path.relative_to(root).as_posix(),
+            "sha256": _hash_file(path),
+        }
+        for path in files
+    ]
+
+
+def _archive_identities_for_paths(
+    archive_paths: Sequence[Path],
+    identity_by_path: Optional[Dict[str, Dict[str, str]]] = None,
+) -> List[Dict[str, str]]:
+    if identity_by_path is None:
+        return _archive_input_identities(archive_paths)
+    return [identity_by_path[str(Path(path).expanduser().resolve())] for path in archive_paths]
+
+
+def _archive_identity_map(
+    archive_paths: Sequence[Path],
+    input_identities: Optional[Sequence[Dict[str, str]]] = None,
+) -> Dict[str, Dict[str, str]]:
+    identities = (
+        list(input_identities)
+        if input_identities is not None
+        else _archive_input_identities(archive_paths)
+    )
+    expected_paths = [str(Path(path).expanduser().resolve()) for path in archive_paths]
+    if [identity.get("path") for identity in identities] != expected_paths:
+        raise ValueError("Precomputed archive identities do not match the ordered archive paths")
+    return {identity["path"]: identity for identity in identities}
+
+
+def _batch_marker_outputs_exist(
+    marker_path: Path,
+    *,
+    archive_paths: Optional[Sequence[Path]] = None,
+    input_identities: Optional[Sequence[Dict[str, str]]] = None,
+    context: Optional[Dict[str, Any]] = None,
+) -> bool:
     if not marker_path.exists():
         return False
     try:
         payload = json.loads(marker_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return False
+    if payload.get("parser_version") != PARSER_VERSION:
+        return False
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        return False
+    if archive_paths is not None:
+        expected_inputs = (
+            list(input_identities)
+            if input_identities is not None
+            else _archive_input_identities(archive_paths)
+        )
+        if payload.get("inputs") != expected_inputs:
+            return False
+    if context is not None and payload.get("context") != context:
+        return False
     for value in payload.get("outputs", {}).values():
         if not Path(value).exists():
+            return False
+    return True
+
+
+def _batch_resume_layout_is_compatible(
+    *,
+    state_dir: Path,
+    planned_batches: Sequence[Tuple[str, Sequence[Path]]],
+    parts_roots: Sequence[Path],
+    identity_by_path: Optional[Dict[str, Dict[str, str]]] = None,
+    context: Optional[Dict[str, Any]] = None,
+) -> bool:
+    expected = {batch_name: batch_paths for batch_name, batch_paths in planned_batches}
+    observed: set[str] = set()
+    if state_dir.exists():
+        observed.update(
+            marker.name.removesuffix(".done.json") for marker in state_dir.glob("*.done.json")
+        )
+    for parts_root in parts_roots:
+        if parts_root.exists():
+            observed.update(
+                part.name.removeprefix("part_batch=") for part in parts_root.glob("part_batch=*")
+            )
+    for batch_name in observed:
+        batch_paths = expected.get(batch_name)
+        if batch_paths is None:
+            return False
+        marker = _batch_marker_path(state_dir, batch_name)
+        if not _batch_marker_outputs_exist(
+            marker,
+            archive_paths=batch_paths,
+            input_identities=_archive_identities_for_paths(batch_paths, identity_by_path),
+            context=context,
+        ):
             return False
     return True
 
@@ -1631,6 +1860,8 @@ def _write_batch_marker(
     batch_name: str,
     archive_paths: Sequence[Path],
     outputs: Dict[str, Path],
+    input_identities: Optional[Sequence[Dict[str, str]]] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     _batch_marker_path(state_dir, batch_name).write_text(
@@ -1638,7 +1869,14 @@ def _write_batch_marker(
             {
                 "batch": batch_name,
                 "completed_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "inputs": [str(path) for path in archive_paths],
+                "parser_version": PARSER_VERSION,
+                "schema_version": SCHEMA_VERSION,
+                "context": context,
+                "inputs": (
+                    list(input_identities)
+                    if input_identities is not None
+                    else _archive_input_identities(archive_paths)
+                ),
                 "outputs": {key: str(path) for key, path in outputs.items()},
             },
             indent=2,
@@ -1674,6 +1912,7 @@ def _copy_parquet_query_from_parts(
     memory_limit: str | None,
     temp_directory: Path | str | None,
     max_temp_directory_size: str | None,
+    preserve_order: bool = False,
 ) -> bool:
     files = _parquet_files(parts_dir)
     if not files:
@@ -1683,6 +1922,7 @@ def _copy_parquet_query_from_parts(
         query=query.format(source=source),
         dest=dest,
         threads=threads,
+        preserve_order=preserve_order,
         memory_limit=memory_limit,
         temp_directory=temp_directory,
         max_temp_directory_size=max_temp_directory_size,
@@ -1690,10 +1930,11 @@ def _copy_parquet_query_from_parts(
     return True
 
 
-def _assert_no_duplicate_parquet_key(
+def _assert_no_conflicting_parquet_key(
     *,
     parts_dir: Path,
     key: str,
+    columns: Sequence[str],
     label: str,
     threads: int,
     memory_limit: str | None,
@@ -1704,6 +1945,7 @@ def _assert_no_duplicate_parquet_key(
     if not files:
         return
     source = _parquet_source_from_files(files)
+    column_sql = ", ".join(_duckdb_identifier(column) for column in columns)
     con = _duckdb_connect(
         threads=threads,
         memory_limit=memory_limit,
@@ -1711,12 +1953,12 @@ def _assert_no_duplicate_parquet_key(
         max_temp_directory_size=max_temp_directory_size,
     )
     try:
-        duplicate_rows = con.execute(
+        conflicting_keys = con.execute(
             f"""
             SELECT count(*)::BIGINT
             FROM (
                 SELECT {_duckdb_identifier(key)}
-                FROM {source}
+                FROM (SELECT DISTINCT {column_sql} FROM {source}) distinct_rows
                 GROUP BY {_duckdb_identifier(key)}
                 HAVING count(*) > 1
             )
@@ -1724,11 +1966,44 @@ def _assert_no_duplicate_parquet_key(
         ).fetchone()[0]
     finally:
         con.close()
-    if int(duplicate_rows) > 0:
+    if int(conflicting_keys) > 0:
         raise ValueError(
-            f"{label} has {duplicate_rows} duplicate {key} keys across archive batches; "
-            "cannot finalize exact Parquet summary from batch-level aggregates."
+            f"{label} has {conflicting_keys} conflicting {key} keys across archive batches; "
+            "exact duplicate rows are allowed but distinct metadata must fail closed."
         )
+
+
+def _clear_fsds_outputs(silver_dir: Path) -> None:
+    for path in (
+        silver_dir / "._staging_fsds",
+        silver_dir / "._fsds_parquet_parts",
+        silver_dir / ".public_lake_dag" / "normalize_fsds_batches",
+        silver_dir / "filing_xbrl_dim.parquet",
+        silver_dir / "filing_xbrl_dim.csv.gz",
+        silver_dir / "xbrl_fact.parquet",
+        silver_dir / "xbrl_fact.csv.gz",
+        silver_dir / "xbrl_fact_summary.parquet",
+        silver_dir / "xbrl_core_fact",
+        silver_dir / "xbrl_core_fact.parquet",
+        silver_dir / "xbrl_context_conflicts.parquet",
+    ):
+        remove_table_path(path)
+
+
+def _clear_notes_outputs(silver_dir: Path) -> None:
+    for path in (
+        silver_dir / "._staging_notes",
+        silver_dir / "._notes_parquet_parts",
+        silver_dir / ".public_lake_dag" / "normalize_notes_batches",
+        silver_dir / "notes_filing_dim.parquet",
+        silver_dir / "notes_filing_dim.csv.gz",
+        silver_dir / "note_summary.parquet",
+        silver_dir / "note_summary.csv.gz",
+        silver_dir / "note_text",
+        silver_dir / "note_text.parquet",
+        silver_dir / "note_text.csv.gz",
+    ):
+        remove_table_path(path)
 
 
 def _normalize_fsds_manifest_parquet(
@@ -1741,29 +2016,44 @@ def _normalize_fsds_manifest_parquet(
     duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
     batch_size: int = DEFAULT_FSDS_BATCH_SIZE,
     resume: bool = False,
+    archive_identities: Optional[Sequence[Dict[str, str]]] = None,
 ) -> Dict[str, Path]:
     outputs: Dict[str, Path] = {}
+    silver_dir.mkdir(parents=True, exist_ok=True)
     archive_paths = _manifest_archive_paths(manifest_csv)
     if not archive_paths:
+        _clear_fsds_outputs(silver_dir)
         return outputs
-    silver_dir.mkdir(parents=True, exist_ok=True)
+    identity_by_path = _archive_identity_map(archive_paths, archive_identities)
     staging_root = silver_dir / "._staging_fsds"
     batch_state_dir = silver_dir / ".public_lake_dag" / "normalize_fsds_batches"
     parts_root = silver_dir / "._fsds_parquet_parts"
     filing_parts = parts_root / "filing_xbrl_dim"
-    summary_parts = parts_root / "xbrl_fact_summary"
+    summary_candidate_parts = parts_root / "xbrl_fact_summary_candidates"
+    core_candidate_parts = parts_root / "xbrl_core_candidates"
     core_path = silver_dir / "xbrl_core_fact"
+    conflict_path = silver_dir / "xbrl_context_conflicts.parquet"
+    planned_batches = list(_batched_paths(archive_paths, batch_size))
+
+    if resume and not _batch_resume_layout_is_compatible(
+        state_dir=batch_state_dir,
+        planned_batches=planned_batches,
+        parts_roots=(filing_parts, summary_candidate_parts, core_candidate_parts),
+        identity_by_path=identity_by_path,
+    ):
+        resume = False
 
     if not resume:
-        remove_table_path(parts_root)
-        remove_table_path(core_path)
-        remove_table_path(silver_dir / "filing_xbrl_dim.parquet")
-        remove_table_path(silver_dir / "xbrl_fact_summary.parquet")
-        remove_table_path(batch_state_dir)
+        _clear_fsds_outputs(silver_dir)
 
-    for batch_name, batch_paths in _batched_paths(archive_paths, batch_size):
+    for batch_name, batch_paths in planned_batches:
         marker = _batch_marker_path(batch_state_dir, batch_name)
-        if resume and _batch_marker_outputs_exist(marker):
+        batch_identities = _archive_identities_for_paths(batch_paths, identity_by_path)
+        if resume and _batch_marker_outputs_exist(
+            marker,
+            archive_paths=batch_paths,
+            input_identities=batch_identities,
+        ):
             continue
         batch_staging = staging_root / batch_name
         batch_outputs: Dict[str, Path] = {}
@@ -1773,6 +2063,7 @@ def _normalize_fsds_manifest_parquet(
                 staging_dir=batch_staging,
                 required_stem="num",
                 optional_stems=("sub",),
+                verify_metadata=False,
             )
             num_paths = extracted["num"]
             sub_paths = extracted.get("sub", [])
@@ -1782,6 +2073,7 @@ def _normalize_fsds_manifest_parquet(
                     batch_name=batch_name,
                     archive_paths=batch_paths,
                     outputs=batch_outputs,
+                    input_identities=batch_identities,
                 )
                 continue
 
@@ -1817,16 +2109,33 @@ def _normalize_fsds_manifest_parquet(
                 )
                 batch_outputs["filing_xbrl_dim_part"] = filing_part
 
-            num_source = _duckdb_csv_source(num_paths)
-            summary_part = summary_parts / f"part_batch={batch_name}" / "data.parquet"
+            num_source = _duckdb_csv_source(num_paths, all_varchar=True)
+            column_lookup: Dict[str, str] = {}
+            for num_path in num_paths:
+                for column in _read_header_columns(num_path):
+                    column_lookup.setdefault(column.strip().lower(), column.strip())
+
+            def optional_text(column: str) -> str:
+                source_column = column_lookup.get(column)
+                if source_column is None:
+                    return "CAST(NULL AS VARCHAR)"
+                return f"nullif(trim(CAST({_duckdb_identifier(source_column)} AS VARCHAR)), '')"
+
+            taxonomy_version_expr = optional_text("version")
+            segments_expr = optional_text("segments")
+            coreg_expr = optional_text("coreg")
+            summary_part = summary_candidate_parts / f"part_batch={batch_name}" / "data.parquet"
             summary_query = f"""
-                SELECT
-                    adsh,
-                    count(tag)::BIGINT AS xbrl_fact_count,
-                    count(DISTINCT tag)::BIGINT AS xbrl_unique_tags,
-                    count(DISTINCT uom)::BIGINT AS xbrl_unique_units
+                SELECT DISTINCT
+                    nullif(trim(CAST(adsh AS VARCHAR)), '') AS adsh,
+                    nullif(trim(CAST(tag AS VARCHAR)), '') AS tag,
+                    {taxonomy_version_expr} AS taxonomy_version,
+                    {_duckdb_sec_date_expr("ddate")} AS fact_date,
+                    try_cast(qtrs AS INTEGER) AS quarters,
+                    nullif(upper(trim(CAST(uom AS VARCHAR))), '') AS unit,
+                    {segments_expr} AS segments,
+                    {coreg_expr} AS coreg
                 FROM {num_source}
-                GROUP BY adsh
             """
             _duckdb_copy_query_to_parquet(
                 query=summary_query,
@@ -1836,40 +2145,41 @@ def _normalize_fsds_manifest_parquet(
                 temp_directory=duckdb_temp_directory,
                 max_temp_directory_size=duckdb_max_temp_directory_size,
             )
-            batch_outputs["xbrl_fact_summary_part"] = summary_part
+            batch_outputs["xbrl_fact_summary_candidate_part"] = summary_part
 
-            core_part = core_path / f"part_batch={batch_name}" / "data.parquet"
-            core_query = f"""
+            normalized_num = f"""
                 SELECT
-                    adsh,
-                    tag,
-                    uom AS unit,
-                    try_cast(value AS DOUBLE) AS value,
-                    try_cast(qtrs AS DOUBLE) AS quarters,
+                    nullif(trim(CAST(adsh AS VARCHAR)), '') AS adsh,
+                    nullif(trim(CAST(tag AS VARCHAR)), '') AS tag,
+                    {taxonomy_version_expr} AS taxonomy_version,
+                    nullif(upper(trim(CAST(uom AS VARCHAR))), '') AS unit,
+                    trim(CAST(value AS VARCHAR)) AS value_text,
+                    try_cast(value AS DECIMAL(28, 4)) AS value,
+                    try_cast(qtrs AS INTEGER) AS quarters,
                     {_duckdb_sec_date_expr("ddate")} AS fact_date,
-                    {_duckdb_sec_year_expr("ddate")} AS source_year
+                    {_duckdb_sec_year_expr("ddate")} AS source_year,
+                    {segments_expr} AS segments,
+                    {coreg_expr} AS coreg
                 FROM {num_source}
-                WHERE lower(CAST(tag AS VARCHAR)) IN ({_xbrl_core_tag_sql()})
-                  AND try_cast(value AS DOUBLE) IS NOT NULL
-                  AND (
-                        uom IS NULL
-                        OR upper(CAST(uom AS VARCHAR)) IN ('', 'USD')
-                      )
+                WHERE lower(trim(CAST(tag AS VARCHAR))) IN ({_xbrl_core_tag_sql()})
+                  AND try_cast(value AS DECIMAL(28, 4)) IS NOT NULL
             """
+            core_part = core_candidate_parts / f"part_batch={batch_name}" / "data.parquet"
             _duckdb_copy_query_to_parquet(
-                query=core_query,
+                query=f"SELECT * FROM ({normalized_num}) normalized",
                 dest=core_part,
                 threads=duckdb_threads,
                 memory_limit=duckdb_memory_limit,
                 temp_directory=duckdb_temp_directory,
                 max_temp_directory_size=duckdb_max_temp_directory_size,
             )
-            batch_outputs["xbrl_core_fact_part"] = core_part
+            batch_outputs["xbrl_core_candidate_part"] = core_part
             _write_batch_marker(
                 state_dir=batch_state_dir,
                 batch_name=batch_name,
                 archive_paths=batch_paths,
                 outputs=batch_outputs,
+                input_identities=batch_identities,
             )
         finally:
             if batch_staging.exists():
@@ -1879,9 +2189,24 @@ def _normalize_fsds_manifest_parquet(
         shutil.rmtree(staging_root)
 
     filing_path = silver_dir / "filing_xbrl_dim.parquet"
-    _assert_no_duplicate_parquet_key(
+    filing_columns = (
+        "adsh",
+        "issuer_cik",
+        "entity_name",
+        "sic",
+        "country_business",
+        "state_business",
+        "form",
+        "fiscal_period_end",
+        "filing_date",
+        "acceptance_datetime",
+        "fiscal_year",
+        "fiscal_period",
+    )
+    _assert_no_conflicting_parquet_key(
         parts_dir=filing_parts,
         key="adsh",
+        columns=filing_columns,
         label="filing_xbrl_dim",
         threads=duckdb_threads,
         memory_limit=duckdb_memory_limit,
@@ -1891,21 +2216,9 @@ def _normalize_fsds_manifest_parquet(
     if _copy_parquet_query_from_parts(
         parts_dir=filing_parts,
         dest=filing_path,
-        query="""
-            SELECT
-                adsh,
-                issuer_cik,
-                entity_name,
-                sic,
-                country_business,
-                state_business,
-                form,
-                fiscal_period_end,
-                filing_date,
-                acceptance_datetime,
-                fiscal_year,
-                fiscal_period
-            FROM {source}
+        query=f"""
+            SELECT DISTINCT {", ".join(filing_columns)}
+            FROM {{source}}
             ORDER BY adsh
         """,
         threads=duckdb_threads,
@@ -1916,37 +2229,98 @@ def _normalize_fsds_manifest_parquet(
         outputs["filing_xbrl_dim"] = filing_path
 
     summary_path = silver_dir / "xbrl_fact_summary.parquet"
-    _assert_no_duplicate_parquet_key(
-        parts_dir=summary_parts,
-        key="adsh",
-        label="xbrl_fact_summary",
-        threads=duckdb_threads,
-        memory_limit=duckdb_memory_limit,
-        temp_directory=duckdb_temp_directory,
-        max_temp_directory_size=duckdb_max_temp_directory_size,
-    )
     if _copy_parquet_query_from_parts(
-        parts_dir=summary_parts,
+        parts_dir=summary_candidate_parts,
         dest=summary_path,
         query="""
+            WITH normalized_full_keys AS (
+                SELECT DISTINCT
+                    adsh,
+                    tag,
+                    taxonomy_version,
+                    fact_date,
+                    quarters,
+                    unit,
+                    segments,
+                    coreg
+                FROM {source}
+            )
             SELECT
                 adsh,
-                sum(xbrl_fact_count)::BIGINT AS xbrl_fact_count,
-                sum(xbrl_unique_tags)::BIGINT AS xbrl_unique_tags,
-                sum(xbrl_unique_units)::BIGINT AS xbrl_unique_units
-            FROM {source}
+                count(tag)::BIGINT AS xbrl_fact_count,
+                count(DISTINCT tag)::BIGINT AS xbrl_unique_tags,
+                count(DISTINCT unit)::BIGINT AS xbrl_unique_units
+            FROM normalized_full_keys
             GROUP BY adsh
             ORDER BY adsh
         """,
-        threads=duckdb_threads,
+        threads=1,
+        preserve_order=True,
         memory_limit=duckdb_memory_limit,
         temp_directory=duckdb_temp_directory,
         max_temp_directory_size=duckdb_max_temp_directory_size,
     ):
         outputs["xbrl_fact_summary"] = summary_path
 
-    if _parquet_files(core_path):
+    core_candidate_files = _parquet_files(core_candidate_parts)
+    if core_candidate_files:
+        core_source = _parquet_source_from_files(core_candidate_files)
+        context_key = "adsh, tag, taxonomy_version, fact_date, quarters, unit, segments, coreg"
+        _duckdb_copy_query_to_parquet(
+            query=f"""
+                SELECT
+                    {context_key},
+                    count(*)::BIGINT AS fact_row_count,
+                    count(DISTINCT value)::BIGINT AS distinct_numeric_values,
+                    min(value) AS minimum_value,
+                    max(value) AS maximum_value
+                FROM {core_source}
+                GROUP BY {context_key}
+                HAVING count(DISTINCT value) > 1
+                ORDER BY {context_key}
+            """,
+            dest=conflict_path,
+            threads=duckdb_threads,
+            preserve_order=True,
+            memory_limit=duckdb_memory_limit,
+            temp_directory=duckdb_temp_directory,
+            max_temp_directory_size=duckdb_max_temp_directory_size,
+        )
+        remove_table_path(core_path)
+        core_path.mkdir(parents=True, exist_ok=True)
+        _duckdb_copy_query_to_parquet(
+            query=f"""
+                WITH marked AS (
+                    SELECT
+                        *,
+                        min(value) OVER (PARTITION BY {context_key}) AS context_minimum_value,
+                        max(value) OVER (PARTITION BY {context_key}) AS context_maximum_value,
+                        row_number() OVER (
+                            PARTITION BY {context_key}, value
+                            ORDER BY value_text ASC NULLS LAST
+                        ) AS duplicate_row_number
+                    FROM {core_source}
+                )
+                SELECT * EXCLUDE (
+                    part_batch,
+                    context_minimum_value,
+                    context_maximum_value,
+                    duplicate_row_number
+                )
+                FROM marked
+                WHERE context_minimum_value = context_maximum_value
+                  AND duplicate_row_number = 1
+                ORDER BY {context_key}, value
+            """,
+            dest=core_path / "data.parquet",
+            threads=duckdb_threads,
+            preserve_order=True,
+            memory_limit=duckdb_memory_limit,
+            temp_directory=duckdb_temp_directory,
+            max_temp_directory_size=duckdb_max_temp_directory_size,
+        )
         outputs["xbrl_core_fact"] = core_path
+        outputs["xbrl_context_conflicts"] = conflict_path
     return outputs
 
 
@@ -1961,16 +2335,20 @@ def _normalize_notes_manifest_parquet(
     duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
     batch_size: int = DEFAULT_NOTES_BATCH_SIZE,
     resume: bool = False,
+    archive_identities: Optional[Sequence[Dict[str, str]]] = None,
 ) -> Dict[str, Path]:
     if notes_mode not in {"summary", "raw", "skip"}:
         raise ValueError("notes_mode must be 'summary', 'raw', or 'skip'")
-    if notes_mode == "skip":
-        return {}
     outputs: Dict[str, Path] = {}
+    silver_dir.mkdir(parents=True, exist_ok=True)
+    if notes_mode == "skip":
+        _clear_notes_outputs(silver_dir)
+        return outputs
     archive_paths = _manifest_archive_paths(manifest_csv)
     if not archive_paths:
+        _clear_notes_outputs(silver_dir)
         return outputs
-    silver_dir.mkdir(parents=True, exist_ok=True)
+    identity_by_path = _archive_identity_map(archive_paths, archive_identities)
 
     staging_root = silver_dir / "._staging_notes"
     batch_state_dir = silver_dir / ".public_lake_dag" / "normalize_notes_batches"
@@ -1978,17 +2356,30 @@ def _normalize_notes_manifest_parquet(
     filing_parts = parts_root / "notes_filing_dim"
     summary_parts = parts_root / "note_summary"
     note_text_path = silver_dir / "note_text"
+    planned_batches = list(_batched_paths(archive_paths, batch_size))
+    marker_context = {"notes_mode": notes_mode}
+
+    if resume and not _batch_resume_layout_is_compatible(
+        state_dir=batch_state_dir,
+        planned_batches=planned_batches,
+        parts_roots=(filing_parts, summary_parts, note_text_path),
+        identity_by_path=identity_by_path,
+        context=marker_context,
+    ):
+        resume = False
 
     if not resume:
-        remove_table_path(parts_root)
-        remove_table_path(note_text_path)
-        remove_table_path(silver_dir / "notes_filing_dim.parquet")
-        remove_table_path(silver_dir / "note_summary.parquet")
-        remove_table_path(batch_state_dir)
+        _clear_notes_outputs(silver_dir)
 
-    for batch_name, batch_paths in _batched_paths(archive_paths, batch_size):
+    for batch_name, batch_paths in planned_batches:
         marker = _batch_marker_path(batch_state_dir, batch_name)
-        if resume and _batch_marker_outputs_exist(marker):
+        batch_identities = _archive_identities_for_paths(batch_paths, identity_by_path)
+        if resume and _batch_marker_outputs_exist(
+            marker,
+            archive_paths=batch_paths,
+            input_identities=batch_identities,
+            context=marker_context,
+        ):
             continue
         batch_staging = staging_root / batch_name
         batch_outputs: Dict[str, Path] = {}
@@ -1998,6 +2389,7 @@ def _normalize_notes_manifest_parquet(
                 staging_dir=batch_staging,
                 required_stem="txt",
                 optional_stems=("sub",),
+                verify_metadata=False,
             )
             txt_paths = extracted["txt"]
             sub_paths = extracted.get("sub", [])
@@ -2007,6 +2399,8 @@ def _normalize_notes_manifest_parquet(
                     batch_name=batch_name,
                     archive_paths=batch_paths,
                     outputs=batch_outputs,
+                    input_identities=batch_identities,
+                    context=marker_context,
                 )
                 continue
 
@@ -2074,6 +2468,8 @@ def _normalize_notes_manifest_parquet(
                 batch_name=batch_name,
                 archive_paths=batch_paths,
                 outputs=batch_outputs,
+                input_identities=batch_identities,
+                context=marker_context,
             )
         finally:
             if batch_staging.exists():
@@ -2724,9 +3120,31 @@ def _ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     return pd.to_numeric(numerator, errors="coerce") / denom
 
 
+def _sec_num_decimal(value: object) -> Optional[Decimal]:
+    if value is None or value is pd.NA:
+        return None
+    try:
+        if bool(pd.isna(value)):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        parsed = Decimal(str(value).strip())
+        if not parsed.is_finite() or abs(parsed) >= Decimal(10) ** 24:
+            return None
+        return parsed.quantize(Decimal("0.0001"))
+    except (InvalidOperation, ValueError):
+        return None
+
+
 def build_xbrl_core_features(xbrl_fact: pd.DataFrame) -> pd.DataFrame:
+    def empty_features(conflict_count: int = 0) -> pd.DataFrame:
+        result = pd.DataFrame(columns=["accession"])
+        result.attrs["xbrl_context_conflict_count"] = int(conflict_count)
+        return result
+
     if xbrl_fact.empty or "adsh" not in xbrl_fact.columns or "tag" not in xbrl_fact.columns:
-        return pd.DataFrame(columns=["accession"])
+        return empty_features()
 
     tag_lookup: Dict[str, Tuple[str, int]] = {}
     for concept, tags in XBRL_CORE_TAGS.items():
@@ -2734,34 +3152,109 @@ def build_xbrl_core_features(xbrl_fact: pd.DataFrame) -> pd.DataFrame:
             tag_lookup[tag.lower()] = (concept, priority)
 
     work = xbrl_fact.copy()
-    work["tag_key"] = work["tag"].astype(str).str.lower()
+    work["adsh"] = work["adsh"].astype("string").str.strip().replace("", pd.NA)
+    work = work.loc[work["adsh"].notna()].copy()
+    work["tag_normalized"] = work["tag"].astype("string").str.strip()
+    work["tag_key"] = work["tag_normalized"].str.lower()
     work = work.loc[work["tag_key"].isin(tag_lookup)].copy()
     if work.empty:
-        return pd.DataFrame(columns=["accession"])
+        return empty_features()
 
     work["concept"] = work["tag_key"].map(lambda tag: tag_lookup[tag][0])
     work["tag_priority"] = work["tag_key"].map(lambda tag: tag_lookup[tag][1])
     if "value" not in work.columns:
-        return pd.DataFrame(columns=["accession"])
-    work["value"] = pd.to_numeric(work["value"], errors="coerce")
-    work = work.loc[work["value"].notna()].copy()
-    if "unit" in work.columns:
-        unit = work["unit"].fillna("").astype(str).str.upper()
-        work = work.loc[unit.isin({"", "USD"})].copy()
-    if work.empty:
-        return pd.DataFrame(columns=["accession"])
-
-    if "quarters" in work.columns:
-        work["quarters"] = pd.to_numeric(work["quarters"], errors="coerce").fillna(-1)
+        return empty_features()
+    if "value_text" in work.columns:
+        work["value_text"] = work["value_text"].astype("string").str.strip()
+        work["value_text"] = work["value_text"].where(
+            work["value_text"].notna() & work["value_text"].ne(""),
+            work["value"].astype("string"),
+        )
     else:
-        work["quarters"] = -1
+        work["value_text"] = work["value"].astype("string")
+    work["_value_decimal"] = work["value_text"].map(_sec_num_decimal)
+    work = work.loc[work["_value_decimal"].notna()].copy()
+
+    for column in ("segments", "coreg"):
+        if column in work.columns:
+            work[column] = work[column].astype("string").str.strip().replace("", pd.NA)
+        else:
+            work[column] = pd.Series(pd.NA, index=work.index, dtype="string")
+    taxonomy_source = "taxonomy_version" if "taxonomy_version" in work.columns else "version"
+    if taxonomy_source in work.columns:
+        work["taxonomy_version"] = (
+            work[taxonomy_source].astype("string").str.strip().replace("", pd.NA)
+        )
+    else:
+        work["taxonomy_version"] = pd.Series(pd.NA, index=work.index, dtype="string")
+    unit_source = "unit" if "unit" in work.columns else "uom"
+    if unit_source in work.columns:
+        work["unit"] = (
+            work[unit_source].astype("string").str.strip().str.upper().replace("", pd.NA)
+        )
+    else:
+        work["unit"] = pd.Series(pd.NA, index=work.index, dtype="string")
+    quarters_source = "quarters" if "quarters" in work.columns else "qtrs"
+    if quarters_source in work.columns:
+        work["quarters"] = pd.to_numeric(work[quarters_source], errors="coerce")
+    else:
+        work["quarters"] = np.nan
     if "fact_date" in work.columns:
         work["fact_date"] = pd.to_datetime(work["fact_date"], errors="coerce")
+    elif "ddate" in work.columns:
+        work["fact_date"] = _parse_sec_date_series(work["ddate"])
     else:
         work["fact_date"] = pd.NaT
+
+    context_key = [
+        "adsh",
+        "tag_normalized",
+        "taxonomy_version",
+        "fact_date",
+        "quarters",
+        "unit",
+        "segments",
+        "coreg",
+    ]
+    context_value_counts = work.groupby(context_key, sort=False, dropna=False)[
+        "_value_decimal"
+    ].nunique()
+    conflict_count = int(context_value_counts.gt(1).sum())
+    work["_context_value_count"] = work.groupby(context_key, sort=False, dropna=False)[
+        "_value_decimal"
+    ].transform("nunique")
+    work = work.loc[work["_context_value_count"].eq(1)].copy()
     work = work.sort_values(
-        ["adsh", "concept", "tag_priority", "quarters", "fact_date"],
-        ascending=[True, True, True, False, False],
+        [*context_key, "_value_decimal", "value_text"],
+        kind="mergesort",
+        na_position="last",
+    ).drop_duplicates([*context_key, "_value_decimal"], keep="first")
+    work = work.loc[
+        (work["unit"].isna() | work["unit"].eq("USD"))
+        & work["segments"].isna()
+        & work["coreg"].isna()
+    ].copy()
+    if work.empty:
+        return empty_features(conflict_count)
+
+    work["value"] = work["_value_decimal"].map(float)
+    work["unit_priority"] = np.where(work["unit"].eq("USD").fillna(False), 0, 1)
+    work = work.sort_values(
+        [
+            "adsh",
+            "concept",
+            "tag_priority",
+            "quarters",
+            "fact_date",
+            "unit_priority",
+            "taxonomy_version",
+            "tag_key",
+            "tag_normalized",
+            "value_text",
+        ],
+        ascending=[True, True, True, False, False, True, False, True, True, True],
+        kind="mergesort",
+        na_position="last",
     )
     selected = work.drop_duplicates(subset=["adsh", "concept"], keep="first")
     wide = selected.pivot(index="adsh", columns="concept", values="value").reset_index()
@@ -2801,7 +3294,9 @@ def build_xbrl_core_features(xbrl_fact: pd.DataFrame) -> pd.DataFrame:
         + [f"xbrl_coverage_{concept}" for concept in XBRL_CORE_TAGS]
         + [col for col in wide.columns if col.startswith("xbrl_ratio_")]
     )
-    return wide[[col for col in ordered_cols if col in wide.columns]]
+    result = wide[[col for col in ordered_cols if col in wide.columns]]
+    result.attrs["xbrl_context_conflict_count"] = conflict_count
+    return result
 
 
 def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
@@ -2814,10 +3309,11 @@ def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
     ]
     work = filing.sort_values(sort_cols, kind="mergesort").copy()
     form = (
-        work["form"].astype(str).str.upper()
+        work["form"].astype("string").str.strip().str.upper()
         if "form" in work.columns
-        else pd.Series("", index=work.index)
+        else pd.Series("", index=work.index, dtype="string")
     )
+    work["_annual_normalized_form"] = form
     work["_annual_form_priority"] = np.select(
         [form.eq("10-K"), form.eq("10-K/A")],
         [0, 1],
@@ -2830,17 +3326,24 @@ def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
             "fiscal_year",
             "_annual_form_priority",
             "origin_date",
-            "form",
+            "acceptance_datetime",
+            "_annual_normalized_form",
             "accession",
         ]
         if col in work.columns
     ]
     annual_reference = (
-        work.loc[work["fiscal_year"].notna()]
-        .sort_values(annual_sort_cols, kind="mergesort")
+        work.loc[
+            work["fiscal_year"].notna() & work["_annual_normalized_form"].isin({"10-K", "10-K/A"})
+        ]
+        .sort_values(annual_sort_cols, kind="mergesort", na_position="last")
         .drop_duplicates(["issuer_cik", "fiscal_year"], keep="first")
         .copy()
     )
+    previous_fiscal_year = annual_reference.groupby("issuer_cik", sort=False)["fiscal_year"].shift(
+        1
+    )
+    consecutive_year = previous_fiscal_year.eq(annual_reference["fiscal_year"] - 1)
     previous_cols: List[str] = []
     for concept, out_col in [
         ("revenues", "xbrl_ratio_revenue_yoy_change"),
@@ -2850,9 +3353,11 @@ def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
         if value_col not in work.columns:
             continue
         previous_col = f"prev_{value_col}"
-        annual_reference[previous_col] = annual_reference.groupby("issuer_cik", sort=False)[
-            value_col
-        ].shift(1)
+        annual_reference[previous_col] = (
+            annual_reference.groupby("issuer_cik", sort=False)[value_col]
+            .shift(1)
+            .where(consecutive_year)
+        )
         previous_cols.append(previous_col)
     if previous_cols:
         work = work.merge(
@@ -2861,6 +3366,7 @@ def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
             how="left",
             validate="many_to_one",
         )
+    current_annual = work["_annual_normalized_form"].isin({"10-K", "10-K/A"})
     for concept, out_col in [
         ("revenues", "xbrl_ratio_revenue_yoy_change"),
         ("assets", "xbrl_ratio_assets_yoy_change"),
@@ -2870,11 +3376,14 @@ def add_xbrl_yoy_ratio_features(filing: pd.DataFrame) -> pd.DataFrame:
         if value_col not in work.columns or previous_col not in work.columns:
             continue
         previous = work[previous_col]
-        work[out_col] = _ratio(work[value_col] - previous, previous.abs())
+        work[out_col] = _ratio(work[value_col] - previous, previous.abs()).where(current_annual)
         work[f"xbrl_coverage_{concept}_yoy"] = (
-            work[value_col].notna() & previous.notna() & previous.ne(0)
+            current_annual & work[value_col].notna() & previous.notna() & previous.ne(0)
         ).astype(int)
-    work = work.drop(columns=["_annual_form_priority", *previous_cols], errors="ignore")
+    work = work.drop(
+        columns=["_annual_form_priority", "_annual_normalized_form", *previous_cols],
+        errors="ignore",
+    )
     return work
 
 
@@ -3247,19 +3756,78 @@ def _duckdb_xbrl_summary(
         max_temp_directory_size=max_temp_directory_size,
     )
     try:
+        source = _duckdb_xbrl_table_source(path)
+        column_lookup = {
+            str(column).lower(): str(column) for column in _duckdb_columns(con, source)
+        }
+        unit_column = column_lookup.get("unit") or column_lookup.get("uom")
+        unit_expr = (
+            _duckdb_identifier(unit_column) if unit_column is not None else "CAST(NULL AS VARCHAR)"
+        )
         return con.execute(
             f"""
             SELECT
                 adsh,
                 count(tag)::BIGINT AS xbrl_fact_count,
                 count(DISTINCT tag)::BIGINT AS xbrl_unique_tags,
-                count(DISTINCT unit)::BIGINT AS xbrl_unique_units
-            FROM {_duckdb_table_source(path)}
+                count(DISTINCT {unit_expr})::BIGINT AS xbrl_unique_units
+            FROM {source}
             GROUP BY adsh
             """
         ).fetchdf()
     finally:
         con.close()
+
+
+def _duckdb_xbrl_normalized_core_query(path: Path, columns: Sequence[str]) -> str:
+    column_lookup = {str(column).lower(): str(column) for column in columns}
+
+    def source_column(*candidates: str) -> Optional[str]:
+        for candidate in candidates:
+            if candidate.lower() in column_lookup:
+                return f"facts.{_duckdb_identifier(column_lookup[candidate.lower()])}"
+        return None
+
+    def normalized_text(*candidates: str) -> str:
+        column = source_column(*candidates)
+        if column is None:
+            return "CAST(NULL AS VARCHAR)"
+        return f"nullif(trim(CAST({column} AS VARCHAR)), '')"
+
+    adsh = normalized_text("adsh")
+    tag = normalized_text("tag")
+    taxonomy_version = normalized_text("taxonomy_version", "version")
+    unit = normalized_text("unit", "uom")
+    value_source = source_column("value") or "NULL"
+    value_text_source = source_column("value_text")
+    if value_text_source is None:
+        value_text = f"trim(CAST({value_source} AS VARCHAR))"
+    else:
+        value_text = (
+            f"coalesce(nullif(trim(CAST({value_text_source} AS VARCHAR)), ''), "
+            f"trim(CAST({value_source} AS VARCHAR)))"
+        )
+    quarters_source = source_column("quarters", "qtrs") or "NULL"
+    fact_date_source = source_column("fact_date", "ddate") or "NULL"
+    segments = normalized_text("segments")
+    coreg = normalized_text("coreg")
+    return f"""
+        SELECT
+            {adsh} AS adsh,
+            {tag} AS tag,
+            {taxonomy_version} AS taxonomy_version,
+            nullif(upper({unit}), '') AS unit,
+            {value_text} AS value_text,
+            try_cast({value_text} AS DECIMAL(28, 4)) AS value,
+            try_cast({quarters_source} AS INTEGER) AS quarters,
+            coalesce(
+                try_cast({fact_date_source} AS TIMESTAMP),
+                try_strptime(CAST({fact_date_source} AS VARCHAR), '%Y%m%d')
+            ) AS fact_date,
+            {segments} AS segments,
+            {coreg} AS coreg
+        FROM {_duckdb_xbrl_table_source(path)} facts
+    """
 
 
 def _duckdb_xbrl_core_facts(
@@ -3277,22 +3845,25 @@ def _duckdb_xbrl_core_facts(
         max_temp_directory_size=max_temp_directory_size,
     )
     try:
+        source = _duckdb_table_source(path)
+        columns = _duckdb_columns(con, source)
+        normalized = _duckdb_xbrl_normalized_core_query(path, columns)
         frame = con.execute(
             f"""
             SELECT
                 adsh,
                 tag,
+                taxonomy_version,
                 unit,
-                try_cast(value AS DOUBLE) AS value,
-                try_cast(quarters AS DOUBLE) AS quarters,
-                fact_date
-            FROM {_duckdb_table_source(path)}
-            WHERE lower(CAST(tag AS VARCHAR)) IN ({_xbrl_core_tag_sql()})
-              AND try_cast(value AS DOUBLE) IS NOT NULL
-              AND (
-                    unit IS NULL
-                    OR upper(CAST(unit AS VARCHAR)) IN ('', 'USD')
-                  )
+                value_text,
+                value,
+                quarters,
+                fact_date,
+                segments,
+                coreg
+            FROM ({normalized}) normalized
+            WHERE lower(tag) IN ({_xbrl_core_tag_sql()})
+              AND value IS NOT NULL
             """
         ).fetchdf()
     finally:
@@ -3350,17 +3921,29 @@ def _duckdb_source_or_empty(
     con.execute(f"CREATE OR REPLACE TEMP VIEW {view_name} AS SELECT {empty_select} WHERE false")
 
 
-def _duckdb_copy_query_to_parquet_on_connection(con: Any, *, query: str, dest: Path) -> None:
+def _duckdb_copy_query_to_parquet_on_connection(
+    con: Any, *, query: str, dest: Path, preserve_order: bool = False
+) -> None:
     dest = Path(dest)
     remove_table_path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    con.execute(
-        f"""
-        COPY ({query})
-        TO '{_duckdb_path(dest)}'
-        (FORMAT PARQUET, COMPRESSION ZSTD)
-        """
-    )
+    previous_threads: Optional[int] = None
+    options = ["FORMAT PARQUET", "COMPRESSION ZSTD"]
+    if preserve_order:
+        previous_threads = int(con.execute("SELECT current_setting('threads')").fetchone()[0])
+        con.execute("SET threads = 1")
+        options.append("PRESERVE_ORDER true")
+    try:
+        con.execute(
+            f"""
+            COPY ({query})
+            TO '{_duckdb_path(dest)}'
+            ({", ".join(options)})
+            """
+        )
+    finally:
+        if previous_threads is not None:
+            con.execute(f"SET threads = {previous_threads}")
 
 
 def _duckdb_copy_query_to_year_sharded_parquet_on_connection(
@@ -3414,7 +3997,9 @@ def _duckdb_copy_query_to_year_sharded_parquet_on_connection(
         )
 
 
-def _duckdb_xbrl_core_features_query(path: Path) -> str:
+def _duckdb_xbrl_core_features_query(path: Path, columns: Sequence[str]) -> str:
+    normalized_core = _duckdb_xbrl_normalized_core_query(path, columns)
+    context_key = "adsh, tag, taxonomy_version, fact_date, quarters, unit, segments, coreg"
     values = []
     for concept, tags in XBRL_CORE_TAGS.items():
         for priority, tag in enumerate(tags):
@@ -3453,29 +4038,59 @@ def _duckdb_xbrl_core_features_query(path: Path) -> str:
             VALUES
                 {tag_map}
         ),
+        normalized AS (
+            SELECT *
+            FROM ({normalized_core}) normalized_raw
+            WHERE value IS NOT NULL
+              AND lower(tag) IN ({_xbrl_core_tag_sql()})
+        ),
+        marked AS (
+            SELECT
+                *,
+                min(value) OVER (PARTITION BY {context_key}) AS context_minimum_value,
+                max(value) OVER (PARTITION BY {context_key}) AS context_maximum_value,
+                row_number() OVER (
+                    PARTITION BY {context_key}, value
+                    ORDER BY value_text ASC NULLS LAST
+                ) AS duplicate_row_number
+            FROM normalized
+        ),
         filtered AS (
             SELECT
-                CAST(adsh AS VARCHAR) AS adsh,
+                facts.adsh,
                 tag_map.concept,
                 tag_map.tag_priority,
-                try_cast(value AS DOUBLE) AS value,
-                try_cast(quarters AS DOUBLE) AS quarters,
-                try_cast(fact_date AS TIMESTAMP) AS fact_date
-            FROM {_duckdb_table_source(path)} facts
+                CASE WHEN facts.unit = 'USD' THEN 0 ELSE 1 END AS unit_priority,
+                facts.tag AS tag_normalized,
+                lower(facts.tag) AS tag_key,
+                facts.taxonomy_version,
+                facts.value_text,
+                CAST(facts.value AS DOUBLE) AS value,
+                facts.quarters,
+                facts.fact_date
+            FROM marked facts
             INNER JOIN tag_map
-                ON lower(CAST(facts.tag AS VARCHAR)) = tag_map.tag_key
-            WHERE try_cast(value AS DOUBLE) IS NOT NULL
-              AND (
-                    facts.unit IS NULL
-                    OR upper(CAST(facts.unit AS VARCHAR)) IN ('', 'USD')
-                  )
+                ON lower(facts.tag) = tag_map.tag_key
+            WHERE facts.context_minimum_value = facts.context_maximum_value
+              AND facts.duplicate_row_number = 1
+              AND (facts.unit IS NULL OR facts.unit = 'USD')
+              AND facts.segments IS NULL
+              AND facts.coreg IS NULL
         ),
         ranked AS (
             SELECT
                 *,
                 row_number() OVER (
                     PARTITION BY adsh, concept
-                    ORDER BY tag_priority ASC, quarters DESC NULLS LAST, fact_date DESC NULLS LAST
+                    ORDER BY
+                        tag_priority ASC,
+                        quarters DESC NULLS LAST,
+                        fact_date DESC NULLS LAST,
+                        unit_priority ASC,
+                        taxonomy_version DESC NULLS LAST,
+                        tag_key ASC,
+                        tag_normalized ASC,
+                        value_text ASC NULLS LAST
                 ) AS rn
             FROM filtered
         ),
@@ -3538,6 +4153,14 @@ def _create_duckdb_xbrl_summary_view(con: Any, *, silver_dir: Path) -> bool:
         )
         return True
     if fallback_xbrl_path.exists():
+        source = _duckdb_xbrl_table_source(fallback_xbrl_path)
+        column_lookup = {
+            str(column).lower(): str(column) for column in _duckdb_columns(con, source)
+        }
+        unit_column = column_lookup.get("unit") or column_lookup.get("uom")
+        unit_expr = (
+            _duckdb_identifier(unit_column) if unit_column is not None else "CAST(NULL AS VARCHAR)"
+        )
         con.execute(
             f"""
             CREATE OR REPLACE TEMP VIEW xbrl_summary_gold AS
@@ -3545,8 +4168,8 @@ def _create_duckdb_xbrl_summary_view(con: Any, *, silver_dir: Path) -> bool:
                 CAST(adsh AS VARCHAR) AS accession,
                 count(tag)::BIGINT AS xbrl_fact_count,
                 count(DISTINCT tag)::BIGINT AS xbrl_unique_tags,
-                count(DISTINCT unit)::BIGINT AS xbrl_unique_units
-            FROM {_duckdb_table_source(fallback_xbrl_path)}
+                count(DISTINCT {unit_expr})::BIGINT AS xbrl_unique_units
+            FROM {source}
             GROUP BY adsh
             """
         )
@@ -3554,7 +4177,46 @@ def _create_duckdb_xbrl_summary_view(con: Any, *, silver_dir: Path) -> bool:
     return False
 
 
-def _create_duckdb_xbrl_core_features_view(con: Any, *, silver_dir: Path) -> bool:
+def _duckdb_xbrl_context_conflict_count(
+    con: Any,
+    *,
+    silver_dir: Path,
+    source_path: Path,
+    columns: Sequence[str],
+) -> int:
+    conflict_path = silver_dir / "xbrl_context_conflicts.parquet"
+    if conflict_path.exists():
+        return int(
+            con.execute(
+                f"SELECT count(*)::BIGINT FROM {parquet_scan_sql(conflict_path)}"
+            ).fetchone()[0]
+        )
+
+    normalized_core = _duckdb_xbrl_normalized_core_query(source_path, columns)
+    context_key = "adsh, tag, taxonomy_version, fact_date, quarters, unit, segments, coreg"
+    return int(
+        con.execute(
+            f"""
+            WITH normalized AS (
+                SELECT *
+                FROM ({normalized_core}) normalized_raw
+                WHERE value IS NOT NULL
+                  AND lower(tag) IN ({_xbrl_core_tag_sql()})
+            ),
+            conflicts AS (
+                SELECT 1
+                FROM normalized
+                GROUP BY {context_key}
+                HAVING count(DISTINCT value) > 1
+            )
+            SELECT count(*)::BIGINT
+            FROM conflicts
+            """
+        ).fetchone()[0]
+    )
+
+
+def _create_duckdb_xbrl_core_features_view(con: Any, *, silver_dir: Path) -> Tuple[bool, int]:
     xbrl_core_path = silver_dir / "xbrl_core_fact"
     xbrl_core_file_path = silver_dir / "xbrl_core_fact.parquet"
     fallback_xbrl_path = _preferred_table_path(silver_dir, "xbrl_fact")
@@ -3565,14 +4227,21 @@ def _create_duckdb_xbrl_core_features_view(con: Any, *, silver_dir: Path) -> boo
     elif fallback_xbrl_path.exists():
         source_path = fallback_xbrl_path
     else:
-        return False
+        return False, 0
+    columns = _duckdb_columns(con, _duckdb_table_source(source_path))
+    conflict_count = _duckdb_xbrl_context_conflict_count(
+        con,
+        silver_dir=silver_dir,
+        source_path=source_path,
+        columns=columns,
+    )
     con.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW xbrl_core_features_gold AS
-        {_duckdb_xbrl_core_features_query(source_path)}
+        {_duckdb_xbrl_core_features_query(source_path, columns)}
         """
     )
-    return True
+    return True, conflict_count
 
 
 def _create_duckdb_note_summary_view(con: Any, *, silver_dir: Path) -> bool:
@@ -3610,6 +4279,114 @@ def _create_duckdb_note_summary_view(con: Any, *, silver_dir: Path) -> bool:
         )
         return True
     return False
+
+
+def _duckdb_xbrl_yoy_query(source_view: str) -> str:
+    source = _duckdb_identifier(source_view)
+    current_annual = "upper(trim(COALESCE(form, ''))) IN ('10-K', '10-K/A')"
+    return f"""
+        WITH annual_reference AS (
+            SELECT
+                issuer_cik,
+                fiscal_year,
+                xbrl_value_revenues AS annual_xbrl_value_revenues,
+                xbrl_value_assets AS annual_xbrl_value_assets
+            FROM (
+                SELECT
+                    *,
+                    row_number() OVER (
+                        PARTITION BY issuer_cik, fiscal_year
+                        ORDER BY
+                            CASE
+                                WHEN upper(trim(COALESCE(form, ''))) = '10-K' THEN 0
+                                WHEN upper(trim(COALESCE(form, ''))) = '10-K/A' THEN 1
+                                ELSE 99
+                            END,
+                            origin_date ASC NULLS LAST,
+                            acceptance_datetime ASC NULLS LAST,
+                            upper(trim(COALESCE(form, ''))) ASC,
+                            accession ASC
+                    ) AS annual_row_number
+                FROM {source}
+                WHERE fiscal_year IS NOT NULL
+                  AND upper(trim(COALESCE(form, ''))) IN ('10-K', '10-K/A')
+            )
+            WHERE annual_row_number = 1
+        ),
+        annual_lag_raw AS (
+            SELECT
+                issuer_cik,
+                fiscal_year,
+                lag(fiscal_year) OVER (
+                    PARTITION BY issuer_cik
+                    ORDER BY fiscal_year
+                ) AS previous_fiscal_year,
+                lag(annual_xbrl_value_revenues) OVER (
+                    PARTITION BY issuer_cik
+                    ORDER BY fiscal_year
+                ) AS prev_xbrl_value_revenues,
+                lag(annual_xbrl_value_assets) OVER (
+                    PARTITION BY issuer_cik
+                    ORDER BY fiscal_year
+                ) AS prev_xbrl_value_assets
+            FROM annual_reference
+        ),
+        annual_lag AS (
+            SELECT
+                issuer_cik,
+                fiscal_year,
+                CASE
+                    WHEN previous_fiscal_year = fiscal_year - 1
+                    THEN prev_xbrl_value_revenues
+                END AS prev_xbrl_value_revenues,
+                CASE
+                    WHEN previous_fiscal_year = fiscal_year - 1
+                    THEN prev_xbrl_value_assets
+                END AS prev_xbrl_value_assets
+            FROM annual_lag_raw
+        ),
+        filing_with_lag AS (
+            SELECT
+                f.*,
+                annual_lag.prev_xbrl_value_revenues,
+                annual_lag.prev_xbrl_value_assets
+            FROM {source} f
+            LEFT JOIN annual_lag
+              ON annual_lag.issuer_cik = f.issuer_cik
+             AND annual_lag.fiscal_year = f.fiscal_year
+        )
+        SELECT
+            * EXCLUDE (prev_xbrl_value_revenues, prev_xbrl_value_assets),
+            CASE
+                WHEN {current_annual}
+                 AND prev_xbrl_value_revenues IS NOT NULL
+                 AND prev_xbrl_value_revenues <> 0
+                THEN (xbrl_value_revenues - prev_xbrl_value_revenues)
+                     / abs(prev_xbrl_value_revenues)
+            END AS xbrl_ratio_revenue_yoy_change,
+            CASE
+                WHEN {current_annual}
+                 AND xbrl_value_revenues IS NOT NULL
+                 AND prev_xbrl_value_revenues IS NOT NULL
+                 AND prev_xbrl_value_revenues <> 0
+                THEN 1 ELSE 0
+            END AS xbrl_coverage_revenues_yoy,
+            CASE
+                WHEN {current_annual}
+                 AND prev_xbrl_value_assets IS NOT NULL
+                 AND prev_xbrl_value_assets <> 0
+                THEN (xbrl_value_assets - prev_xbrl_value_assets)
+                     / abs(prev_xbrl_value_assets)
+            END AS xbrl_ratio_assets_yoy_change,
+            CASE
+                WHEN {current_annual}
+                 AND xbrl_value_assets IS NOT NULL
+                 AND prev_xbrl_value_assets IS NOT NULL
+                 AND prev_xbrl_value_assets <> 0
+                THEN 1 ELSE 0
+            END AS xbrl_coverage_assets_yoy
+        FROM filing_with_lag
+    """
 
 
 def _build_gold_panels_duckdb(
@@ -3675,11 +4452,17 @@ def _build_gold_panels_duckdb(
             SELECT
                 *,
                 report_date AS event_report_date,
-                CASE WHEN form IN ({period_forms}) THEN report_date ELSE NULL::TIMESTAMP END
+                CASE
+                    WHEN upper(trim(COALESCE(form, ''))) IN ({period_forms}) THEN report_date
+                    ELSE NULL::TIMESTAMP
+                END
                     AS fiscal_period_end,
                 try_cast(date_part(
                     'year',
-                    CASE WHEN form IN ({period_forms}) THEN report_date ELSE NULL::TIMESTAMP END
+                    CASE
+                        WHEN upper(trim(COALESCE(form, ''))) IN ({period_forms}) THEN report_date
+                        ELSE NULL::TIMESTAMP
+                    END
                 ) AS INTEGER) AS fiscal_year,
                 filing_date AS origin_date,
                 {as_of_timestamp} AS as_of_date,
@@ -3739,7 +4522,7 @@ def _build_gold_panels_duckdb(
             CREATE OR REPLACE TEMP VIEW filing_model_source_gold AS
             SELECT *
             FROM filing_windowed_gold
-            WHERE form IN ({annual_forms})
+            WHERE upper(trim(COALESCE(form, ''))) IN ({annual_forms})
             """
         )
 
@@ -4025,7 +4808,9 @@ def _build_gold_panels_duckdb(
             )
 
         has_xbrl_summary = _create_duckdb_xbrl_summary_view(con, silver_dir=silver_dir)
-        has_xbrl_features = _create_duckdb_xbrl_core_features_view(con, silver_dir=silver_dir)
+        has_xbrl_features, xbrl_context_conflict_count = _create_duckdb_xbrl_core_features_view(
+            con, silver_dir=silver_dir
+        )
         has_note_summary = _create_duckdb_note_summary_view(con, silver_dir=silver_dir)
         filing_from = "filing_model_source_gold f"
         joins = [
@@ -4180,85 +4965,9 @@ def _build_gold_panels_duckdb(
         )
         if has_xbrl_features:
             con.execute(
-                """
+                f"""
                 CREATE OR REPLACE TEMP VIEW filing_featured_gold AS
-                WITH annual_reference AS (
-                    SELECT
-                        issuer_cik,
-                        fiscal_year,
-                        xbrl_value_revenues AS annual_xbrl_value_revenues,
-                        xbrl_value_assets AS annual_xbrl_value_assets
-                    FROM (
-                        SELECT
-                            *,
-                            row_number() OVER (
-                                PARTITION BY issuer_cik, fiscal_year
-                                ORDER BY
-                                    CASE
-                                        WHEN upper(COALESCE(form, '')) = '10-K' THEN 0
-                                        WHEN upper(COALESCE(form, '')) = '10-K/A' THEN 1
-                                        ELSE 99
-                                    END,
-                                    origin_date,
-                                    form,
-                                    accession
-                            ) AS annual_row_number
-                        FROM filing_joined_gold
-                        WHERE fiscal_year IS NOT NULL
-                    )
-                    WHERE annual_row_number = 1
-                ),
-                annual_lag AS (
-                    SELECT
-                        issuer_cik,
-                        fiscal_year,
-                        lag(annual_xbrl_value_revenues) OVER (
-                            PARTITION BY issuer_cik
-                            ORDER BY fiscal_year
-                        ) AS prev_xbrl_value_revenues,
-                        lag(annual_xbrl_value_assets) OVER (
-                            PARTITION BY issuer_cik
-                            ORDER BY fiscal_year
-                        ) AS prev_xbrl_value_assets
-                    FROM annual_reference
-                ),
-                filing_with_lag AS (
-                    SELECT
-                        f.*,
-                        annual_lag.prev_xbrl_value_revenues,
-                        annual_lag.prev_xbrl_value_assets
-                    FROM filing_joined_gold f
-                    LEFT JOIN annual_lag
-                      ON annual_lag.issuer_cik = f.issuer_cik
-                     AND annual_lag.fiscal_year = f.fiscal_year
-                )
-                SELECT
-                    * EXCLUDE (prev_xbrl_value_revenues, prev_xbrl_value_assets),
-                    CASE
-                        WHEN prev_xbrl_value_revenues IS NOT NULL
-                         AND prev_xbrl_value_revenues <> 0
-                        THEN (xbrl_value_revenues - prev_xbrl_value_revenues)
-                             / abs(prev_xbrl_value_revenues)
-                    END AS xbrl_ratio_revenue_yoy_change,
-                    CASE
-                        WHEN xbrl_value_revenues IS NOT NULL
-                         AND prev_xbrl_value_revenues IS NOT NULL
-                         AND prev_xbrl_value_revenues <> 0
-                        THEN 1 ELSE 0
-                    END AS xbrl_coverage_revenues_yoy,
-                    CASE
-                        WHEN prev_xbrl_value_assets IS NOT NULL
-                         AND prev_xbrl_value_assets <> 0
-                        THEN (xbrl_value_assets - prev_xbrl_value_assets)
-                             / abs(prev_xbrl_value_assets)
-                    END AS xbrl_ratio_assets_yoy_change,
-                    CASE
-                        WHEN xbrl_value_assets IS NOT NULL
-                         AND prev_xbrl_value_assets IS NOT NULL
-                         AND prev_xbrl_value_assets <> 0
-                        THEN 1 ELSE 0
-                    END AS xbrl_coverage_assets_yoy
-                FROM filing_with_lag
+                {_duckdb_xbrl_yoy_query("filing_joined_gold")}
                 """
             )
         else:
@@ -4342,17 +5051,27 @@ def _build_gold_panels_duckdb(
             CREATE OR REPLACE TEMP VIEW issuer_annual_candidates_gold AS
             SELECT
                 *,
-                CASE WHEN form = '10-K' THEN 0 WHEN form = '10-K/A' THEN 1 ELSE 99 END
+                CASE
+                    WHEN upper(trim(COALESCE(form, ''))) = '10-K' THEN 0
+                    WHEN upper(trim(COALESCE(form, ''))) = '10-K/A' THEN 1
+                    ELSE 99
+                END
                     AS annual_form_priority,
                 row_number() OVER (
                     PARTITION BY issuer_cik, fiscal_year
                     ORDER BY
-                        CASE WHEN form = '10-K' THEN 0 WHEN form = '10-K/A' THEN 1 ELSE 99 END,
-                        origin_date,
-                        form
+                        CASE
+                            WHEN upper(trim(COALESCE(form, ''))) = '10-K' THEN 0
+                            WHEN upper(trim(COALESCE(form, ''))) = '10-K/A' THEN 1
+                            ELSE 99
+                        END,
+                        origin_date ASC NULLS LAST,
+                        acceptance_datetime ASC NULLS LAST,
+                        upper(trim(COALESCE(form, ''))) ASC,
+                        accession ASC
                 ) AS annual_row_number
             FROM filing_labeled_gold
-            WHERE form IN ({annual_forms})
+            WHERE upper(trim(COALESCE(form, ''))) IN ({annual_forms})
             """
         )
         con.execute(
@@ -4363,7 +5082,7 @@ def _build_gold_panels_duckdb(
                 COALESCE(fiscal_year, try_cast(date_part('year', event_report_date) AS INTEGER))
                     AS fpi_year
             FROM filing_windowed_gold
-            WHERE form IN ({fpi_forms})
+            WHERE upper(trim(COALESCE(form, ''))) IN ({fpi_forms})
               AND COALESCE(fiscal_year, try_cast(date_part('year', event_report_date) AS INTEGER))
                     IS NOT NULL
             """
@@ -4376,7 +5095,8 @@ def _build_gold_panels_duckdb(
                 CASE WHEN foreign_forms.fpi_year IS NULL THEN 0 ELSE 1 END
                     AS issuer_has_fpi_form_year,
                 CASE
-                    WHEN foreign_forms.fpi_year IS NULL AND annual.form IN ({annual_forms})
+                    WHEN foreign_forms.fpi_year IS NULL
+                     AND upper(trim(COALESCE(annual.form, ''))) IN ({annual_forms})
                     THEN 1 ELSE 0
                 END AS is_domestic_us_gaap_proxy,
                 issuer.entity_name,
@@ -4398,8 +5118,13 @@ def _build_gold_panels_duckdb(
         issuer_path = gold_dir / "issuer_origin_panel.parquet"
         _duckdb_copy_query_to_parquet_on_connection(
             con,
-            query="SELECT * FROM issuer_origin_gold",
+            query="""
+                SELECT *
+                FROM issuer_origin_gold
+                ORDER BY issuer_cik, fiscal_year, accession
+            """,
             dest=issuer_path,
+            preserve_order=True,
         )
         issuer_rows = int(con.execute("SELECT count(*) FROM issuer_origin_gold").fetchone()[0])
         filing_rows = int(con.execute("SELECT count(*) FROM filing_base_gold").fetchone()[0])
@@ -4432,6 +5157,7 @@ def _build_gold_panels_duckdb(
                 "engine": "duckdb",
                 "duckdb_threads": int(duckdb_threads),
                 "xbrl_core_tag_scope": "controlled_core_tags",
+                "xbrl_context_conflict_count": xbrl_context_conflict_count,
                 "filing_rows": filing_rows,
                 "filing_origin_panel_scope": "lightweight_filing_base_panel",
                 "filing_origin_panel_storage": "year_sharded_parquet_dataset",
@@ -4599,9 +5325,33 @@ def build_gold_panels(
         else:
             xbrl_fact = pd.read_csv(
                 fallback_xbrl_path,
-                usecols=lambda c: c in {"adsh", "tag", "unit", "value", "quarters", "fact_date"},
+                usecols=lambda c: (
+                    c
+                    in {
+                        "adsh",
+                        "tag",
+                        "taxonomy_version",
+                        "version",
+                        "unit",
+                        "uom",
+                        "value_text",
+                        "value",
+                        "quarters",
+                        "qtrs",
+                        "fact_date",
+                        "ddate",
+                        "segments",
+                        "coreg",
+                    }
+                ),
                 low_memory=False,
+                dtype=str,
             )
+            if "unit" not in xbrl_fact.columns:
+                if "uom" in xbrl_fact.columns:
+                    xbrl_fact["unit"] = xbrl_fact["uom"]
+                else:
+                    xbrl_fact["unit"] = pd.Series(pd.NA, index=xbrl_fact.index, dtype="string")
             xbrl_summary = (
                 xbrl_fact.groupby("adsh", as_index=False)
                 .agg(
@@ -4658,9 +5408,10 @@ def build_gold_panels(
 
     filing = filing_dim.copy()
     filing["issuer_cik"] = _normalize_cik_series(filing["issuer_cik"])
+    filing["_normalized_form"] = filing["form"].astype("string").str.strip().str.upper()
     filing["event_report_date"] = filing["report_date"]
     filing["fiscal_period_end"] = pd.NaT
-    period_mask = filing["form"].isin(PERIOD_FORMS)
+    period_mask = filing["_normalized_form"].isin(PERIOD_FORMS)
     filing.loc[period_mask, "fiscal_period_end"] = filing.loc[period_mask, "report_date"]
     filing["fiscal_period_end"] = pd.to_datetime(filing["fiscal_period_end"], errors="coerce")
     filing["fiscal_year"] = filing["fiscal_period_end"].dt.year.astype("Int64")
@@ -4709,9 +5460,26 @@ def build_gold_panels(
     )
     filing["prior_filing_count"] = filing.groupby("issuer_cik").cumcount()
 
+    xbrl_context_conflict_count = 0
     if not xbrl_summary.empty:
         filing = filing.merge(xbrl_summary, on="accession", how="left")
         xbrl_core_features = build_xbrl_core_features(xbrl_core_fact)
+        xbrl_context_conflict_count = int(
+            xbrl_core_features.attrs.get("xbrl_context_conflict_count", 0)
+        )
+        xbrl_conflict_path = silver_dir / "xbrl_context_conflicts.parquet"
+        if xbrl_conflict_path.exists():
+            xbrl_context_conflict_count = int(
+                len(
+                    read_table(
+                        xbrl_conflict_path,
+                        duckdb_threads=duckdb_threads,
+                        duckdb_memory_limit=duckdb_memory_limit,
+                        duckdb_temp_directory=duckdb_temp_directory,
+                        duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+                    )
+                )
+            )
         if not xbrl_core_features.empty:
             filing = filing.merge(xbrl_core_features, on="accession", how="left")
             filing = add_xbrl_yoy_ratio_features(filing)
@@ -4797,21 +5565,33 @@ def build_gold_panels(
         filing["origin_date"] + pd.Timedelta(days=365) > filing["as_of_date"]
     ).astype(int)
 
-    issuer_panel = filing.loc[filing["form"].isin(ANNUAL_FORMS)].copy()
-    issuer_panel["annual_form_priority"] = issuer_panel["form"].map({"10-K": 0, "10-K/A": 1})
+    issuer_panel = filing.loc[filing["_normalized_form"].isin(ANNUAL_FORMS)].copy()
+    issuer_panel["annual_form_priority"] = issuer_panel["_normalized_form"].map(
+        {"10-K": 0, "10-K/A": 1}
+    )
     issuer_panel = issuer_panel.sort_values(
-        ["issuer_cik", "fiscal_year", "annual_form_priority", "origin_date", "form"]
+        [
+            "issuer_cik",
+            "fiscal_year",
+            "annual_form_priority",
+            "origin_date",
+            "acceptance_datetime",
+            "_normalized_form",
+            "accession",
+        ],
+        kind="mergesort",
+        na_position="last",
     )
     issuer_panel = issuer_panel.drop_duplicates(subset=["issuer_cik", "fiscal_year"], keep="first")
-    issuer_panel = issuer_panel.drop(columns=["annual_form_priority"])
+    issuer_panel = issuer_panel.drop(columns=["annual_form_priority", "_normalized_form"])
 
     foreign_forms = filing.loc[
-        filing["form"].isin(FPI_FORMS), ["issuer_cik", "fiscal_year"]
+        filing["_normalized_form"].isin(FPI_FORMS), ["issuer_cik", "fiscal_year"]
     ].copy()
     foreign_forms["fpi_year"] = foreign_forms["fiscal_year"]
-    event_year = filing.loc[filing["form"].isin(FPI_FORMS), "event_report_date"].dt.year.astype(
-        "Int64"
-    )
+    event_year = filing.loc[
+        filing["_normalized_form"].isin(FPI_FORMS), "event_report_date"
+    ].dt.year.astype("Int64")
     foreign_forms.loc[foreign_forms["fpi_year"].isna(), "fpi_year"] = event_year
     foreign_forms = foreign_forms[["issuer_cik", "fpi_year"]].dropna().drop_duplicates()
     foreign_forms["issuer_has_fpi_form_year"] = 1
@@ -4826,7 +5606,8 @@ def build_gold_panels(
         issuer_panel["issuer_has_fpi_form_year"].fillna(0).astype(int)
     )
     issuer_panel["is_domestic_us_gaap_proxy"] = (
-        issuer_panel["issuer_has_fpi_form_year"].eq(0) & issuer_panel["form"].isin(ANNUAL_FORMS)
+        issuer_panel["issuer_has_fpi_form_year"].eq(0)
+        & issuer_panel["form"].astype("string").str.strip().str.upper().isin(ANNUAL_FORMS)
     ).astype(int)
 
     issuer_panel = issuer_panel.merge(
@@ -4835,11 +5616,15 @@ def build_gold_panels(
         how="left",
         suffixes=("", "_issuer"),
     )
+    issuer_panel = issuer_panel.sort_values(
+        ["issuer_cik", "fiscal_year", "accession"], kind="mergesort", na_position="last"
+    ).reset_index(drop=True)
+    filing = filing.drop(columns=["_normalized_form"])
     gold_dir.mkdir(parents=True, exist_ok=True)
     filing_path = gold_dir / "filing_origin_panel.parquet"
     issuer_path = gold_dir / "issuer_origin_panel.parquet"
     write_table(filing, filing_path)
-    write_table(issuer_panel, issuer_path)
+    write_table(issuer_panel, issuer_path, preserve_order=True)
     metadata_path = gold_dir / "gold_metadata.json"
     metadata_path.write_text(
         json.dumps(
@@ -4850,6 +5635,7 @@ def build_gold_panels(
                 "engine": engine,
                 "duckdb_threads": int(duckdb_threads) if engine == "duckdb" else None,
                 "xbrl_core_tag_scope": "controlled_core_tags",
+                "xbrl_context_conflict_count": xbrl_context_conflict_count,
                 "filing_rows": int(len(filing)),
                 "filing_origin_panel_scope": "full_labeled_featured_filing_panel",
                 "filing_origin_panel_storage": "single_parquet_file",
@@ -4908,13 +5694,98 @@ def build_public_lake(
         remove_table_path(gold_dir)
     silver_dir.mkdir(parents=True, exist_ok=True)
 
+    submissions_zip = bronze_dir / "sec-bulk" / "submissions.zip"
+    submissions_input_signature = {
+        "source": _optional_file_identity(submissions_zip),
+        "max_ciks": submissions_max_ciks,
+    }
+    form_ap_dir = bronze_dir / "form-ap"
+    form_ap_archive = form_ap_dir / "FirmFilings.zip"
+    form_ap_csv = form_ap_dir / "FirmFilings.csv"
+    form_ap_source = (
+        form_ap_archive
+        if form_ap_archive.exists()
+        else form_ap_csv
+        if form_ap_csv.exists()
+        else None
+    )
+    form_ap_input_signature = {
+        "source_kind": (
+            "archive" if form_ap_source == form_ap_archive else "csv" if form_ap_source else None
+        ),
+        "source": _optional_file_identity(form_ap_source) if form_ap_source else None,
+    }
+    inspection_manifest = bronze_dir / "pcaob-inspections" / "manifest.csv"
+    inspection_paths: List[Path] = []
+    if inspection_manifest.exists():
+        inspection_frame = pd.read_csv(inspection_manifest)
+        if "local_path" in inspection_frame.columns:
+            inspection_paths = [
+                Path(str(path))
+                for path in inspection_frame["local_path"].dropna()
+                if Path(str(path)).exists()
+            ]
+    inspections_input_signature = {
+        "manifest_path": str(inspection_manifest.expanduser().resolve()),
+        "manifest_sha256": (
+            _hash_file(inspection_manifest) if inspection_manifest.exists() else None
+        ),
+        "sources": _archive_input_identities(inspection_paths),
+    }
+    amendment_text_dir = bronze_dir / "amendment-primary-docs"
+    derived_input_signature = {
+        "amendment_primary_documents": _directory_file_identities(amendment_text_dir)
+    }
+    fsds_manifest = bronze_dir / "fsds" / "manifest.csv"
+    notes_manifest = bronze_dir / "notes" / "manifest.csv"
+    fsds_input_signature, fsds_archive_identities = _manifest_task_input_signature(
+        fsds_manifest,
+        settings={
+            "storage_format": storage_format,
+            "engine": engine,
+            "batch_size": int(fsds_batch_size),
+        },
+    )
+    notes_input_signature, notes_archive_identities = _manifest_task_input_signature(
+        notes_manifest,
+        settings={
+            "storage_format": storage_format,
+            "engine": engine,
+            "batch_size": int(notes_batch_size),
+            "notes_mode": notes_mode,
+        },
+    )
+    gold_input_signature = {
+        "as_of_date": str(pd.Timestamp(as_of_date).date()),
+        "engine": engine,
+        "storage_format": storage_format,
+        "notes_mode": notes_mode,
+        "duckdb_threads": int(duckdb_threads) if engine == "duckdb" else None,
+        "duckdb_memory_limit": duckdb_memory_limit if engine == "duckdb" else None,
+        "duckdb_temp_directory": (
+            str(Path(resolved_duckdb_temp_directory).expanduser().resolve())
+            if engine == "duckdb" and resolved_duckdb_temp_directory is not None
+            else None
+        ),
+        "duckdb_max_temp_directory_size": (
+            duckdb_max_temp_directory_size if engine == "duckdb" else None
+        ),
+        "gold_dir": str(Path(gold_dir).expanduser().resolve()),
+    }
+    metadata_input_signature = {
+        **gold_input_signature,
+        "config": _optional_file_identity(config_path) if config_path is not None else None,
+        "fsds_batch_size": int(fsds_batch_size),
+        "notes_batch_size": int(notes_batch_size),
+        "fresh_build": bool(fresh_build),
+        "resume": bool(resume),
+    }
+
     def normalize_submissions_task() -> Dict[str, Path]:
-        submissions_zip = bronze_dir / "sec-bulk" / "submissions.zip"
         if not submissions_zip.exists():
             raise FileNotFoundError(
                 "Expected bronze/sec-bulk/submissions.zip before building the public lake."
             )
-        _verify_metadata_hash(submissions_zip)
         return normalize_submissions_bulk(
             submissions_zip=submissions_zip,
             silver_dir=silver_dir,
@@ -4923,7 +5794,7 @@ def build_public_lake(
 
     def normalize_form_ap_task() -> Dict[str, Path]:
         form_ap_csv, source_metadata = _materialize_form_ap_csv(
-            form_ap_dir=bronze_dir / "form-ap",
+            form_ap_dir=form_ap_dir,
             silver_dir=silver_dir,
         )
         if form_ap_csv is None or source_metadata is None:
@@ -4937,7 +5808,6 @@ def build_public_lake(
         }
 
     def normalize_inspections_task() -> Dict[str, Path]:
-        inspection_manifest = bronze_dir / "pcaob-inspections" / "manifest.csv"
         if not inspection_manifest.exists():
             return {}
         manifest = pd.read_csv(inspection_manifest)
@@ -4946,7 +5816,6 @@ def build_public_lake(
             if not path.exists():
                 continue
             if path.suffix.lower() in {".csv", ".json", ".xml", ".xlsx"}:
-                _verify_metadata_hash(path)
                 return {
                     "pcaob_inspection_event": normalize_pcaob_inspection_file(
                         inspection_path=path,
@@ -4956,8 +5825,11 @@ def build_public_lake(
         return {}
 
     def normalize_fsds_task() -> Dict[str, Path]:
-        fsds_manifest = bronze_dir / "fsds" / "manifest.csv"
         if not fsds_manifest.exists():
+            _clear_fsds_outputs(silver_dir)
+            return {}
+        if not fsds_archive_identities:
+            _clear_fsds_outputs(silver_dir)
             return {}
         if storage_format == "parquet":
             return _normalize_fsds_manifest_parquet(
@@ -4969,6 +5841,7 @@ def build_public_lake(
                 duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
                 batch_size=fsds_batch_size,
                 resume=resume,
+                archive_identities=fsds_archive_identities,
             )
         return _normalize_manifest_archives(
             manifest_csv=fsds_manifest,
@@ -4979,8 +5852,11 @@ def build_public_lake(
         )
 
     def normalize_notes_task() -> Dict[str, Path]:
-        notes_manifest = bronze_dir / "notes" / "manifest.csv"
         if not notes_manifest.exists():
+            _clear_notes_outputs(silver_dir)
+            return {}
+        if notes_mode == "skip" or not notes_archive_identities:
+            _clear_notes_outputs(silver_dir)
             return {}
         if storage_format == "parquet":
             return _normalize_notes_manifest_parquet(
@@ -4993,6 +5869,7 @@ def build_public_lake(
                 duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
                 batch_size=notes_batch_size,
                 resume=resume,
+                archive_identities=notes_archive_identities,
             )
         return _normalize_manifest_archives(
             manifest_csv=notes_manifest,
@@ -5011,11 +5888,7 @@ def build_public_lake(
         amendment_annotation = build_amendment_annotations(
             filing_dim_csv=filing_dim_path,
             silver_dir=silver_dir,
-            amendment_text_dir=(
-                bronze_dir / "amendment-primary-docs"
-                if (bronze_dir / "amendment-primary-docs").exists()
-                else None
-            ),
+            amendment_text_dir=amendment_text_dir if amendment_text_dir.exists() else None,
         )
         outputs: Dict[str, Path] = {
             "comment_thread": build_comment_threads(
@@ -5101,13 +5974,41 @@ def build_public_lake(
         return {"public_lake_run_metadata": run_metadata}
 
     tasks = [
-        DagTask("normalize_submissions", (), normalize_submissions_task),
-        DagTask("normalize_form_ap", (), normalize_form_ap_task),
-        DagTask("normalize_inspections", (), normalize_inspections_task),
-        DagTask("normalize_fsds", (), normalize_fsds_task),
-        DagTask("normalize_notes", (), normalize_notes_task),
         DagTask(
-            "derived_tables", ("normalize_submissions", "normalize_form_ap"), derived_tables_task
+            "normalize_submissions",
+            (),
+            normalize_submissions_task,
+            input_signature=submissions_input_signature,
+        ),
+        DagTask(
+            "normalize_form_ap",
+            (),
+            normalize_form_ap_task,
+            input_signature=form_ap_input_signature,
+        ),
+        DagTask(
+            "normalize_inspections",
+            (),
+            normalize_inspections_task,
+            input_signature=inspections_input_signature,
+        ),
+        DagTask(
+            "normalize_fsds",
+            (),
+            normalize_fsds_task,
+            input_signature=fsds_input_signature,
+        ),
+        DagTask(
+            "normalize_notes",
+            (),
+            normalize_notes_task,
+            input_signature=notes_input_signature,
+        ),
+        DagTask(
+            "derived_tables",
+            ("normalize_submissions", "normalize_form_ap"),
+            derived_tables_task,
+            input_signature=derived_input_signature,
         ),
         DagTask("empty_tables", ("derived_tables",), empty_tables_task),
         DagTask(
@@ -5122,8 +6023,18 @@ def build_public_lake(
                 "empty_tables",
             ),
             gold_task,
+            input_signature=gold_input_signature,
         ),
-        DagTask("write_metadata", ("build_gold",), metadata_task),
+        DagTask(
+            "write_metadata",
+            ("build_gold",),
+            metadata_task,
+            input_signature=metadata_input_signature,
+        ),
     ]
-    runner = SimpleDagRunner(state_dir=silver_dir / ".public_lake_dag", resume=resume)
+    runner = SimpleDagRunner(
+        state_dir=silver_dir / ".public_lake_dag",
+        resume=resume,
+        allowed_output_roots=(silver_dir, gold_dir),
+    )
     return runner.run(tasks)

@@ -123,6 +123,7 @@ def write_table(
     duckdb_temp_directory: Path | str | None = None,
     duckdb_max_temp_directory_size: str | None = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
     overwrite: bool = True,
+    preserve_order: bool = False,
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,18 +133,21 @@ def write_table(
                 raise FileExistsError(path)
             path.unlink()
         con = _connect(
-            threads=duckdb_threads,
+            threads=1 if preserve_order else duckdb_threads,
             memory_limit=duckdb_memory_limit,
             temp_directory=duckdb_temp_directory,
             max_temp_directory_size=duckdb_max_temp_directory_size,
         )
         try:
             con.register("_table_io_frame", frame)
+            options = ["FORMAT PARQUET", "COMPRESSION ZSTD"]
+            if preserve_order:
+                options.append("PRESERVE_ORDER true")
             con.execute(
                 f"""
                 COPY _table_io_frame
                 TO '{_duckdb_path(path)}'
-                (FORMAT PARQUET, COMPRESSION ZSTD)
+                ({", ".join(options)})
                 """
             )
         finally:

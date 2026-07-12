@@ -1,12 +1,42 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+import tomllib
 
 import pandas as pd
 import pytest
 
 from src.sample_dataset import materialize_sample_dataset
 from src.table_io import parquet_scan_sql, read_table, remove_table_path, write_table
+
+
+def test_project_requires_duckdb_with_preserve_order_copy_support() -> None:
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    assert "duckdb>=1.3.2,<2" in project["project"]["dependencies"]
+
+
+def test_write_table_preserve_order_is_byte_stable_across_thread_settings(
+    tmp_path: Path,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "issuer_cik": [f"{value:010d}" for value in range(1_000)],
+            "fiscal_year": [2020 + (value % 5) for value in range(1_000)],
+            "accession": [f"accession-{value:04d}" for value in range(1_000)],
+        }
+    )
+    thread1 = tmp_path / "thread1.parquet"
+    thread4 = tmp_path / "thread4.parquet"
+
+    write_table(frame, thread1, duckdb_threads=1, preserve_order=True)
+    write_table(frame, thread4, duckdb_threads=4, preserve_order=True)
+
+    pd.testing.assert_frame_equal(read_table(thread1), frame)
+    assert (
+        hashlib.sha256(thread1.read_bytes()).hexdigest()
+        == hashlib.sha256(thread4.read_bytes()).hexdigest()
+    )
 
 
 def test_table_io_csv_parquet_directory_projection_dates_and_overwrite(tmp_path: Path) -> None:
