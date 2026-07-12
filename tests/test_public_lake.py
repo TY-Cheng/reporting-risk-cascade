@@ -3251,6 +3251,7 @@ def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path
 def _write_shared_accession_partner_prior_fixture(
     silver: Path,
     *,
+    accession: str | None = "shared-accession",
     duplicate_partner_key: bool = False,
 ) -> None:
     write_table(
@@ -3277,8 +3278,8 @@ def _write_shared_accession_partner_prior_fixture(
     filing_rows = [
         {
             "issuer_cik": issuer_cik,
-            "accession": "shared-accession",
-            "accession_nodash": "sharedaccession",
+            "accession": accession,
+            "accession_nodash": accession.replace("-", "") if accession is not None else None,
             "filing_date": "2022-03-01",
             "report_date": "2021-12-31",
             "acceptance_datetime": "2022-03-01 08:00:00",
@@ -3330,11 +3331,17 @@ def _write_shared_accession_partner_prior_fixture(
     )
 
 
+@pytest.mark.parametrize(
+    "accession",
+    ["shared-accession", None],
+    ids=["shared-accession", "missing-accession"],
+)
 def test_gold_partner_prior_shared_accession_matches_engines_and_threads(
     tmp_path: Path,
+    accession: str | None,
 ) -> None:
     silver = tmp_path / "silver"
-    _write_shared_accession_partner_prior_fixture(silver)
+    _write_shared_accession_partner_prior_fixture(silver, accession=accession)
     feature_cols = [
         "auditor_partner_prior_other_issuer_8k_402_count",
         "auditor_partner_prior_other_issuer_nonadmin_amendment_count",
@@ -3364,7 +3371,7 @@ def test_gold_partner_prior_shared_accession_matches_engines_and_threads(
     expected = pd.DataFrame(
         {
             "issuer_cik": ["0000000001", "0000000002"],
-            "accession": ["shared-accession", "shared-accession"],
+            "accession": [accession, accession],
             "auditor_partner_prior_other_issuer_8k_402_count": [3, 1],
             "auditor_partner_prior_other_issuer_nonadmin_amendment_count": [0, 0],
             "auditor_partner_prior_other_issuer_total_count": [3, 1],
@@ -4873,6 +4880,64 @@ def test_public_lake_dag_fresh_build_and_resume(tmp_path: Path, monkeypatch: obj
         resume=True,
     )
     assert gold_calls == [True]
+
+
+def test_public_lake_dag_resume_rebuilds_missing_or_stale_gold_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bronze = tmp_path / "bronze"
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    _write_submissions_zip(bronze / "sec-bulk" / "submissions.zip")
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+    )
+
+    marker_path = silver / ".public_lake_dag" / "build_gold.done.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["input_signature"].pop("gold_semantics_version", None)
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    original_gold = public_lake.build_gold_panels
+    gold_calls: list[bool] = []
+
+    def track_gold(**kwargs: object) -> dict[str, Path]:
+        gold_calls.append(True)
+        return original_gold(**kwargs)
+
+    monkeypatch.setattr("src.public_lake.build_gold_panels", track_gold)
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        resume=True,
+    )
+    assert gold_calls == [True]
+
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["input_signature"]["gold_semantics_version"] == (
+        "partner-prior-issuer-accession-grain-v1"
+    )
+    marker["input_signature"]["gold_semantics_version"] = "partner-prior-accession-only-v0"
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        resume=True,
+    )
+    assert gold_calls == [True, True]
+    metadata_marker = json.loads(
+        (silver / ".public_lake_dag" / "write_metadata.done.json").read_text(encoding="utf-8")
+    )
+    assert metadata_marker["input_signature"]["gold_semantics_version"] == (
+        "partner-prior-issuer-accession-grain-v1"
+    )
 
 
 def test_simple_dag_stops_downstream_after_upstream_failure(tmp_path: Path) -> None:

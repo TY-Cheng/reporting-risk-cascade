@@ -46,6 +46,7 @@ from .table_io import (
 PARSER_VERSION = "public-lake-v2"
 SCHEMA_VERSION = "public-lake-v2"
 GOLD_FISCAL_PERIOD_RESOLUTION_VERSION = "submissions-report-date-exact-fsds-v1"
+GOLD_SEMANTICS_VERSION = "partner-prior-issuer-accession-grain-v1"
 SEC_REQUEST_INTERVAL_SECONDS = 0.15
 CSV_CHUNKSIZE = 250_000
 DEFAULT_FSDS_BATCH_SIZE = 4
@@ -4869,20 +4870,6 @@ def _build_gold_panels_duckdb(
             raise ValueError(
                 "Partner-prior features contain duplicate issuer_cik x accession keys."
             )
-        source_partner_rows, joined_partner_rows = con.execute(
-            """
-            SELECT
-                (SELECT count(*) FROM filing_model_source_gold),
-                (
-                    SELECT count(*)
-                    FROM filing_model_source_gold f
-                    LEFT JOIN filing_partner_prior_gold partner_prior
-                        USING (accession, issuer_cik)
-                )
-            """
-        ).fetchone()
-        if int(joined_partner_rows) != int(source_partner_rows):
-            raise ValueError("Partner-prior join expanded filing model rows.")
         negative_partner_rows = int(
             con.execute(
                 """
@@ -4907,7 +4894,11 @@ def _build_gold_panels_duckdb(
         filing_from = "filing_model_source_gold f"
         joins = [
             "LEFT JOIN form_ap_summary_gold form_ap USING (accession, issuer_cik)",
-            "LEFT JOIN filing_partner_prior_gold partner_prior USING (accession, issuer_cik)",
+            (
+                "LEFT JOIN filing_partner_prior_gold partner_prior "
+                "ON partner_prior.issuer_cik IS NOT DISTINCT FROM f.issuer_cik "
+                "AND partner_prior.accession IS NOT DISTINCT FROM f.accession"
+            ),
         ]
         if has_xbrl_summary:
             joins.append("LEFT JOIN xbrl_summary_gold xbrl_summary USING (accession)")
@@ -5950,6 +5941,7 @@ def build_public_lake(
     gold_input_signature = {
         "as_of_date": str(pd.Timestamp(as_of_date).date()),
         "fiscal_period_resolution": GOLD_FISCAL_PERIOD_RESOLUTION_VERSION,
+        "gold_semantics_version": GOLD_SEMANTICS_VERSION,
         "engine": engine,
         "storage_format": storage_format,
         "notes_mode": notes_mode,
