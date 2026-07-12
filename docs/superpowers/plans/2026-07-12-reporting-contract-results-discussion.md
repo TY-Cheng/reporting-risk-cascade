@@ -282,7 +282,7 @@ fragments. Do not add a legacy package-v1 compatibility branch.
 - Consumes: package `reporting_contract`, its 16 Markdown tables and 5 PNG figures, and dynamic experiment-only artifacts.
 - Produces: a generated `# Results and Discussion` page aligned with `paper_plan.md`.
 
-- [ ] **Step 1: Write RED structure/ownership/wording tests**
+- [x] **Step 1: Write RED structure/ownership/wording tests**
 
 Assert six ordered experiment sections, an interpretation subsection for each, a conventional
 Discussion spine, provenance last, and every package artifact exactly once in its declared
@@ -292,7 +292,7 @@ study/package is v1 and cannot prove this structure. Assert absence of gallery h
 only`, and inspection-as-predictor prose. Static tests must not require the checked-in generated
 snapshot to change before Task 6.
 
-- [ ] **Step 2: Tighten `paper_plan.md` without rewriting its valid spine**
+- [x] **Step 2: Tighten `paper_plan.md` without rewriting its valid spine**
 
 Keep Introduction, Materials and Methods, Mermaid preprocessing flow, models, metric rationale,
 six expected experiments, and reproducibility contract. Make the Introduction explicitly cover
@@ -303,7 +303,7 @@ Move Tables 4/14 from Experiment 2 to Experiment 5; make Experiment 2 dynamic-on
 diagnostic only when at least one required outcome is fit; add source/feature readiness to
 Experiment 4; keep only `all + expanding` as headline; state the five claim boundaries verbatim.
 
-- [ ] **Step 3: Rewrite only the snapshot assembly layer**
+- [x] **Step 3: Rewrite only the snapshot assembly layer**
 
 Keep existing data loaders/calculations that do not duplicate package displays. Replace the
 gallery assembly with singular owner-directed `render_table(key)` and `render_figure(key)` calls
@@ -312,7 +312,7 @@ window, break, feature-importance, readiness/skip, per-task peer, exploratory-ma
 aggregation, co-occurrence, and event-time results in their experiments. Remove raw displays
 duplicated by package owners. Put provenance last and render Table 1 there.
 
-- [ ] **Step 4: Run docs tests against fixture-generated output, build MkDocs strict, full suite, Ruff/format/diff, and commit**
+- [x] **Step 4: Run docs tests against fixture-generated output, build MkDocs strict, full suite, Ruff/format/diff, and commit**
 
 Do not regenerate the tracked `docs/results_snapshot.md` from the historical package v1. Task 6
 owns the first real package-v2 snapshot refresh and the constrained report child commit.
