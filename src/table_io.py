@@ -36,6 +36,7 @@ def _duckdb_path_list(paths: Sequence[Path]) -> str:
 
 DEFAULT_DUCKDB_MEMORY_LIMIT = "10GB"
 DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE = "400GB"
+DETERMINISTIC_GZIP_COMPRESSION: dict[str, Any] = {"method": "gzip", "mtime": 0}
 
 
 def _duckdb_literal(value: str | Path) -> str:
@@ -156,7 +157,7 @@ def write_table(
 
     if path.exists() and not overwrite:
         raise FileExistsError(path)
-    compression = "gzip" if path.suffix.lower() == ".gz" else None
+    compression = DETERMINISTIC_GZIP_COMPRESSION if path.suffix.lower() == ".gz" else None
     frame.to_csv(path, index=False, compression=compression)
     return path
 

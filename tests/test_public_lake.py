@@ -419,6 +419,120 @@ def _write_submissions_zip(
         zf.writestr("CIK0000000001.json", json.dumps(payload))
 
 
+def test_submissions_parquet_is_byte_stable_across_duckdb_thread_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row_count = 130_000
+    payload = {
+        "cik": "1",
+        "name": "Alpha Beta Corp",
+        "filings": {
+            "recent": {
+                "accessionNumber": [f"0000000001-22-{value:06d}" for value in range(row_count)],
+                "filingDate": ["2022-03-01"] * row_count,
+                "reportDate": ["2021-12-31"] * row_count,
+                "acceptanceDateTime": ["2022-03-01T10:00:00.000Z"] * row_count,
+                "form": ["10-K"] * row_count,
+            }
+        },
+    }
+    submissions_zip = tmp_path / "submissions.zip"
+    with zipfile.ZipFile(submissions_zip, "w") as zf:
+        zf.writestr("CIK0000000001.json", "{}")
+    monkeypatch.setattr(public_lake.json, "load", lambda _handle: payload)
+
+    active_threads = 1
+    preserve_order_flags: list[bool] = []
+
+    def write_with_active_threads(frame: pd.DataFrame, path: Path, **kwargs: object) -> Path:
+        preserve_order_flags.append(bool(kwargs.get("preserve_order", False)))
+        return write_table(frame, path, duckdb_threads=active_threads, **kwargs)
+
+    monkeypatch.setattr(public_lake, "write_table", write_with_active_threads)
+    first = public_lake.normalize_submissions_bulk(
+        submissions_zip=submissions_zip,
+        silver_dir=tmp_path / "thread1",
+    )
+    active_threads = 4
+    second = public_lake.normalize_submissions_bulk(
+        submissions_zip=submissions_zip,
+        silver_dir=tmp_path / "thread4",
+    )
+
+    assert (
+        hashlib.sha256(first["issuer_dim"].read_bytes()).digest()
+        == hashlib.sha256(second["issuer_dim"].read_bytes()).digest()
+    )
+    assert (
+        hashlib.sha256(first["filing_dim"].read_bytes()).digest()
+        == hashlib.sha256(second["filing_dim"].read_bytes()).digest()
+    )
+    assert preserve_order_flags == [True, True, True, True]
+
+
+def test_year_sharded_parquet_is_byte_stable_across_duckdb_thread_settings(
+    tmp_path: Path,
+) -> None:
+    row_count = 130_000
+    frame = pd.DataFrame(
+        {
+            "issuer_cik": [f"{value % 20_000:010d}" for value in reversed(range(row_count))],
+            "origin_date": pd.date_range("2020-01-01", periods=row_count, freq="min"),
+            "accession": [f"accession-{value:06d}" for value in range(row_count)],
+            "value": range(row_count),
+            "_partition_year": [2020] * row_count,
+        }
+    )
+    hashes: list[str] = []
+    for index, threads in enumerate([1, 4]):
+        con = _duckdb_connect(threads=threads)
+        try:
+            input_frame = frame if index == 0 else frame.iloc[::-1].reset_index(drop=True)
+            con.register("filing_frame", input_frame)
+            dest = tmp_path / f"thread{threads}.parquet"
+            public_lake._duckdb_copy_query_to_year_sharded_parquet_on_connection(
+                con,
+                query="SELECT * FROM filing_frame",
+                year_query=(
+                    "SELECT DISTINCT _partition_year FROM filing_frame ORDER BY _partition_year"
+                ),
+                dest=dest,
+                order_by=("issuer_cik", "origin_date", "accession"),
+            )
+            part = dest / "part_year_2020" / "data.parquet"
+            hashes.append(hashlib.sha256(part.read_bytes()).hexdigest())
+            written = read_table(part, duckdb_threads=1)
+            assert (
+                written.index.tolist()
+                == written.sort_values(
+                    ["issuer_cik", "origin_date", "accession"],
+                    kind="mergesort",
+                    na_position="last",
+                ).index.tolist()
+            )
+        finally:
+            con.close()
+
+    assert hashes[0] == hashes[1]
+
+
+def test_year_sharded_parquet_rejects_empty_deterministic_order(tmp_path: Path) -> None:
+    con = _duckdb_connect(threads=4)
+    try:
+        con.execute("CREATE TABLE filing_frame AS SELECT 2020 AS _partition_year, 1 AS value")
+        with pytest.raises(ValueError, match="nonempty deterministic order"):
+            public_lake._duckdb_copy_query_to_year_sharded_parquet_on_connection(
+                con,
+                query="SELECT * FROM filing_frame",
+                year_query="SELECT DISTINCT _partition_year FROM filing_frame",
+                dest=tmp_path / "filing_origin_panel.parquet",
+                order_by=(),
+            )
+    finally:
+        con.close()
+
+
 def _write_fsds_zip(
     path: Path,
     adsh: str,
@@ -3359,6 +3473,135 @@ def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path
     assert len(featured) == len(filing)
     assert featured.loc[0, "auditor_partner_prior_other_issuer_8k_402_count"] == 1
     assert featured.loc[0, "auditor_partner_prior_other_issuer_total_count"] == 1
+
+
+def test_partner_history_gzip_outputs_are_byte_stable_across_clock_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = tmp_path / "inputs"
+    form_ap = pd.DataFrame(
+        [
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_period_end": "2020-12-31",
+                "report_date": "2021-02-01",
+                "filing_date": "2021-02-01",
+                "form_filing_id": "ap-1",
+                "pcaob_firm_id": "firm",
+                "engagement_partner_id": "P1",
+                "engagement_partner_name": "Partner One",
+                "number_of_participants": 1,
+            },
+            {
+                "issuer_cik": "0000000002",
+                "fiscal_period_end": "2020-12-31",
+                "report_date": "2021-02-01",
+                "filing_date": "2021-02-01",
+                "form_filing_id": "ap-2",
+                "pcaob_firm_id": "firm",
+                "engagement_partner_id": "P1",
+                "engagement_partner_name": "Partner One",
+                "number_of_participants": 1,
+            },
+            {
+                "issuer_cik": "0000000001",
+                "fiscal_period_end": "2021-12-31",
+                "report_date": "2022-02-01",
+                "filing_date": "2022-02-01",
+                "form_filing_id": "ap-3",
+                "pcaob_firm_id": "firm",
+                "engagement_partner_id": "P2",
+                "engagement_partner_name": "Partner Two",
+                "number_of_participants": 2,
+            },
+        ]
+    )
+    _write_csv_gz(
+        inputs / "issuer_8k_item_event.csv.gz",
+        [
+            {
+                "issuer_cik": "0000000001",
+                "public_date": "2021-04-01",
+                "report_date": "2021-04-01",
+                "item_code": "4.02",
+            },
+            {
+                "issuer_cik": "0000000002",
+                "public_date": "2021-04-02",
+                "report_date": "2021-04-02",
+                "item_code": "4.02",
+            },
+        ],
+    )
+    _write_csv_gz(
+        inputs / "amendment_annotation.csv.gz",
+        [
+            {
+                "issuer_cik": "0000000001",
+                "public_date": "2021-05-01",
+                "report_date": "2021-05-01",
+                "amendment_annotation": "non_admin_financial_correction",
+            }
+        ],
+    )
+
+    output_sets: list[dict[str, Path]] = []
+    for index, now in enumerate([1_700_000_000.0, 1_800_000_000.0]):
+        monkeypatch.setattr("gzip.time.time", lambda now=now: now)
+        form_ap_path = inputs / f"form_ap_event_{index}.parquet"
+        form_ap_input = form_ap if index == 0 else form_ap.iloc[::-1].reset_index(drop=True)
+        write_table(form_ap_input, form_ap_path, preserve_order=True)
+        output_sets.append(
+            public_lake.build_partner_risk_histories(
+                form_ap_event_path=form_ap_path,
+                issuer_8k_item_event_path=inputs / "issuer_8k_item_event.csv.gz",
+                amendment_annotation_path=inputs / "amendment_annotation.csv.gz",
+                silver_dir=tmp_path / f"run-{index}",
+            )
+        )
+
+    for name in [
+        "partner_issuer_engagement",
+        "partner_risk_history",
+        "partner_issuer_risk_history",
+    ]:
+        assert output_sets[0][name].read_bytes() == output_sets[1][name].read_bytes()
+
+
+def test_empty_partner_history_gzip_outputs_are_byte_stable_across_clock_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_sets: list[dict[str, Path]] = []
+    for index, now in enumerate([1_700_000_000.0, 1_800_000_000.0]):
+        monkeypatch.setattr("gzip.time.time", lambda now=now: now)
+        output_sets.append(public_lake._empty_partner_history_outputs(tmp_path / f"run-{index}"))
+
+    for name in [
+        "partner_issuer_engagement",
+        "partner_risk_history",
+        "partner_issuer_risk_history",
+    ]:
+        assert output_sets[0][name].read_bytes() == output_sets[1][name].read_bytes()
+
+
+def test_append_csv_gzip_uses_zero_mtime_and_is_byte_stable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert public_lake.DETERMINISTIC_GZIP_COMPRESSION == {"method": "gzip", "mtime": 0}
+    source = tmp_path / "source.csv"
+    pd.DataFrame({"issuer_cik": ["0000000001"], "value": [1]}).to_csv(source, index=False)
+    outputs: list[Path] = []
+    for index, now in enumerate([1_700_000_000.0, 1_800_000_000.0]):
+        monkeypatch.setattr("gzip.time.time", lambda now=now: now)
+        output = tmp_path / f"run-{index}" / "combined.csv.gz"
+        public_lake._append_csv_gzip(source, output)
+        outputs.append(output)
+
+    assert outputs[0].read_bytes()[4:8] == b"\x00\x00\x00\x00"
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
 
 
 def _write_shared_accession_partner_prior_fixture(

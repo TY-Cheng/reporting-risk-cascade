@@ -39,7 +39,10 @@ def test_write_table_preserve_order_is_byte_stable_across_thread_settings(
     )
 
 
-def test_table_io_csv_parquet_directory_projection_dates_and_overwrite(tmp_path: Path) -> None:
+def test_table_io_csv_parquet_directory_projection_dates_and_overwrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     frame = pd.DataFrame(
         {
             "firm": ["a", "b", "c"],
@@ -47,10 +50,15 @@ def test_table_io_csv_parquet_directory_projection_dates_and_overwrite(tmp_path:
             "value": [1, 2, 3],
         }
     )
-    csv_path = tmp_path / "table.csv.gz"
+    csv_path = tmp_path / "first" / "table.csv.gz"
+    csv_copy = tmp_path / "second" / "table.csv.gz"
     parquet_path = tmp_path / "table.parquet"
+    monkeypatch.setattr("gzip.time.time", lambda: 1_700_000_000.0)
     write_table(frame, csv_path)
+    monkeypatch.setattr("gzip.time.time", lambda: 1_800_000_000.0)
+    write_table(frame, csv_copy)
     write_table(frame, parquet_path)
+    assert csv_path.read_bytes() == csv_copy.read_bytes()
     with pytest.raises(FileExistsError):
         write_table(frame, parquet_path, overwrite=False)
     with pytest.raises(FileExistsError):

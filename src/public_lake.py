@@ -51,6 +51,7 @@ SEC_REQUEST_INTERVAL_SECONDS = 0.15
 CSV_CHUNKSIZE = 250_000
 DEFAULT_FSDS_BATCH_SIZE = 4
 DEFAULT_NOTES_BATCH_SIZE = 2
+DETERMINISTIC_GZIP_COMPRESSION: Dict[str, Any] = {"method": "gzip", "mtime": 0}
 
 SEC_TICKER_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_BULK_SUBMISSIONS_URL = (
@@ -1117,6 +1118,23 @@ def _normalize_cik_series(series: pd.Series) -> pd.Series:
     return out.map(lambda value: str(value).zfill(10) if pd.notna(value) else pd.NA)
 
 
+def _write_csv_gzip(
+    frame: pd.DataFrame,
+    path: Path,
+    *,
+    mode: str = "w",
+    header: bool = True,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(
+        path,
+        mode=mode,
+        index=False,
+        header=header,
+        compression=DETERMINISTIC_GZIP_COMPRESSION,
+    )
+
+
 def normalize_submissions_bulk(
     *,
     submissions_zip: Path,
@@ -1218,8 +1236,8 @@ def normalize_submissions_bulk(
     silver_dir.mkdir(parents=True, exist_ok=True)
     issuer_path = silver_dir / "issuer_dim.parquet"
     filing_path = silver_dir / "filing_dim.parquet"
-    write_table(issuer_dim, issuer_path)
-    write_table(filing_dim, filing_path)
+    write_table(issuer_dim, issuer_path, preserve_order=True)
+    write_table(filing_dim, filing_path, preserve_order=True)
     return {"issuer_dim": issuer_path, "filing_dim": filing_path}
 
 
@@ -1542,7 +1560,7 @@ def normalize_pcaob_inspection_file(*, inspection_path: Path, silver_dir: Path) 
     standardized["source_file"] = str(inspection_path)
     silver_dir.mkdir(parents=True, exist_ok=True)
     out_path = silver_dir / "pcaob_inspection_event.csv.gz"
-    standardized.to_csv(out_path, index=False, compression="gzip")
+    _write_csv_gzip(standardized, out_path)
     return out_path
 
 
@@ -1550,12 +1568,11 @@ def _append_csv_gzip(source_csv: Path, dest_csv: Path) -> None:
     dest_csv.parent.mkdir(parents=True, exist_ok=True)
     header = not dest_csv.exists()
     for chunk in pd.read_csv(source_csv, chunksize=CSV_CHUNKSIZE, low_memory=False):
-        chunk.to_csv(
+        _write_csv_gzip(
+            chunk,
             dest_csv,
             mode="a",
-            index=False,
             header=header,
-            compression="gzip",
         )
         header = False
 
@@ -2529,7 +2546,7 @@ def build_comment_threads(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
     comment = filing_dim.loc[filing_dim["form"].isin(["UPLOAD", "CORRESP"])].copy()
     if comment.empty:
         out_path = silver_dir / "comment_thread.csv.gz"
-        pd.DataFrame(
+        empty_thread = pd.DataFrame(
             columns=[
                 "issuer_cik",
                 "thread_id",
@@ -2539,7 +2556,8 @@ def build_comment_threads(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
                 "corresp_count",
                 "filing_count",
             ]
-        ).to_csv(out_path, index=False, compression="gzip")
+        )
+        _write_csv_gzip(empty_thread, out_path)
         return out_path
 
     comment = comment.sort_values(["issuer_cik", "filing_date", "accession"])
@@ -2562,7 +2580,7 @@ def build_comment_threads(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
     )
     silver_dir.mkdir(parents=True, exist_ok=True)
     out_path = silver_dir / "comment_thread.csv.gz"
-    thread.to_csv(out_path, index=False, compression="gzip")
+    _write_csv_gzip(thread, out_path)
     return out_path
 
 
@@ -2639,7 +2657,7 @@ def build_issuer_8k_item_events(*, filing_dim_csv: Path, silver_dir: Path) -> Pa
             event = pd.DataFrame(columns=columns)
     silver_dir.mkdir(parents=True, exist_ok=True)
     out_path = silver_dir / "issuer_8k_item_event.csv.gz"
-    event.to_csv(out_path, index=False, compression="gzip")
+    _write_csv_gzip(event, out_path)
     return out_path
 
 
@@ -2775,7 +2793,7 @@ def build_amendment_annotations(
     annotation = pd.DataFrame(rows, columns=columns)
     silver_dir.mkdir(parents=True, exist_ok=True)
     out_path = silver_dir / "amendment_annotation.csv.gz"
-    annotation.to_csv(out_path, index=False, compression="gzip")
+    _write_csv_gzip(annotation, out_path)
     return out_path
 
 
@@ -2845,7 +2863,7 @@ def build_correction_events(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
         )
     silver_dir.mkdir(parents=True, exist_ok=True)
     out_path = silver_dir / "correction_event.csv.gz"
-    correction.to_csv(out_path, index=False, compression="gzip")
+    _write_csv_gzip(correction, out_path)
     return out_path
 
 
@@ -2884,7 +2902,7 @@ def _empty_partner_history_outputs(silver_dir: Path) -> Dict[str, Path]:
     }
     silver_dir.mkdir(parents=True, exist_ok=True)
     for name, path in outputs.items():
-        pd.DataFrame(columns=schemas[name]).to_csv(path, index=False, compression="gzip")
+        _write_csv_gzip(pd.DataFrame(columns=schemas[name]), path)
     return outputs
 
 
@@ -2938,6 +2956,18 @@ def build_partner_risk_histories(
         "number_of_participants",
     ]
     engagement = engagement[engagement_cols].drop_duplicates()
+    engagement_order = [
+        "issuer_cik",
+        "form_ap_public_date",
+        "engagement_partner_id",
+        "form_filing_id",
+    ]
+    engagement_order.extend(col for col in engagement_cols if col not in engagement_order)
+    engagement = engagement.sort_values(
+        engagement_order,
+        kind="mergesort",
+        na_position="last",
+    ).reset_index(drop=True)
 
     risk_frames: List[pd.DataFrame] = []
     if issuer_8k_item_event_path.exists():
@@ -2988,11 +3018,11 @@ def build_partner_risk_histories(
 
     silver_dir.mkdir(parents=True, exist_ok=True)
     engagement_path = silver_dir / "partner_issuer_engagement.csv.gz"
-    engagement.to_csv(engagement_path, index=False, compression="gzip")
+    _write_csv_gzip(engagement, engagement_path)
     if engagement.empty or risk_events.empty:
         outputs = _empty_partner_history_outputs(silver_dir)
         outputs["partner_issuer_engagement"] = engagement_path
-        engagement.to_csv(engagement_path, index=False, compression="gzip")
+        _write_csv_gzip(engagement, engagement_path)
         return outputs
 
     risk_events = risk_events.sort_values(["event_date", "issuer_cik"], kind="mergesort")
@@ -3015,7 +3045,7 @@ def build_partner_risk_histories(
     if matched.empty:
         outputs = _empty_partner_history_outputs(silver_dir)
         outputs["partner_issuer_engagement"] = engagement_path
-        engagement.to_csv(engagement_path, index=False, compression="gzip")
+        _write_csv_gzip(engagement, engagement_path)
         return outputs
 
     daily_partner = (
@@ -3102,8 +3132,8 @@ def build_partner_risk_histories(
 
     partner_history_path = silver_dir / "partner_risk_history.csv.gz"
     issuer_history_path = silver_dir / "partner_issuer_risk_history.csv.gz"
-    partner_history.to_csv(partner_history_path, index=False, compression="gzip")
-    issuer_history.to_csv(issuer_history_path, index=False, compression="gzip")
+    _write_csv_gzip(partner_history, partner_history_path)
+    _write_csv_gzip(issuer_history, issuer_history_path)
     return {
         "partner_issuer_engagement": engagement_path,
         "partner_risk_history": partner_history_path,
@@ -3961,49 +3991,61 @@ def _duckdb_copy_query_to_year_sharded_parquet_on_connection(
     query: str,
     year_query: str,
     dest: Path,
+    order_by: Sequence[str],
 ) -> None:
     """Write a large query as a directory of yearly Parquet shards."""
 
+    if not order_by:
+        raise ValueError("Year-sharded Parquet writes require a nonempty deterministic order.")
     dest = Path(dest)
     remove_table_path(dest)
     dest.mkdir(parents=True, exist_ok=True)
-    years = [row[0] for row in con.execute(year_query).fetchall()]
-    if not years:
-        empty_file = dest / "part_empty" / "data.parquet"
-        empty_file.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            f"""
-            COPY (
-                SELECT * EXCLUDE (_partition_year)
-                FROM ({query})
-                WHERE false
+    previous_threads = int(con.execute("SELECT current_setting('threads')").fetchone()[0])
+    con.execute("SET threads = 1")
+    order_clause = "ORDER BY " + ", ".join(
+        f"{_duckdb_identifier(col)} NULLS LAST" for col in order_by
+    )
+    try:
+        years = [row[0] for row in con.execute(year_query).fetchall()]
+        if not years:
+            empty_file = dest / "part_empty" / "data.parquet"
+            empty_file.parent.mkdir(parents=True, exist_ok=True)
+            con.execute(
+                f"""
+                COPY (
+                    SELECT * EXCLUDE (_partition_year)
+                    FROM ({query})
+                    WHERE false
+                )
+                TO '{_duckdb_path(empty_file)}'
+                (FORMAT PARQUET, COMPRESSION ZSTD, PRESERVE_ORDER true)
+                """
             )
-            TO '{_duckdb_path(empty_file)}'
-            (FORMAT PARQUET, COMPRESSION ZSTD)
-            """
-        )
-        return
+            return
 
-    for year in years:
-        if year is None:
-            condition = "_partition_year IS NULL"
-            part_name = "part_year_null"
-        else:
-            condition = f"_partition_year = {int(year)}"
-            part_name = f"part_year_{int(year)}"
-        part_file = dest / part_name / "data.parquet"
-        part_file.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            f"""
-            COPY (
-                SELECT * EXCLUDE (_partition_year)
-                FROM ({query})
-                WHERE {condition}
+        for year in years:
+            if year is None:
+                condition = "_partition_year IS NULL"
+                part_name = "part_year_null"
+            else:
+                condition = f"_partition_year = {int(year)}"
+                part_name = f"part_year_{int(year)}"
+            part_file = dest / part_name / "data.parquet"
+            part_file.parent.mkdir(parents=True, exist_ok=True)
+            con.execute(
+                f"""
+                COPY (
+                    SELECT * EXCLUDE (_partition_year)
+                    FROM ({query})
+                    WHERE {condition}
+                    {order_clause}
+                )
+                TO '{_duckdb_path(part_file)}'
+                (FORMAT PARQUET, COMPRESSION ZSTD, PRESERVE_ORDER true)
+                """
             )
-            TO '{_duckdb_path(part_file)}'
-            (FORMAT PARQUET, COMPRESSION ZSTD)
-            """
-        )
+    finally:
+        con.execute(f"SET threads = {previous_threads}")
 
 
 def _duckdb_xbrl_core_features_query(path: Path, columns: Sequence[str]) -> str:
@@ -5267,6 +5309,7 @@ def _build_gold_panels_duckdb(
                 ORDER BY _partition_year NULLS LAST
             """,
             dest=filing_path,
+            order_by=("issuer_cik", "origin_date", "accession"),
         )
     finally:
         con.close()
@@ -6109,7 +6152,7 @@ def build_public_lake(
         for filename, cols in EMPTY_TABLE_SCHEMAS.items():
             path = silver_dir / filename
             if not path.exists():
-                pd.DataFrame(columns=list(cols)).to_csv(path, index=False, compression="gzip")
+                _write_csv_gzip(pd.DataFrame(columns=list(cols)), path)
             task_outputs[path.stem.replace(".csv", "")] = path
         return task_outputs
 
