@@ -46,6 +46,7 @@ IDENTIFIER_COLS = {
     "filing_date",
     "acceptance_datetime",
     "fiscal_period_end",
+    "fiscal_period_end_source",
     "as_of_date",
     "event_report_date",
     "entity_name",
@@ -166,9 +167,7 @@ def _sample_attrition(
         work = work.loc[
             pd.to_numeric(work["is_domestic_us_gaap_proxy"], errors="coerce").eq(1)
         ].copy()
-    rows.append(
-        {"stage": "domestic_us_gaap_proxy", "n_rows": int(len(work)), "task": "all"}
-    )
+    rows.append({"stage": "domestic_us_gaap_proxy", "n_rows": int(len(work)), "task": "all"})
     observable = work.loc[
         pd.to_numeric(work["censored_365"], errors="coerce").fillna(1).eq(0)
     ].copy()
@@ -365,7 +364,9 @@ def _evaluate_binary(
     *,
     top_k: Sequence[int] = (50, 100, 200),
 ) -> Dict[str, float]:
-    metrics = compute_metrics(np.asarray(y_true, dtype=int), np.asarray(prob, dtype=float), top_k=top_k)
+    metrics = compute_metrics(
+        np.asarray(y_true, dtype=int), np.asarray(prob, dtype=float), top_k=top_k
+    )
     if len(np.unique(y_true)) < 2:
         metrics["roc_auc"] = np.nan
         metrics["pr_auc"] = np.nan
@@ -614,17 +615,49 @@ def fit_public_opacity_dml(
             "n_opacity_components": int(len(opacity_components)),
         }
         if len(opacity_components) == 0:
-            rows.append({**base_row, "status": "skipped_no_opacity_components", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            rows.append(
+                {
+                    **base_row,
+                    "status": "skipped_no_opacity_components",
+                    "coef": np.nan,
+                    "std_err": np.nan,
+                    "p_value": np.nan,
+                }
+            )
             continue
         if len(work) < 20 or len(np.unique(y)) < 2:
-            rows.append({**base_row, "status": "skipped_one_class_or_too_small", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            rows.append(
+                {
+                    **base_row,
+                    "status": "skipped_one_class_or_too_small",
+                    "coef": np.nan,
+                    "std_err": np.nan,
+                    "p_value": np.nan,
+                }
+            )
             continue
         if float(np.nanstd(t)) == 0:
-            rows.append({**base_row, "status": "skipped_constant_treatment", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            rows.append(
+                {
+                    **base_row,
+                    "status": "skipped_constant_treatment",
+                    "coef": np.nan,
+                    "std_err": np.nan,
+                    "p_value": np.nan,
+                }
+            )
             continue
         splits = min(int(n_splits), len(work))
         if splits < 2:
-            rows.append({**base_row, "status": "skipped_insufficient_folds", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            rows.append(
+                {
+                    **base_row,
+                    "status": "skipped_insufficient_folds",
+                    "coef": np.nan,
+                    "std_err": np.nan,
+                    "p_value": np.nan,
+                }
+            )
             continue
         y_hat = np.zeros(len(work), dtype=float)
         t_hat = np.zeros(len(work), dtype=float)
@@ -666,7 +699,15 @@ def fit_public_opacity_dml(
         y_res = y - y_hat
         t_res = t - t_hat
         if float(np.nanstd(t_res)) == 0:
-            rows.append({**post_matrix_row, "status": "skipped_constant_residual_treatment", "coef": np.nan, "std_err": np.nan, "p_value": np.nan})
+            rows.append(
+                {
+                    **post_matrix_row,
+                    "status": "skipped_constant_residual_treatment",
+                    "coef": np.nan,
+                    "std_err": np.nan,
+                    "p_value": np.nan,
+                }
+            )
             continue
         fitted = sm.OLS(y_res, sm.add_constant(t_res)).fit(cov_type="HC3")
         rows.append(
@@ -898,8 +939,7 @@ def run_public_cascade(
     if issuer_origin_panel_path is not None and issuer_origin_panel_csv is not None:
         if Path(issuer_origin_panel_path) != Path(issuer_origin_panel_csv):
             raise ValueError(
-                "Pass only one of issuer_origin_panel_path or deprecated "
-                "issuer_origin_panel_csv."
+                "Pass only one of issuer_origin_panel_path or deprecated issuer_origin_panel_csv."
             )
     issuer_origin_panel_path = issuer_origin_panel_path or issuer_origin_panel_csv
     if issuer_origin_panel_path is None:
@@ -928,9 +968,7 @@ def run_public_cascade(
         end_year=end_year,
         domestic_only=domestic_only,
     )
-    panel = panel.loc[
-        pd.to_numeric(panel["censored_365"], errors="coerce").eq(0)
-    ].copy()
+    panel = panel.loc[pd.to_numeric(panel["censored_365"], errors="coerce").eq(0)].copy()
     panel = panel.reset_index(drop=True)
     panel = _sort_panel_for_model(panel)
     families = _infer_feature_families(panel)
@@ -1008,7 +1046,9 @@ def run_public_cascade(
     units_by_family: Dict[str, List[Dict[str, object]]] = {}
     for unit in units:
         units_by_family.setdefault(str(unit["family"]), []).append(unit)
-    unit_batches = [units_by_family[family] for family in requested_families if family in units_by_family]
+    unit_batches = [
+        units_by_family[family] for family in requested_families if family in units_by_family
+    ]
 
     if parallel_jobs == 1:
         batched_results = [
@@ -1125,7 +1165,9 @@ def run_public_cascade(
         if meta["label"] in panel.columns
     }
     task_exclusion_counts = {
-        task_name: int(_task_exclusion_mask(panel, task_name=task_name, label_col=meta["label"]).sum())
+        task_name: int(
+            _task_exclusion_mask(panel, task_name=task_name, label_col=meta["label"]).sum()
+        )
         for task_name, meta in TASKS.items()
         if meta["label"] in panel.columns
     }
@@ -1169,9 +1211,7 @@ def run_public_cascade(
         ),
         "visibility_history_requested_features": list(VISIBILITY_HISTORY_FEATURES),
         "visibility_history_missing_features": [
-            col
-            for col in VISIBILITY_HISTORY_FEATURES
-            if col not in families["visibility_history"]
+            col for col in VISIBILITY_HISTORY_FEATURES if col not in families["visibility_history"]
         ],
         "empty_feature_family_blockers": empty_feature_family_blockers,
         "has_xbrl_ratio_features": has_xbrl_ratio_features,

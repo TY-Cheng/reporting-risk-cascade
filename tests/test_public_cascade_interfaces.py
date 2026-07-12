@@ -38,6 +38,7 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
             "source_available_notes": [1],
             "public_date_notes": ["2020-11-01"],
             "vintage_notes": ["2020-11+"],
+            "fiscal_period_end_source": ["fsds_period"],
             "label_comment_thread_365": [0],
             "censored_365": [0],
             "label_amendment_365": [0],
@@ -64,6 +65,7 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
     assert "source_available_notes" not in all_features
     assert "public_date_notes" not in all_features
     assert "vintage_notes" not in all_features
+    assert "fiscal_period_end_source" not in all_features
     assert "label_comment_thread_365" not in all_features
     assert "censored_365" not in all_features
     assert "k402_item_metadata_unknown_365" not in all_features
@@ -797,9 +799,7 @@ model:
         assert summary["primary_metric_rows"] == int(
             (
                 metrics["feature_set"].eq(summary["primary_specification"]["feature_set"])
-                & metrics["train_window"].eq(
-                    summary["primary_specification"]["train_window"]
-                )
+                & metrics["train_window"].eq(summary["primary_specification"]["train_window"])
             ).sum()
         )
 

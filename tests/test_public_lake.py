@@ -3461,6 +3461,437 @@ def test_gold_panel_period_semantics_annual_priority_and_fpi_year_state(tmp_path
     assert int(gamma_2018["is_domestic_us_gaap_proxy"]) == 1
 
 
+def _write_missing_report_date_gold_fixture(silver: Path) -> None:
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": str(value),
+                    "entity_name": f"Issuer {value}",
+                    "sic": 1234,
+                    "sic_description": "A",
+                    "entity_type": "operating",
+                }
+                for value in range(1, 6)
+            ]
+        ),
+        silver / "issuer_dim.parquet",
+    )
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "accession": "a-base",
+                    "accession_nodash": "abase",
+                    "filing_date": "2022-02-01",
+                    "report_date": None,
+                    "acceptance_datetime": "2022-02-01 08:00:00",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "a-base.htm",
+                },
+                {
+                    "issuer_cik": "1",
+                    "accession": "a-amend",
+                    "accession_nodash": "aamend",
+                    "filing_date": "2022-02-10",
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": "2022-02-10 08:00:00",
+                    "form": "10-K/A",
+                    "items": "",
+                    "primary_document": "a-amend.htm",
+                },
+                {
+                    "issuer_cik": "2",
+                    "accession": "b-unresolved",
+                    "accession_nodash": "bunresolved",
+                    "filing_date": "2022-03-01",
+                    "report_date": None,
+                    "acceptance_datetime": "2022-03-01 08:00:00",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "b.htm",
+                },
+                {
+                    "issuer_cik": "3",
+                    "accession": "c-submissions",
+                    "accession_nodash": "csubmissions",
+                    "filing_date": "2022-01-15",
+                    "report_date": "2021-09-30",
+                    "acceptance_datetime": "2022-01-15 08:00:00",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "c.htm",
+                },
+                {
+                    "issuer_cik": "4",
+                    "accession": "d-8k",
+                    "accession_nodash": "d8k",
+                    "filing_date": "2022-01-20",
+                    "report_date": "2022-01-19",
+                    "acceptance_datetime": "2022-01-20 08:00:00",
+                    "form": "8-K",
+                    "items": "4.02",
+                    "primary_document": "d.htm",
+                },
+                {
+                    "issuer_cik": "5",
+                    "accession": "e-no-origin",
+                    "accession_nodash": "enoorigin",
+                    "filing_date": None,
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": "2022-02-01 08:00:00",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "e.htm",
+                },
+            ]
+        ),
+        silver / "filing_dim.parquet",
+    )
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "adsh": "a-base",
+                    "fiscal_period_end": "2021-12-31",
+                    "fiscal_year": 2021,
+                    "fiscal_period": "FY",
+                },
+                {
+                    "adsh": "a-base",
+                    "fiscal_period_end": "2021-12-31",
+                    "fiscal_year": 2021,
+                    "fiscal_period": "FY",
+                },
+                {
+                    "adsh": "c-submissions",
+                    "fiscal_period_end": "1999-12-31",
+                    "fiscal_year": 1999,
+                    "fiscal_period": "FY",
+                },
+                {
+                    "adsh": "not-a-base",
+                    "fiscal_period_end": "1999-12-31",
+                    "fiscal_year": 1999,
+                    "fiscal_period": "FY",
+                },
+            ]
+        ),
+        silver / "filing_xbrl_dim.parquet",
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "duckdb"])
+def test_gold_resolves_missing_report_date_from_exact_fsds_accession(
+    tmp_path: Path,
+    engine: str,
+) -> None:
+    silver = tmp_path / "silver"
+    gold = tmp_path / f"gold_{engine}"
+    _write_missing_report_date_gold_fixture(silver)
+
+    build_gold_panels(
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        engine=engine,
+    )
+    filing = read_table(
+        gold / "filing_origin_panel.parquet",
+        date_cols=["report_date", "event_report_date", "fiscal_period_end"],
+    )
+    issuer = read_table(gold / "issuer_origin_panel.parquet")
+
+    assert "fiscal_period_end_source" in filing.columns
+    base = filing.loc[filing["accession"].eq("a-base")].iloc[0]
+    assert pd.isna(base["report_date"])
+    assert pd.isna(base["event_report_date"])
+    assert base["fiscal_period_end"] == pd.Timestamp("2021-12-31")
+    assert int(base["fiscal_year"]) == 2021
+    assert base["fiscal_period_end_source"] == "fsds_period"
+    assert filing["accession"].eq("a-base").sum() == 1
+
+    submissions = filing.loc[filing["accession"].eq("c-submissions")].iloc[0]
+    assert submissions["report_date"] == pd.Timestamp("2021-09-30")
+    assert submissions["event_report_date"] == pd.Timestamp("2021-09-30")
+    assert submissions["fiscal_period_end"] == pd.Timestamp("2021-09-30")
+    assert submissions["fiscal_period_end_source"] == "submissions_report_date"
+
+    issuer_2021 = issuer.loc[
+        issuer["issuer_cik"].astype(str).str.zfill(10).eq("0000000001")
+        & issuer["fiscal_year"].eq(2021)
+    ]
+    assert issuer_2021["accession"].tolist() == ["a-base"]
+
+
+@pytest.mark.parametrize("engine", ["pandas", "duckdb"])
+def test_gold_excludes_unresolved_and_keyless_annual_rows_but_preserves_filings(
+    tmp_path: Path,
+    engine: str,
+) -> None:
+    silver = tmp_path / "silver"
+    gold = tmp_path / f"gold_{engine}"
+    _write_missing_report_date_gold_fixture(silver)
+
+    build_gold_panels(
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        engine=engine,
+    )
+    filing = read_table(gold / "filing_origin_panel.parquet")
+    issuer = read_table(gold / "issuer_origin_panel.parquet")
+
+    sources = filing.set_index("accession")["fiscal_period_end_source"].to_dict()
+    assert sources["b-unresolved"] == "unresolved"
+    assert sources["c-submissions"] == "submissions_report_date"
+    assert sources["d-8k"] == "not_applicable"
+    assert {"b-unresolved", "e-no-origin"}.isdisjoint(set(issuer["accession"]))
+    assert issuer[["issuer_cik", "fiscal_year", "origin_date"]].notna().all().all()
+    assert not issuer.duplicated(["issuer_cik", "fiscal_year"]).any()
+
+
+@pytest.mark.parametrize("engine", ["pandas", "duckdb"])
+def test_gold_rejects_conflicting_fsds_periods_for_one_accession(
+    tmp_path: Path,
+    engine: str,
+) -> None:
+    silver = tmp_path / "silver"
+    _write_missing_report_date_gold_fixture(silver)
+    write_table(
+        pd.DataFrame(
+            [
+                {"adsh": "a-base", "fiscal_period_end": "2021-12-31"},
+                {"adsh": "a-base", "fiscal_period_end": "2020-12-31"},
+            ]
+        ),
+        silver / "filing_xbrl_dim.parquet",
+    )
+
+    with pytest.raises(ValueError, match="conflicting FSDS fiscal periods"):
+        build_gold_panels(
+            silver_dir=silver,
+            gold_dir=tmp_path / f"gold_{engine}",
+            as_of_date="2026-04-23",
+            engine=engine,
+        )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "duckdb"])
+def test_gold_fsds_recovered_prior_year_feeds_yoy_features(
+    tmp_path: Path,
+    engine: str,
+) -> None:
+    silver = tmp_path / "silver"
+    gold = tmp_path / f"gold_{engine}"
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "entity_name": "Issuer 1",
+                    "sic": 1234,
+                    "sic_description": "A",
+                    "entity_type": "operating",
+                }
+            ]
+        ),
+        silver / "issuer_dim.parquet",
+    )
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "accession": "prior",
+                    "accession_nodash": "prior",
+                    "filing_date": "2021-02-01",
+                    "report_date": None,
+                    "acceptance_datetime": "2021-02-01 08:00:00",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "prior.htm",
+                },
+                {
+                    "issuer_cik": "1",
+                    "accession": "current",
+                    "accession_nodash": "current",
+                    "filing_date": "2022-02-01",
+                    "report_date": "2021-12-31",
+                    "acceptance_datetime": "2022-02-01 08:00:00",
+                    "form": "10-K",
+                    "items": "",
+                    "primary_document": "current.htm",
+                },
+            ]
+        ),
+        silver / "filing_dim.parquet",
+    )
+    write_table(
+        pd.DataFrame([{"adsh": "prior", "fiscal_period_end": "2020-12-31"}]),
+        silver / "filing_xbrl_dim.parquet",
+    )
+    _write_csv_gz(
+        silver / "xbrl_fact.csv.gz",
+        [
+            {
+                "adsh": accession,
+                "tag": tag,
+                "uom": "USD",
+                "taxonomy_version": "us-gaap/2025",
+                "segments": None,
+                "coreg": None,
+                "value": value,
+                "quarters": 4,
+                "fact_date": fact_date,
+            }
+            for accession, fact_date, values in [
+                ("prior", "2020-12-31", {"Revenues": 100.0, "Assets": 200.0}),
+                ("current", "2021-12-31", {"Revenues": 150.0, "Assets": 250.0}),
+            ]
+            for tag, value in values.items()
+        ],
+    )
+
+    build_gold_panels(
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        engine=engine,
+    )
+    issuer = read_table(gold / "issuer_origin_panel.parquet")
+    current = issuer.loc[issuer["accession"].eq("current")].iloc[0]
+
+    assert current["xbrl_ratio_revenue_yoy_change"] == pytest.approx(0.5)
+    assert current["xbrl_ratio_assets_yoy_change"] == pytest.approx(0.25)
+    assert int(current["xbrl_coverage_revenues_yoy"]) == 1
+    assert int(current["xbrl_coverage_assets_yoy"]) == 1
+
+
+def test_gold_period_fallback_is_equivalent_across_engines(tmp_path: Path) -> None:
+    silver = tmp_path / "silver"
+    _write_missing_report_date_gold_fixture(silver)
+    panels: dict[str, pd.DataFrame] = {}
+    for engine in ["pandas", "duckdb"]:
+        gold = tmp_path / f"gold_{engine}"
+        build_gold_panels(
+            silver_dir=silver,
+            gold_dir=gold,
+            as_of_date="2026-04-23",
+            engine=engine,
+        )
+        panels[engine] = (
+            read_table(gold / "issuer_origin_panel.parquet")
+            .sort_values(["issuer_cik", "fiscal_year", "accession"], kind="mergesort")
+            .reset_index(drop=True)
+        )
+        for column in ["report_date", "event_report_date", "fiscal_period_end", "origin_date"]:
+            panels[engine][column] = pd.to_datetime(
+                panels[engine][column], errors="coerce"
+            ).astype("datetime64[ns]")
+
+    columns = [
+        "issuer_cik",
+        "fiscal_year",
+        "accession",
+        "report_date",
+        "event_report_date",
+        "fiscal_period_end",
+        "fiscal_period_end_source",
+        "origin_date",
+    ]
+    pd.testing.assert_frame_equal(
+        panels["pandas"][columns],
+        panels["duckdb"][columns],
+        check_dtype=False,
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "duckdb"])
+def test_gold_normalizes_period_join_accession_without_mutating_raw_value(
+    tmp_path: Path,
+    engine: str,
+) -> None:
+    silver = tmp_path / "silver"
+    gold = tmp_path / f"gold_{engine}"
+    _write_missing_report_date_gold_fixture(silver)
+    filing = read_table(silver / "filing_dim.parquet")
+    filing.loc[filing["accession"].eq("a-base"), "accession"] = " a-base "
+    write_table(filing, silver / "filing_dim.parquet")
+
+    build_gold_panels(
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        engine=engine,
+    )
+    issuer = read_table(gold / "issuer_origin_panel.parquet")
+    recovered = issuer.loc[
+        issuer["issuer_cik"].astype(str).str.zfill(10).eq("0000000001")
+        & issuer["fiscal_year"].eq(2021)
+    ].iloc[0]
+
+    assert recovered["accession"] == " a-base "
+    assert recovered["fiscal_period_end_source"] == "fsds_period"
+
+
+@pytest.mark.parametrize("engine", ["pandas", "duckdb"])
+def test_gold_ignores_blank_fsds_accessions_before_conflict_check(
+    tmp_path: Path,
+    engine: str,
+) -> None:
+    silver = tmp_path / "silver"
+    gold = tmp_path / f"gold_{engine}"
+    _write_missing_report_date_gold_fixture(silver)
+    filing_xbrl = read_table(silver / "filing_xbrl_dim.parquet")
+    filing_xbrl = pd.concat(
+        [
+            filing_xbrl,
+            pd.DataFrame(
+                [
+                    {"adsh": " ", "fiscal_period_end": "1998-12-31"},
+                    {"adsh": "  ", "fiscal_period_end": "1999-12-31"},
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    write_table(filing_xbrl, silver / "filing_xbrl_dim.parquet")
+
+    build_gold_panels(
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        engine=engine,
+    )
+    issuer = read_table(gold / "issuer_origin_panel.parquet")
+
+    assert issuer["accession"].eq("a-base").any()
+
+
+@pytest.mark.parametrize("engine", ["pandas", "duckdb"])
+def test_gold_rejects_malformed_filing_xbrl_period_schema(
+    tmp_path: Path,
+    engine: str,
+) -> None:
+    silver = tmp_path / "silver"
+    _write_missing_report_date_gold_fixture(silver)
+    write_table(
+        pd.DataFrame({"wrong_accession": ["a-base"], "wrong_period": ["2021-12-31"]}),
+        silver / "filing_xbrl_dim.parquet",
+    )
+
+    with pytest.raises(ValueError, match="filing_xbrl_dim requires adsh and fiscal_period_end"):
+        build_gold_panels(
+            silver_dir=silver,
+            gold_dir=tmp_path / f"gold_{engine}",
+            as_of_date="2026-04-23",
+            engine=engine,
+        )
+
+
 def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> None:
     silver = tmp_path / "silver"
     gold_pandas = tmp_path / "gold_pandas"
@@ -4248,6 +4679,12 @@ def test_public_lake_dag_fresh_build_and_resume(tmp_path: Path, monkeypatch: obj
         fresh_build=True,
     )
     assert (silver / ".public_lake_dag" / "normalize_submissions.done.json").exists()
+    gold_marker = json.loads(
+        (silver / ".public_lake_dag" / "build_gold.done.json").read_text(encoding="utf-8")
+    )
+    assert gold_marker["input_signature"]["fiscal_period_resolution"] == (
+        public_lake.GOLD_FISCAL_PERIOD_RESOLUTION_VERSION
+    )
     (silver / "stale.txt").write_text("old", encoding="utf-8")
     (gold / "stale.txt").write_text("old", encoding="utf-8")
 
@@ -4272,6 +4709,27 @@ def test_public_lake_dag_fresh_build_and_resume(tmp_path: Path, monkeypatch: obj
         as_of_date="2026-04-23",
         resume=True,
     )
+
+    marker_path = silver / ".public_lake_dag" / "build_gold.done.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["input_signature"].pop("fiscal_period_resolution")
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    original_gold = public_lake.build_gold_panels
+    gold_calls: list[bool] = []
+
+    def track_gold(**kwargs: object) -> dict[str, Path]:
+        gold_calls.append(True)
+        return original_gold(**kwargs)
+
+    monkeypatch.setattr("src.public_lake.build_gold_panels", track_gold)
+    build_public_lake(
+        bronze_dir=bronze,
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        resume=True,
+    )
+    assert gold_calls == [True]
 
 
 def test_simple_dag_stops_downstream_after_upstream_failure(tmp_path: Path) -> None:

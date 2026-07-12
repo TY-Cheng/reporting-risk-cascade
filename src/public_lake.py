@@ -45,6 +45,7 @@ from .table_io import (
 
 PARSER_VERSION = "public-lake-v2"
 SCHEMA_VERSION = "public-lake-v2"
+GOLD_FISCAL_PERIOD_RESOLUTION_VERSION = "submissions-report-date-exact-fsds-v1"
 SEC_REQUEST_INTERVAL_SECONDS = 0.15
 CSV_CHUNKSIZE = 250_000
 DEFAULT_FSDS_BATCH_SIZE = 4
@@ -4442,6 +4443,50 @@ def _build_gold_panels_duckdb(
             """
         )
 
+        _duckdb_source_or_empty(
+            con=con,
+            view_name="filing_xbrl_period_source_gold",
+            path=_preferred_table_path(silver_dir, "filing_xbrl_dim"),
+            empty_columns=(("adsh", "VARCHAR"), ("fiscal_period_end", "TIMESTAMP")),
+        )
+        filing_xbrl_period_columns = set(_duckdb_columns(con, "filing_xbrl_period_source_gold"))
+        if not {"adsh", "fiscal_period_end"}.issubset(filing_xbrl_period_columns):
+            raise ValueError("filing_xbrl_dim requires adsh and fiscal_period_end")
+        con.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW filing_xbrl_period_normalized_gold AS
+            SELECT
+                nullif(trim(CAST(adsh AS VARCHAR)), '') AS accession,
+                try_cast(fiscal_period_end AS TIMESTAMP) AS fsds_fiscal_period_end
+            FROM filing_xbrl_period_source_gold
+            """
+        )
+        conflicting_fsds_periods = int(
+            con.execute(
+                """
+                SELECT count(*)
+                FROM (
+                    SELECT accession
+                    FROM filing_xbrl_period_normalized_gold
+                    WHERE accession IS NOT NULL
+                    GROUP BY accession
+                    HAVING count(DISTINCT fsds_fiscal_period_end) > 1
+                ) conflicts
+                """
+            ).fetchone()[0]
+        )
+        if conflicting_fsds_periods:
+            raise ValueError("filing_xbrl_dim contains conflicting FSDS fiscal periods")
+        con.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW filing_xbrl_period_gold AS
+            SELECT accession, min(fsds_fiscal_period_end) AS fsds_fiscal_period_end
+            FROM filing_xbrl_period_normalized_gold
+            WHERE accession IS NOT NULL
+            GROUP BY accession
+            """
+        )
+
         period_forms = ", ".join(_duckdb_string_expr(form) for form in sorted(PERIOD_FORMS))
         annual_forms = ", ".join(_duckdb_string_expr(form) for form in sorted(ANNUAL_FORMS))
         fpi_forms = ", ".join(_duckdb_string_expr(form) for form in sorted(FPI_FORMS))
@@ -4450,42 +4495,54 @@ def _build_gold_panels_duckdb(
             f"""
             CREATE OR REPLACE TEMP VIEW filing_base_gold AS
             SELECT
-                *,
-                report_date AS event_report_date,
+                filing.*,
+                filing.report_date AS event_report_date,
                 CASE
-                    WHEN upper(trim(COALESCE(form, ''))) IN ({period_forms}) THEN report_date
+                    WHEN upper(trim(COALESCE(filing.form, ''))) IN ({period_forms})
+                    THEN COALESCE(filing.report_date, fsds.fsds_fiscal_period_end)
                     ELSE NULL::TIMESTAMP
                 END
                     AS fiscal_period_end,
+                CASE
+                    WHEN upper(trim(COALESCE(filing.form, ''))) NOT IN ({period_forms})
+                    THEN 'not_applicable'
+                    WHEN filing.report_date IS NOT NULL
+                    THEN 'submissions_report_date'
+                    WHEN fsds.fsds_fiscal_period_end IS NOT NULL
+                    THEN 'fsds_period'
+                    ELSE 'unresolved'
+                END AS fiscal_period_end_source,
                 try_cast(date_part(
                     'year',
                     CASE
-                        WHEN upper(trim(COALESCE(form, ''))) IN ({period_forms}) THEN report_date
+                        WHEN upper(trim(COALESCE(filing.form, ''))) IN ({period_forms})
+                        THEN COALESCE(filing.report_date, fsds.fsds_fiscal_period_end)
                         ELSE NULL::TIMESTAMP
                     END
                 ) AS INTEGER) AS fiscal_year,
-                filing_date AS origin_date,
+                filing.filing_date AS origin_date,
                 {as_of_timestamp} AS as_of_date,
-                CASE WHEN date_part('year', filing_date) >= 2011 THEN 1 ELSE 0 END
+                CASE WHEN date_part('year', filing.filing_date) >= 2011 THEN 1 ELSE 0 END
                     AS source_available_xbrl,
-                CASE WHEN filing_date >= TIMESTAMP '2020-11-01' THEN 1 ELSE 0 END
+                CASE WHEN filing.filing_date >= TIMESTAMP '2020-11-01' THEN 1 ELSE 0 END
                     AS source_available_notes,
-                CASE WHEN filing_date >= TIMESTAMP '2017-01-31' THEN 1 ELSE 0 END
+                CASE WHEN filing.filing_date >= TIMESTAMP '2017-01-31' THEN 1 ELSE 0 END
                     AS source_available_form_ap,
-                CASE WHEN date_part('year', filing_date) >= 2018 THEN 1 ELSE 0 END
+                CASE WHEN date_part('year', filing.filing_date) >= 2018 THEN 1 ELSE 0 END
                     AS source_available_pcaob_inspections,
-                CASE WHEN date_part('year', filing_date) >= 2006 THEN 1 ELSE 0 END
+                CASE WHEN date_part('year', filing.filing_date) >= 2006 THEN 1 ELSE 0 END
                     AS source_available_insider,
-                CASE WHEN filing_date >= TIMESTAMP '2013-07-01' THEN 1 ELSE 0 END
+                CASE WHEN filing.filing_date >= TIMESTAMP '2013-07-01' THEN 1 ELSE 0 END
                     AS source_available_13f,
                 CASE
-                    WHEN date_part('year', filing_date) >= 2003
+                    WHEN date_part('year', filing.filing_date) >= 2003
                      AND NOT (
-                        filing_date BETWEEN TIMESTAMP '2017-07-01' AND TIMESTAMP '2020-05-18'
+                        filing.filing_date
+                            BETWEEN TIMESTAMP '2017-07-01' AND TIMESTAMP '2020-05-18'
                      )
                     THEN 1 ELSE 0
                 END AS source_available_edgar_logs,
-                CASE WHEN date_part('year', filing_date) >= 2012 THEN 1 ELSE 0 END
+                CASE WHEN date_part('year', filing.filing_date) >= 2012 THEN 1 ELSE 0 END
                     AS source_available_market_structure,
                 TIMESTAMP '2017-01-31' AS public_date_form_ap,
                 TIMESTAMP '2020-11-01' AS public_date_notes,
@@ -4494,7 +4551,9 @@ def _build_gold_panels_duckdb(
                 '2011+' AS vintage_xbrl_main_sample,
                 '2020-11+' AS vintage_notes,
                 '2017-01-31+' AS vintage_form_ap
-            FROM filing_dim_gold
+            FROM filing_dim_gold filing
+            LEFT JOIN filing_xbrl_period_gold fsds
+              ON nullif(trim(CAST(filing.accession AS VARCHAR)), '') = fsds.accession
             """
         )
         con.execute(
@@ -5072,6 +5131,9 @@ def _build_gold_panels_duckdb(
                 ) AS annual_row_number
             FROM filing_labeled_gold
             WHERE upper(trim(COALESCE(form, ''))) IN ({annual_forms})
+              AND issuer_cik IS NOT NULL
+              AND fiscal_year IS NOT NULL
+              AND origin_date IS NOT NULL
             """
         )
         con.execute(
@@ -5089,7 +5151,7 @@ def _build_gold_panels_duckdb(
         )
         con.execute(
             f"""
-            CREATE OR REPLACE TEMP VIEW issuer_origin_gold AS
+            CREATE OR REPLACE TEMP TABLE issuer_origin_gold AS
             SELECT
                 annual.* EXCLUDE (annual_form_priority, annual_row_number),
                 CASE WHEN foreign_forms.fpi_year IS NULL THEN 0 ELSE 1 END
@@ -5112,6 +5174,37 @@ def _build_gold_panels_duckdb(
             WHERE annual.annual_row_number = 1
             """
         )
+
+        invalid_issuer_keys = int(
+            con.execute(
+                """
+                SELECT count(*)
+                FROM issuer_origin_gold
+                WHERE issuer_cik IS NULL OR fiscal_year IS NULL OR origin_date IS NULL
+                """
+            ).fetchone()[0]
+        )
+        if invalid_issuer_keys:
+            raise ValueError(
+                "issuer_origin_panel contains null issuer_cik, fiscal_year, or origin_date keys"
+            )
+        duplicate_issuer_years = int(
+            con.execute(
+                """
+                SELECT count(*)
+                FROM (
+                    SELECT issuer_cik, fiscal_year
+                    FROM issuer_origin_gold
+                    GROUP BY issuer_cik, fiscal_year
+                    HAVING count(*) > 1
+                ) duplicates
+                """
+            ).fetchone()[0]
+        )
+        if duplicate_issuer_years:
+            raise ValueError(
+                "issuer_origin_panel contains duplicate issuer_cik x fiscal_year keys"
+            )
 
         gold_dir.mkdir(parents=True, exist_ok=True)
         filing_path = gold_dir / "filing_origin_panel.parquet"
@@ -5410,10 +5503,67 @@ def build_gold_panels(
     filing["issuer_cik"] = _normalize_cik_series(filing["issuer_cik"])
     filing["_normalized_form"] = filing["form"].astype("string").str.strip().str.upper()
     filing["event_report_date"] = filing["report_date"]
+    filing_xbrl_path = _preferred_table_path(silver_dir, "filing_xbrl_dim")
+    filing["_period_accession"] = (
+        filing["accession"].astype("string").str.strip().replace("", pd.NA)
+    )
+    filing["_fsds_fiscal_period_end"] = pd.NaT
+    if filing_xbrl_path.exists():
+        filing_xbrl = _read_csv_with_engine(
+            filing_xbrl_path,
+            date_cols=["fiscal_period_end"],
+            engine=engine,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_max_temp_directory_size=duckdb_max_temp_directory_size,
+        )
+        if not {"adsh", "fiscal_period_end"}.issubset(filing_xbrl.columns):
+            raise ValueError("filing_xbrl_dim requires adsh and fiscal_period_end")
+        filing_xbrl = filing_xbrl[["adsh", "fiscal_period_end"]].rename(
+            columns={
+                "adsh": "_period_accession",
+                "fiscal_period_end": "_fsds_fiscal_period_end",
+            }
+        )
+        filing_xbrl["_period_accession"] = (
+            filing_xbrl["_period_accession"].astype("string").str.strip().replace("", pd.NA)
+        )
+        filing_xbrl = filing_xbrl.loc[filing_xbrl["_period_accession"].notna()].copy()
+        conflicting_fsds_periods = filing_xbrl.groupby("_period_accession", dropna=True)[
+            "_fsds_fiscal_period_end"
+        ].nunique()
+        if conflicting_fsds_periods.gt(1).any():
+            raise ValueError("filing_xbrl_dim contains conflicting FSDS fiscal periods")
+        filing_xbrl = filing_xbrl.groupby("_period_accession", as_index=False, sort=True)[
+            "_fsds_fiscal_period_end"
+        ].min()
+        filing = filing.drop(columns=["_fsds_fiscal_period_end"]).merge(
+            filing_xbrl,
+            on="_period_accession",
+            how="left",
+            validate="many_to_one",
+        )
     filing["fiscal_period_end"] = pd.NaT
     period_mask = filing["_normalized_form"].isin(PERIOD_FORMS)
     filing.loc[period_mask, "fiscal_period_end"] = filing.loc[period_mask, "report_date"]
+    fsds_fallback = (
+        period_mask & filing["report_date"].isna() & filing["_fsds_fiscal_period_end"].notna()
+    )
+    filing.loc[fsds_fallback, "fiscal_period_end"] = filing.loc[
+        fsds_fallback, "_fsds_fiscal_period_end"
+    ]
     filing["fiscal_period_end"] = pd.to_datetime(filing["fiscal_period_end"], errors="coerce")
+    filing["fiscal_period_end_source"] = np.select(
+        [
+            ~period_mask,
+            filing["report_date"].notna(),
+            fsds_fallback,
+        ],
+        ["not_applicable", "submissions_report_date", "fsds_period"],
+        default="unresolved",
+    )
+    filing = filing.drop(columns=["_period_accession", "_fsds_fiscal_period_end"])
     filing["fiscal_year"] = filing["fiscal_period_end"].dt.year.astype("Int64")
     filing["origin_date"] = filing["filing_date"]
     filing["as_of_date"] = pd.Timestamp(as_of_date)
@@ -5565,7 +5715,10 @@ def build_gold_panels(
         filing["origin_date"] + pd.Timedelta(days=365) > filing["as_of_date"]
     ).astype(int)
 
-    issuer_panel = filing.loc[filing["_normalized_form"].isin(ANNUAL_FORMS)].copy()
+    issuer_panel = filing.loc[
+        filing["_normalized_form"].isin(ANNUAL_FORMS)
+        & filing[["issuer_cik", "fiscal_year", "origin_date"]].notna().all(axis=1)
+    ].copy()
     issuer_panel["annual_form_priority"] = issuer_panel["_normalized_form"].map(
         {"10-K": 0, "10-K/A": 1}
     )
@@ -5619,6 +5772,12 @@ def build_gold_panels(
     issuer_panel = issuer_panel.sort_values(
         ["issuer_cik", "fiscal_year", "accession"], kind="mergesort", na_position="last"
     ).reset_index(drop=True)
+    if issuer_panel[["issuer_cik", "fiscal_year", "origin_date"]].isna().any().any():
+        raise ValueError(
+            "issuer_origin_panel contains null issuer_cik, fiscal_year, or origin_date keys"
+        )
+    if issuer_panel.duplicated(["issuer_cik", "fiscal_year"]).any():
+        raise ValueError("issuer_origin_panel contains duplicate issuer_cik x fiscal_year keys")
     filing = filing.drop(columns=["_normalized_form"])
     gold_dir.mkdir(parents=True, exist_ok=True)
     filing_path = gold_dir / "filing_origin_panel.parquet"
@@ -5757,6 +5916,7 @@ def build_public_lake(
     )
     gold_input_signature = {
         "as_of_date": str(pd.Timestamp(as_of_date).date()),
+        "fiscal_period_resolution": GOLD_FISCAL_PERIOD_RESOLUTION_VERSION,
         "engine": engine,
         "storage_format": storage_format,
         "notes_mode": notes_mode,

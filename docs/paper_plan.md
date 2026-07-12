@@ -162,7 +162,7 @@ flowchart LR
 - **Form AP provenance.** The archive-first Form AP source contract makes `FirmFilings.zip` authoritative when present. The build first verifies its metadata sidecar and requires exactly one `FirmFilings.csv` member. It extracts that member to a temporary file on the same filesystem and atomically replaces the derived CSV before normalization. An invalid archive, missing verified metadata sidecar, or missing member fails the build and must not fall back to an older CSV. Only when the archive is absent may a standalone `FirmFilings.csv` serve as an explicit compatibility fallback.
 - **Source-to-table mapping.**
     - SEC submissions and filing index data form `filing_dim.parquet`, `issuer_dim.parquet`, `filing_origin_panel.parquet`, and the annual `issuer_origin_panel.parquet`.
-    - FSDS/XBRL `sub` and `num` files form `filing_xbrl_dim.parquet`, `xbrl_fact_summary.parquet`, `xbrl_core_fact/`, and the QA table `xbrl_context_conflicts.parquet`.
+    - FSDS/XBRL `sub` and `num` files form `filing_xbrl_dim.parquet`, `xbrl_fact_summary.parquet`, `xbrl_core_fact/`, and the QA table `xbrl_context_conflicts.parquet`; `filing_xbrl_dim` also supplies the exact-accession fiscal-period fallback described below.
     - SEC Notes are normalized in summary mode into `notes_filing_dim.parquet` and `note_summary.parquet`; raw text blobs are not part of the default paper-facing run.
     - SEC `UPLOAD` and `CORRESP` produce `comment_thread.csv.gz` with first public correspondence dates.
     - 10-K/A and 10-Q/A filings, explanatory notes, and form-level filters produce `correction_event.csv.gz` and `amendment_annotation.csv.gz`.
@@ -221,6 +221,7 @@ uv run python scripts/run_construct_overlap.py \
 ### Preprocessing and Feature Construction
 
 - **Pretreatment target.** All preprocessing is designed to preserve the filing-origin information set: transform raw public-source tables into issuer-year features without introducing any post-`origin_date` information.
+- **Fiscal-period key resolution.** The raw SEC submissions `report_date` and `event_report_date` are retained unchanged. For normalized period forms, `fiscal_period_end` uses the submissions `report_date` when available and otherwise uses SEC FSDS `sub.period` only through an exact `filing_dim.accession = filing_xbrl_dim.adsh` match; identical FSDS accession-period rows deduplicate, while multiple distinct periods for one accession fail the build. The period is never inferred from `filing_date`, and `fiscal_year` is always the calendar year of the resolved `fiscal_period_end`. `fiscal_period_end_source` is one of `submissions_report_date`, `fsds_period`, `unresolved`, or `not_applicable`. Unresolved annual filings remain in `filing_origin_panel` for provenance but are excluded from `issuer_origin_panel`, whose `issuer_cik`, `fiscal_year`, and `origin_date` keys must all be nonmissing. The source indicator is provenance, not a model predictor.
 - **Common sample rule.** Feature families use the same filtered issuer-year sample for fair ablations.
 - **Missing-value rule.** The numeric columns are cast to float and retain NaN for XGBoost native missing-value handling; non-tree adapters use fold-internal imputation only when required.
 - **Excluded columns.** Label, censoring, identifier, source-availability, public-date, and vintage columns are excluded by default.
@@ -232,7 +233,7 @@ uv run python scripts/run_construct_overlap.py \
 - **Auditor and oversight.** PCAOB Form AP fields, engagement-partner exposure, and PCAOB inspection features in their public source windows.
 - **Note opacity.** Note count, note character count, note-tag coverage, and tag entropy as a disclosure breadth measure.
 - **Feature-family boundary.** The reported public families are metadata, XBRL, auditor, oversight, visibility/history, and all. The notes/disclosure-breadth variables enter `all`; there is no standalone text-family ablation.
-- **Leakage exclusions.** `source_available_*`, `public_date_*`, `vintage_*`, `as_of_date`, accession identifiers, CIK/GVKEY identifiers, labels, censoring flags, and direct event-date fields document provenance and timing but are not default predictors.
+- **Leakage exclusions.** `source_available_*`, `public_date_*`, `vintage_*`, `fiscal_period_end_source`, `as_of_date`, accession identifiers, CIK/GVKEY identifiers, labels, censoring flags, and direct event-date fields document provenance and timing but are not default predictors.
 - **Fold-local transformations.** The categoricals are fitted on training years only, constant-imputed to `__MISSING__`, and one-hot encoded with unknown test categories ignored. Scaling and any adapter-specific preprocessing are likewise fit inside the training fold and then applied to the held-out fiscal year.
 - **Deferred extensions.** Proxy-governance content, SEC insider-pressure features, macro-vintage controls, auditor-firm public-status fields, and broader security/attention layers are useful extensions, not required for the current v1 paper claim.
 
@@ -244,7 +245,7 @@ uv run python scripts/run_construct_overlap.py \
 
 ### Timing, Censoring, and Sample Rules
 
-- **Origin date.** In the current panel, `filing_origin_panel.origin_date = filing_date`, and `issuer_origin_panel.origin_date` is the selected annual filing date for the issuer-year. Annual selection admits only normalized `10-K` and `10-K/A` forms and orders candidates by form priority, origin date, acceptance datetime, normalized form, and accession, all ascending with missing timestamps last. The final issuer panel is serialized in `(issuer_cik, fiscal_year, accession)` order with a single-thread, order-preserving Parquet write.
+- **Origin date.** In the current panel, `filing_origin_panel.origin_date = filing_date`, and `issuer_origin_panel.origin_date` is the selected annual filing date for the issuer-year. Annual selection admits only normalized `10-K` and `10-K/A` forms with nonmissing `issuer_cik`, resolved `fiscal_year`, and `origin_date`, then orders candidates by form priority, origin date, acceptance datetime, normalized form, and accession, all ascending with missing non-key timestamps last. The final issuer panel is unique at `issuer_cik x fiscal_year` and serialized in `(issuer_cik, fiscal_year, accession)` order with a single-thread, order-preserving Parquet write.
 - **No post-origin leakage.** No event released after `origin_date` may enter predictors.
 - **Excluded coverage fields.** `source_available_*`, `public_date_*`, `vintage_*`, and `as_of_date` document source availability and public vintages but are excluded from default predictors.
 - **Censoring.** Horizon-specific censoring flags remove issuer-years whose outcome window extends beyond the as-of date. Current public labels use 365-day censoring.
