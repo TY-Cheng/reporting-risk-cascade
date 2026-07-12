@@ -76,17 +76,51 @@ def _existing_or_skipped_component(
 
 
 def _claim_maturity(components: dict[str, Any]) -> dict[str, str]:
-    public_complete = components.get("public_cascade", {}).get("status") == "complete"
+    public_component = components.get("public_cascade", {})
+    public_complete = public_component.get("status") == "complete"
     construct = components.get("construct_overlap", {})
     construct_validated = (
         construct.get("run_status") == "complete"
         and construct.get("validation_tier") == "wrds_validated"
     )
+    required_outcomes = ["comment_thread", "amendment", "8k_402"]
+    fit_outcomes: list[str] = []
+    opacity_dml_evidence = public_component.get("opacity_dml_evidence")
+    if isinstance(opacity_dml_evidence, dict):
+        status_by_outcome = opacity_dml_evidence.get("status_by_outcome")
+        maturity_by_outcome = opacity_dml_evidence.get("maturity_by_outcome")
+        if (
+            set(opacity_dml_evidence)
+            == {
+                "required_outcomes",
+                "status_by_outcome",
+                "fit_outcomes",
+                "maturity_by_outcome",
+            }
+            and opacity_dml_evidence.get("required_outcomes") == required_outcomes
+            and isinstance(status_by_outcome, dict)
+            and list(status_by_outcome) == required_outcomes
+            and all(isinstance(status_by_outcome[outcome], str) for outcome in required_outcomes)
+            and isinstance(maturity_by_outcome, dict)
+            and list(maturity_by_outcome) == required_outcomes
+        ):
+            derived_fit_outcomes = [
+                outcome for outcome, status in status_by_outcome.items() if status == "fit"
+            ]
+            expected_maturity_by_outcome = {
+                outcome: "diagnostic" if status == "fit" else "deferred"
+                for outcome, status in status_by_outcome.items()
+            }
+            if (
+                opacity_dml_evidence.get("fit_outcomes") == derived_fit_outcomes
+                and maturity_by_outcome == expected_maturity_by_outcome
+            ):
+                fit_outcomes = derived_fit_outcomes
     return {
         "public_prediction": "reportable" if public_complete else "deferred",
         "feature_and_window_sensitivity": "supporting" if public_complete else "deferred",
         "construct_alignment": "supporting" if construct_validated else "deferred",
-        "opacity_dml": "diagnostic" if public_complete else "deferred",
+        "opacity_dml": "diagnostic" if public_complete and fit_outcomes else "deferred",
     }
 
 
@@ -527,6 +561,7 @@ def main() -> None:
             "summary_json": str(public_cascade_result["summary_json"]),
             "sample_attrition_csv": str(public_cascade_result["sample_attrition_csv"]),
             "primary_specification": public_cascade_summary["primary_specification"],
+            "opacity_dml_evidence": public_cascade_summary.get("opacity_dml_evidence"),
         }
 
     if run_public_peer:

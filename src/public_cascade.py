@@ -1311,7 +1311,8 @@ def run_public_cascade(
     else:
         summary["ranking_status"] = "No model fits were produced."
 
-    if bool(opacity_dml_cfg.get("enabled", True)):
+    opacity_dml_enabled = bool(opacity_dml_cfg.get("enabled", True))
+    if opacity_dml_enabled:
         opacity_dml_df, opacity_dml_meta = fit_public_opacity_dml(
             panel,
             outcomes=opacity_dml_cfg.get(
@@ -1338,6 +1339,37 @@ def run_public_cascade(
             "control_columns_definition": "raw_controls_before_encoding",
             "status": "disabled",
         }
+    required_opacity_dml_outcomes = list(TASKS)
+    if opacity_dml_enabled:
+        observed_outcomes = (
+            opacity_dml_df["outcome"].astype(str).tolist() if "outcome" in opacity_dml_df else []
+        )
+        if observed_outcomes != required_opacity_dml_outcomes:
+            raise ValueError(
+                "opacity DML outcomes must be exactly "
+                f"{required_opacity_dml_outcomes}; got {observed_outcomes}"
+            )
+        status_by_outcome = dict(
+            zip(
+                observed_outcomes,
+                opacity_dml_df["status"].astype(str).tolist(),
+                strict=True,
+            )
+        )
+    else:
+        status_by_outcome = {
+            outcome: str(opacity_dml_meta["status"]) for outcome in required_opacity_dml_outcomes
+        }
+    fit_outcomes = [outcome for outcome, status in status_by_outcome.items() if status == "fit"]
+    summary["opacity_dml_evidence"] = {
+        "required_outcomes": required_opacity_dml_outcomes,
+        "status_by_outcome": status_by_outcome,
+        "fit_outcomes": fit_outcomes,
+        "maturity_by_outcome": {
+            outcome: "diagnostic" if status == "fit" else "deferred"
+            for outcome, status in status_by_outcome.items()
+        },
+    }
     summary["public_opacity_dml_status_counts"] = (
         {
             str(status): int(count)

@@ -33,6 +33,22 @@ FINAL_REPORT_ROW_COUNT_KEYS = {
     "xbrl_core_fact",
     "xbrl_fact_summary",
 }
+REQUIRED_OPACITY_DML_OUTCOMES = ["comment_thread", "amendment", "8k_402"]
+
+
+def _opacity_dml_evidence(statuses: list[str]) -> dict[str, object]:
+    status_by_outcome = dict(zip(REQUIRED_OPACITY_DML_OUTCOMES, statuses, strict=True))
+    return {
+        "required_outcomes": REQUIRED_OPACITY_DML_OUTCOMES,
+        "status_by_outcome": status_by_outcome,
+        "fit_outcomes": [
+            outcome for outcome, status in status_by_outcome.items() if status == "fit"
+        ],
+        "maturity_by_outcome": {
+            outcome: "diagnostic" if status == "fit" else "deferred"
+            for outcome, status in status_by_outcome.items()
+        },
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -722,10 +738,37 @@ def test_public_lake_provenance_accepts_standalone_form_ap_without_archive_hash(
     assert reduced["form_ap"]["archive_sha256"] is None
 
 
-def test_claim_maturity_is_controlled_by_component_status() -> None:
+@pytest.mark.parametrize(
+    ("statuses", "expected_maturity"),
+    [
+        pytest.param(["fit", "fit", "fit"], "diagnostic", id="all-fit"),
+        pytest.param(
+            ["fit", "skipped_one_class_or_too_small", "fit"],
+            "diagnostic",
+            id="partly-fit",
+        ),
+        pytest.param(
+            [
+                "skipped_one_class_or_too_small",
+                "skipped_missing_label_or_censor",
+                "skipped_constant_treatment",
+            ],
+            "deferred",
+            id="all-skipped",
+        ),
+        pytest.param(["disabled", "disabled", "disabled"], "deferred", id="disabled"),
+    ],
+)
+def test_claim_maturity_is_derived_from_fitted_opacity_outcomes(
+    statuses: list[str],
+    expected_maturity: str,
+) -> None:
     maturity = _claim_maturity(
         {
-            "public_cascade": {"status": "complete"},
+            "public_cascade": {
+                "status": "complete",
+                "opacity_dml_evidence": _opacity_dml_evidence(statuses),
+            },
             "construct_overlap": {
                 "run_status": "complete",
                 "validation_tier": "wrds_validated",
@@ -737,8 +780,33 @@ def test_claim_maturity_is_controlled_by_component_status() -> None:
         "public_prediction": "reportable",
         "feature_and_window_sensitivity": "supporting",
         "construct_alignment": "supporting",
-        "opacity_dml": "diagnostic",
+        "opacity_dml": expected_maturity,
     }
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param({}, id="empty"),
+        pytest.param({"fit_outcomes": ["comment_thread"]}, id="fit-outcomes-only"),
+        pytest.param(
+            {
+                "required_outcomes": REQUIRED_OPACITY_DML_OUTCOMES,
+                "status_by_outcome": {outcome: "fit" for outcome in REQUIRED_OPACITY_DML_OUTCOMES},
+            },
+            id="legacy-incomplete",
+        ),
+    ],
+)
+def test_claim_maturity_fails_closed_for_missing_or_legacy_opacity_evidence(
+    evidence: dict[str, object] | None,
+) -> None:
+    public_component: dict[str, object] = {"status": "complete"}
+    if evidence is not None:
+        public_component["opacity_dml_evidence"] = evidence
+
+    assert _claim_maturity({"public_cascade": public_component})["opacity_dml"] == "deferred"
 
 
 @pytest.mark.parametrize("validation_tier", ["candidate_external", "none", None])
@@ -768,6 +836,7 @@ def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
         "feature_set": "actual-summary-feature-set",
         "train_window": "actual-summary-window",
     }
+    opacity_dml_evidence = _opacity_dml_evidence(["fit", "skipped_one_class_or_too_small", "fit"])
 
     def fake_run_public_cascade(**kwargs: Any) -> dict[str, Path]:
         calls.append(kwargs)
@@ -776,7 +845,12 @@ def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
         summary_json = out_dir / "returned-summary.nonstandard.json"
         sample_attrition_csv = out_dir / "returned-attrition.nonstandard.csv"
         summary_json.write_text(
-            json.dumps({"primary_specification": primary_specification}),
+            json.dumps(
+                {
+                    "primary_specification": primary_specification,
+                    "opacity_dml_evidence": opacity_dml_evidence,
+                }
+            ),
             encoding="utf-8",
         )
         sample_attrition_csv.write_text("stage,n_rows\nfinal,7\n", encoding="utf-8")
@@ -802,13 +876,12 @@ def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
     assert component == {
         "status": "complete",
         "out_dir": str(paths["out_dir"] / "public_cascade"),
-        "summary_json": str(
-            paths["out_dir"] / "public_cascade/returned-summary.nonstandard.json"
-        ),
+        "summary_json": str(paths["out_dir"] / "public_cascade/returned-summary.nonstandard.json"),
         "sample_attrition_csv": str(
             paths["out_dir"] / "public_cascade/returned-attrition.nonstandard.csv"
         ),
         "primary_specification": primary_specification,
+        "opacity_dml_evidence": opacity_dml_evidence,
     }
     form_ap_metadata = json.loads(paths["form_ap_source_metadata"].read_text(encoding="utf-8"))
     assert (
@@ -816,6 +889,7 @@ def test_run_study_captures_public_cascade_evidence_once_and_hashes_metadata(
         == form_ap_metadata["member_sha256"]
     )
     assert manifest["claim_maturity"]["public_prediction"] == "reportable"
+    assert manifest["claim_maturity"]["opacity_dml"] == "diagnostic"
     input_records = {record["path"]: record for record in manifest["provenance"]["input_files"]}
     for metadata_key in ["public_lake_run_metadata", "form_ap_source_metadata"]:
         metadata_path = paths[metadata_key]

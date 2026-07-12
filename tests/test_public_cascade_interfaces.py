@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ import pandas as pd
 import pytest
 
 from scripts import fetch_public_data
+from src import public_cascade as public_cascade_module
 from src.public_cascade import (
     VISIBILITY_HISTORY_FEATURES,
     _sample_attrition,
@@ -25,6 +27,9 @@ from src.public_cascade import (
     run_public_cascade,
 )
 from src.table_io import read_table, write_table
+
+
+REQUIRED_OPACITY_DML_OUTCOMES = ["comment_thread", "amendment", "8k_402"]
 
 
 def test_public_cascade_feature_families_exclude_labels_availability_and_identifiers() -> None:
@@ -407,6 +412,151 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
     assert skipped_row["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
 
 
+def _public_summary_with_stubbed_dml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    outcomes: list[str],
+    statuses: list[str],
+) -> dict[str, object]:
+    panel_path = tmp_path / "issuer_origin_panel.parquet"
+    config_path = tmp_path / "public_cascade.yaml"
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "0000000001",
+                    "accession": f"0000000001-{year}-000001",
+                    "origin_date": f"{year + 1}-03-01",
+                    "fiscal_year": year,
+                    "form": "10-K",
+                    "sic": 1234,
+                    "is_domestic_us_gaap_proxy": 1,
+                    "prior_filing_count": year - 2010,
+                    "label_comment_thread_365": 0,
+                    "label_amendment_365": 0,
+                    "label_8k_402_365": 0,
+                    "censored_365": 0,
+                }
+                for year in [2011, 2012, 2013]
+            ]
+        ),
+        panel_path,
+    )
+    config_path.write_text(
+        """
+sample:
+  start_year: 2011
+  domestic_only: true
+analysis:
+  candidate_train_windows: [null]
+  min_train_years: 2
+  feature_sets: ["metadata"]
+  primary_specification:
+    feature_set: "metadata"
+    train_window: "expanding"
+  opacity_dml:
+    enabled: true
+model:
+  seed: 42
+  xgb:
+    n_estimators: 2
+""",
+        encoding="utf-8",
+    )
+
+    def fake_fit_public_opacity_dml(
+        *_: object, **__: object
+    ) -> tuple[pd.DataFrame, dict[str, object]]:
+        return (
+            pd.DataFrame(
+                {
+                    "outcome": outcomes,
+                    "status": statuses,
+                }
+            ),
+            {"n_opacity_components": 2},
+        )
+
+    monkeypatch.setattr(
+        public_cascade_module,
+        "fit_public_opacity_dml",
+        fake_fit_public_opacity_dml,
+    )
+    result = run_public_cascade(
+        config_path=config_path,
+        issuer_origin_panel_path=panel_path,
+        out_dir=tmp_path / "out",
+    )
+    return json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("statuses", "fit_outcomes"),
+    [
+        pytest.param(
+            ["fit", "fit", "fit"],
+            REQUIRED_OPACITY_DML_OUTCOMES,
+            id="all-fit",
+        ),
+        pytest.param(
+            ["fit", "skipped_one_class_or_too_small", "fit"],
+            ["comment_thread", "8k_402"],
+            id="partly-fit",
+        ),
+        pytest.param(
+            [
+                "skipped_one_class_or_too_small",
+                "skipped_missing_label_or_censor",
+                "skipped_constant_treatment",
+            ],
+            [],
+            id="all-skipped",
+        ),
+    ],
+)
+def test_public_summary_records_ordered_opacity_dml_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    statuses: list[str],
+    fit_outcomes: list[str],
+) -> None:
+    summary = _public_summary_with_stubbed_dml(
+        tmp_path,
+        monkeypatch,
+        outcomes=REQUIRED_OPACITY_DML_OUTCOMES,
+        statuses=statuses,
+    )
+    status_by_outcome = dict(zip(REQUIRED_OPACITY_DML_OUTCOMES, statuses, strict=True))
+
+    assert summary["opacity_dml_evidence"] == {
+        "required_outcomes": REQUIRED_OPACITY_DML_OUTCOMES,
+        "status_by_outcome": status_by_outcome,
+        "fit_outcomes": fit_outcomes,
+        "maturity_by_outcome": {
+            outcome: "diagnostic" if status == "fit" else "deferred"
+            for outcome, status in status_by_outcome.items()
+        },
+    }
+    assert list(summary["opacity_dml_evidence"]["status_by_outcome"]) == (
+        REQUIRED_OPACITY_DML_OUTCOMES
+    )
+    assert summary["public_opacity_dml_status_counts"] == dict(Counter(statuses))
+
+
+def test_public_summary_rejects_noncanonical_opacity_dml_outcome_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="opacity DML outcomes must be exactly"):
+        _public_summary_with_stubbed_dml(
+            tmp_path,
+            monkeypatch,
+            outcomes=["amendment", "comment_thread", "8k_402"],
+            statuses=["fit", "fit", "fit"],
+        )
+
+
 def test_public_dml_matrix_fits_imputation_and_categories_on_training_fold_only() -> None:
     work = pd.DataFrame(
         {
@@ -600,6 +750,14 @@ model:
     assert opacity_meta["n_controls"] == 0
     assert opacity_meta["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
     assert opacity_meta["control_columns_definition"] == "raw_controls_before_encoding"
+    assert opacity_meta["status"] == "disabled"
+    assert summary["public_opacity_dml_status_counts"] == {}
+    assert summary["opacity_dml_evidence"] == {
+        "required_outcomes": REQUIRED_OPACITY_DML_OUTCOMES,
+        "status_by_outcome": {outcome: "disabled" for outcome in REQUIRED_OPACITY_DML_OUTCOMES},
+        "fit_outcomes": [],
+        "maturity_by_outcome": {outcome: "deferred" for outcome in REQUIRED_OPACITY_DML_OUTCOMES},
+    }
     assert metrics.empty
     assert set(task_status["status"]) == {"skipped_one_class_train"}
     assert set(task_status["task"]) == {"comment_thread", "amendment", "8k_402"}
