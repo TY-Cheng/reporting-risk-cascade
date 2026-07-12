@@ -2791,6 +2791,13 @@ def build_amendment_annotations(
         "explanatory_note_char_count",
     ]
     annotation = pd.DataFrame(rows, columns=columns)
+    annotation_order = ["issuer_cik", "public_date", "accession"]
+    annotation_order.extend(col for col in columns if col not in annotation_order)
+    annotation = annotation.sort_values(
+        annotation_order,
+        kind="mergesort",
+        na_position="last",
+    ).reset_index(drop=True)
     silver_dir.mkdir(parents=True, exist_ok=True)
     out_path = silver_dir / "amendment_annotation.csv.gz"
     _write_csv_gzip(annotation, out_path)
@@ -2861,6 +2868,19 @@ def build_correction_events(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
         correction = correction.drop_duplicates(
             subset=["issuer_cik", "accession", "correction_type"]
         )
+    correction_order = [
+        "issuer_cik",
+        "public_date",
+        "accession",
+        "correction_type",
+        "identified_from",
+    ]
+    correction_order.extend(col for col in columns if col not in correction_order)
+    correction = correction.sort_values(
+        correction_order,
+        kind="mergesort",
+        na_position="last",
+    ).reset_index(drop=True)
     silver_dir.mkdir(parents=True, exist_ok=True)
     out_path = silver_dir / "correction_event.csv.gz"
     _write_csv_gzip(correction, out_path)

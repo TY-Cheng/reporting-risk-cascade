@@ -3351,6 +3351,57 @@ def test_amendment_annotation_bounded_explanatory_note_rules(tmp_path: Path) -> 
     assert annotations.loc["cutoff", "financial_override"] == 0
 
 
+def test_amendment_annotations_are_byte_stable_across_filing_input_order(
+    tmp_path: Path,
+) -> None:
+    filing_rows = [
+        {
+            "issuer_cik": "0000000002",
+            "accession": "amend-b",
+            "accession_nodash": "amendb",
+            "filing_date": "2022-03-02",
+            "report_date": "2021-12-31",
+            "form": "10-Q/A",
+            "primary_document": "amend-b.htm",
+            "primary_doc_description": "Part III proxy amendment",
+        },
+        {
+            "issuer_cik": "0000000001",
+            "accession": "amend-a",
+            "accession_nodash": "amenda",
+            "filing_date": "2022-03-01",
+            "report_date": "2021-12-31",
+            "form": "10-K/A",
+            "primary_document": "amend-a.htm",
+            "primary_doc_description": "Annual amendment",
+        },
+    ]
+    outputs: list[Path] = []
+    for name, rows in [("forward", filing_rows), ("reverse", list(reversed(filing_rows)))]:
+        filing_dim = tmp_path / name / "filing_dim.parquet"
+        write_table(pd.DataFrame(rows), filing_dim, preserve_order=True)
+        outputs.append(
+            public_lake.build_amendment_annotations(
+                filing_dim_csv=filing_dim,
+                silver_dir=tmp_path / name / "silver",
+            )
+        )
+
+    parsed = [pd.read_csv(path) for path in outputs]
+    assert list(parsed[0].columns) == list(parsed[1].columns)
+    assert len(parsed[0]) == len(parsed[1]) == len(filing_rows)
+    amendment_key = ["issuer_cik", "accession"]
+    for frame in parsed:
+        assert not frame[amendment_key].isna().any().any()
+        assert not frame.duplicated(amendment_key).any()
+    pd.testing.assert_frame_equal(
+        parsed[0].sort_values(list(parsed[0].columns)).reset_index(drop=True),
+        parsed[1].sort_values(list(parsed[1].columns)).reset_index(drop=True),
+        check_dtype=False,
+    )
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
+
+
 def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path: Path) -> None:
     silver = tmp_path / "silver"
     write_table(
@@ -3824,6 +3875,75 @@ def test_comment_threads_and_correction_events_nonempty_branches(tmp_path: Path)
         "nonreliance_8k_402",
         "revision_if_identifiable",
     }
+
+
+def test_correction_events_are_byte_stable_across_filing_input_order(tmp_path: Path) -> None:
+    filing_rows = [
+        {
+            "issuer_cik": "0000000002",
+            "accession": "amend-b",
+            "filing_date": "2022-03-02",
+            "report_date": "2021-12-31",
+            "form": "10-Q/A",
+            "items": "",
+            "primary_doc_description": "",
+        },
+        {
+            "issuer_cik": "0000000001",
+            "accession": "amend-a",
+            "filing_date": "2022-03-01",
+            "report_date": "2021-12-31",
+            "form": "10-K/A",
+            "items": "",
+            "primary_doc_description": "Revision note",
+        },
+        {
+            "issuer_cik": "0000000003",
+            "accession": "8k-402",
+            "filing_date": "2022-04-01",
+            "report_date": "2022-03-31",
+            "form": "8-K",
+            "items": "4.02",
+            "primary_doc_description": "",
+        },
+        {
+            "issuer_cik": "0000000001",
+            "accession": "revision",
+            "filing_date": "2022-05-01",
+            "report_date": "2022-03-31",
+            "form": "10-Q",
+            "items": "",
+            "primary_doc_description": "Revision note",
+        },
+    ]
+    outputs: list[Path] = []
+    for name, rows in [("forward", filing_rows), ("reverse", list(reversed(filing_rows)))]:
+        filing_dim = tmp_path / name / "filing_dim.parquet"
+        write_table(pd.DataFrame(rows), filing_dim, preserve_order=True)
+        outputs.append(
+            public_lake.build_correction_events(
+                filing_dim_csv=filing_dim,
+                silver_dir=tmp_path / name / "silver",
+            )
+        )
+
+    parsed = [pd.read_csv(path) for path in outputs]
+    assert list(parsed[0].columns) == list(parsed[1].columns)
+    assert len(parsed[0]) == len(parsed[1]) == len(filing_rows) + 1
+    assert set(parsed[0].loc[parsed[0]["accession"].eq("amend-a"), "correction_type"]) == {
+        "amendment_10x_a",
+        "revision_if_identifiable",
+    }
+    correction_key = ["issuer_cik", "accession", "correction_type"]
+    for frame in parsed:
+        assert not frame[correction_key].isna().any().any()
+        assert not frame.duplicated(correction_key).any()
+    pd.testing.assert_frame_equal(
+        parsed[0].sort_values(list(parsed[0].columns)).reset_index(drop=True),
+        parsed[1].sort_values(list(parsed[1].columns)).reset_index(drop=True),
+        check_dtype=False,
+    )
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
 
 
 def test_fetch_source_assets_uses_cached_files_without_force(
