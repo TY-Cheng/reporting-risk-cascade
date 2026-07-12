@@ -1094,6 +1094,28 @@ def test_exact_package_manifest_and_inventory_validate(tmp_path: Path) -> None:
     assert validated["reporting_contract"] == manifest["reporting_contract"]
 
 
+def test_reporting_contract_rejects_summary_component_dml_evidence_divergence() -> None:
+    with pytest.raises(
+        ValueError,
+        match="^public summary DML evidence must equal the public component copy$",
+    ):
+        manuscript_module._reporting_contract(
+            {
+                "components": {
+                    "public_cascade": {
+                        "opacity_dml_evidence": {"fit_outcomes": []},
+                    }
+                },
+                "claim_maturity": {},
+            },
+            {
+                "reporting_boundaries": {},
+                "feature_family_summary": {},
+                "opacity_dml_evidence": {"fit_outcomes": ["comment_thread"]},
+            },
+        )
+
+
 def test_package_contract_owns_every_artifact_key_exactly_once(tmp_path: Path) -> None:
     package_dir, study_manifest_path, _ = _write_package_manifest_fixture(tmp_path)
 
