@@ -428,14 +428,12 @@ def test_results_snapshot_exposes_current_main_artifact_results() -> None:
     assert results.count("**Figure note.**") == 5
     assert (
         "Colored bars or dots encode mean PR-AUC; grey points encode valid annual test "
-        "folds; capped black lines encode descriptive fold-dispersion intervals."
-        in results
+        "folds; capped black lines encode descriptive fold-dispersion intervals." in results
     )
     assert (
         "Blue bars encode top-decile lift; capped black lines encode row-level "
         "percentile-bootstrap intervals; the dashed vertical line marks lift = 1; "
-        "annotations report top-decile precision and FDR."
-        in results
+        "annotations report top-decile precision and FDR." in results
     )
 
 
@@ -445,9 +443,7 @@ def test_wrds_source_summary_counts_observed_combinations_and_families() -> None
     families = ["capital_iq", "compustat_company", "compustat_security", "crsp_ccm"]
     source_values = [
         ";".join(
-            f"wrds_bridge:{family}"
-            for idx, family in enumerate(families)
-            if mask & (1 << idx)
+            f"wrds_bridge:{family}" for idx, family in enumerate(families) if mask & (1 << idx)
         )
         for mask in range(1, 1 << len(families))
     ]
@@ -492,6 +488,32 @@ CURRENT_PACKAGE_FIGURES = [
     "figure_04_public_peer_pr_auc",
     "figure_05_construct_overlap_lift",
 ]
+PACKAGE_TABLE_STEMS = {
+    f"table_{index:02d}": stem
+    for index, stem in zip(
+        [*range(1, 10), *range(12, 19)],
+        CURRENT_PACKAGE_TABLES,
+        strict=True,
+    )
+}
+PACKAGE_FIGURE_STEMS = {
+    f"figure_{index:02d}": stem for index, stem in enumerate(CURRENT_PACKAGE_FIGURES, start=1)
+}
+ARTIFACT_OWNERSHIP = {
+    "reproducibility": {"tables": ["table_01"], "figures": []},
+    "experiment_1": {"tables": ["table_05", "table_06"], "figures": ["figure_03"]},
+    "experiment_2": {"tables": [], "figures": []},
+    "experiment_3": {"tables": ["table_12"], "figures": []},
+    "experiment_4": {"tables": ["table_02", "table_18"], "figures": []},
+    "experiment_5": {
+        "tables": ["table_03", "table_04", "table_07", "table_13", "table_14", "table_17"],
+        "figures": ["figure_01", "figure_02", "figure_04"],
+    },
+    "experiment_6": {
+        "tables": ["table_08", "table_09", "table_15", "table_16"],
+        "figures": ["figure_05"],
+    },
+}
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -564,7 +586,11 @@ def _bridge_claim_boundary(
     }
 
 
-def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
+def _write_snapshot_fixture(
+    tmp_path: Path,
+    *,
+    diagnostic_dml: bool = True,
+) -> dict[str, Any]:
     study_dir = tmp_path / "study"
     package_dir = tmp_path / "manuscript_package"
     tables_dir = package_dir / "tables"
@@ -573,6 +599,56 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
     figures_dir.mkdir(parents=True)
 
     commit = "a" * 40
+    dml_statuses = {
+        "comment_thread": "fit" if diagnostic_dml else "skipped_one_class_or_too_small",
+        "amendment": "skipped_one_class_or_too_small",
+        "8k_402": "skipped_constant_treatment",
+    }
+    fit_outcomes = ["comment_thread"] if diagnostic_dml else []
+    dml_evidence = {
+        "required_outcomes": ["comment_thread", "amendment", "8k_402"],
+        "status_by_outcome": dml_statuses,
+        "fit_outcomes": fit_outcomes,
+        "maturity_by_outcome": {
+            outcome: "diagnostic" if outcome in fit_outcomes else "deferred"
+            for outcome in dml_statuses
+        },
+    }
+    dml_maturity = "diagnostic" if diagnostic_dml else "deferred"
+    reporting_boundaries = {
+        "schema_version": "public-reporting-boundaries-v1",
+        "sample_proxy": {
+            "artifact_field": "is_domestic_us_gaap_proxy",
+            "display_name": "10-K/10-K/A with no observed same-year FPI-form proxy",
+            "validates_fpi_status": False,
+            "validates_domicile": False,
+            "validates_us_gaap": False,
+        },
+        "pcaob_inspection_predictors": {
+            "inspection_event_joined_to_gold": False,
+            "model_eligible_features": [],
+            "excluded_availability_markers": ["source_available_pcaob_inspections"],
+        },
+        "partner_nonadministrative_amendment": {
+            "scope": "post-year-proxy uncensored public-model panel",
+            "rows_evaluated": 12,
+            "nonmissing_rows": 12,
+            "nonzero_rows": 4,
+            "n_distinct_nonmissing": 4,
+            "minimum": 0,
+            "maximum": 3,
+            "is_constant_zero": False,
+            "total_equals_item_402_rows": 7,
+            "total_equals_item_402_for_all_rows": False,
+        },
+    }
+    feature_family_summary = {
+        "oversight": {
+            "display_name": "Prior-filing history (legacy artifact key: oversight)",
+            "model_eligible_features": ["prior_filing_count"],
+            "reported_as_standalone": True,
+        }
+    }
     _write_json(
         study_dir / "study_run_manifest.json",
         {
@@ -665,6 +741,7 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
                 "public_cascade": {
                     "status": "complete",
                     "out_dir": VOLUME_PATH_PREFIX + "private/public",
+                    "opacity_dml_evidence": dml_evidence,
                 },
                 "bridge_probe": {
                     "status": "crosswalk_available",
@@ -688,7 +765,7 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
                 "public_prediction": "reportable",
                 "feature_and_window_sensitivity": "supporting",
                 "construct_alignment": "supporting",
-                "opacity_dml": "diagnostic",
+                "opacity_dml": dml_maturity,
             },
             "inputs": {
                 "raw_data": USER_PATH_PREFIX + "example/raw.csv",
@@ -713,7 +790,9 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
             "primary_specification": {"feature_set": "all", "train_window": "expanding"},
             "task_positive_counts": {},
             "task_exclusion_counts": {},
-            "feature_family_summary": {},
+            "feature_family_summary": feature_family_summary,
+            "reporting_boundaries": reporting_boundaries,
+            "opacity_dml_evidence": dml_evidence,
         },
     )
     pd.DataFrame(
@@ -825,31 +904,74 @@ def _write_snapshot_fixture(tmp_path: Path) -> dict[str, Any]:
             "| Fixture | Value |\n| --- | --- |\n| row | 1 |\n",
             encoding="utf-8",
         )
+        (tables_dir / f"{table}.csv").write_text("Fixture,Value\nrow,1\n", encoding="utf-8")
+        (tables_dir / f"{table}.tex").write_text("fixture table\n", encoding="utf-8")
     _table_03_frame().to_csv(
         tables_dir / "table_03_public_task_metrics.csv",
         index=False,
+    )
+    (tables_dir / "table_03_public_task_metrics.md").write_text(
+        "| Task | Panel_Positives | Mean_Prevalence | Mean_PR_AUC | Mean_ROC_AUC | "
+        "Mean_Brier_Skill | Mean_ECE | n_folds | metric_rows |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+        "| `comment_thread` | 321 | 0.1234 | 0.3000 | 0.7000 | 0.0500 | 0.0400 | 1 | 1 |\n",
+        encoding="utf-8",
     )
     _table_09_frame().to_csv(
         tables_dir / "table_09_construct_alignment.csv",
         index=False,
     )
+    (tables_dir / "table_09_construct_alignment.md").write_text(
+        "| Direction | Model | Top_Decile_Lift |\n"
+        "| --- | --- | --- |\n"
+        "| Public score to benchmark positives | `public_cascade` | 2.0000 |\n"
+        "| Benchmark score to public positives | `benchmark_xgb` | 1.8000 |\n",
+        encoding="utf-8",
+    )
     for figure in CURRENT_PACKAGE_FIGURES:
         (figures_dir / f"{figure}.png").write_bytes(b"fixture-png")
         (figures_dir / f"{figure}.pdf").write_bytes(b"fixture-pdf")
+    table_manifest = {
+        key: {
+            fmt: {
+                "path": f"tables/{stem}.{fmt}",
+                "sha256": sha256_path(tables_dir / f"{stem}.{fmt}"),
+            }
+            for fmt in ("csv", "md", "tex")
+        }
+        for key, stem in PACKAGE_TABLE_STEMS.items()
+    }
+    figure_manifest = {
+        key: {
+            fmt: {
+                "path": f"figures/{stem}.{fmt}",
+                "sha256": sha256_path(figures_dir / f"{stem}.{fmt}"),
+            }
+            for fmt in ("png", "pdf")
+        }
+        for key, stem in PACKAGE_FIGURE_STEMS.items()
+    }
     _write_json(
         package_dir / "manifest.json",
         {
+            "schema_version": "manuscript-package-v2",
             "claim_boundary": _bridge_claim_boundary(
                 "wrds_validated",
                 "wrds_validated",
             ),
-            "tables": {
-                table: {"csv": f"{USER_PATH_PREFIX}example/{CLOUD_STORAGE_MARKER}/{table}.csv"}
-                for table in CURRENT_PACKAGE_TABLES
-            },
-            "figures": {
-                figure: {"png": f"{VOLUME_PATH_PREFIX}private/{figure}.png"}
-                for figure in CURRENT_PACKAGE_FIGURES
+            "tables": table_manifest,
+            "figures": figure_manifest,
+            "reporting_contract": {
+                "reporting_boundaries": reporting_boundaries,
+                "feature_family_summary": feature_family_summary,
+                "opacity_dml_evidence": dml_evidence,
+                "claim_maturity": {
+                    "public_prediction": "reportable",
+                    "feature_and_window_sensitivity": "supporting",
+                    "construct_alignment": "supporting",
+                    "opacity_dml": dml_maturity,
+                },
+                "artifact_ownership": ARTIFACT_OWNERSHIP,
             },
         },
     )
@@ -998,27 +1120,13 @@ def test_snapshot_uses_pinned_public_lake_report_counts_and_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _write_snapshot_fixture(tmp_path)
-    modern = _attach_modern_public_lake_fixture(fixture, tmp_path)
+    _attach_modern_public_lake_fixture(fixture, tmp_path)
 
     results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
 
-    assert (
-        "| Public-lake final-report schema | `public-lake-final-report-v1` |" in results
-    )
-    rendered_artifacts = {
-        "filing_dim",
-        "issuer_dim",
-        "xbrl_core_fact",
-        "xbrl_fact_summary",
-        "note_summary",
-        "comment_thread",
-        "correction_event",
-        "issuer_origin_panel",
-        "filing_origin_panel",
-    }
-    for artifact in rendered_artifacts:
-        rows = modern["row_counts"][artifact]
-        assert f"`{artifact}` | {rows}" in results
+    assert "| Public-lake final-report schema | `public-lake-final-report-v1` |" in results
+    assert results.count("#### `table_02_public_lake_scale`") == 1
+    assert "### Public Lake and Gold Panel Scale" not in results
 
 
 @pytest.mark.parametrize(
@@ -1318,11 +1426,7 @@ def test_manifest_format_path_rejects_escaping_canonical_record(
     fallback = package_dir / "tables" / "table_01.md"
     fallback.parent.mkdir(parents=True)
     fallback.write_text("legacy fallback", encoding="utf-8")
-    declared = (
-        str(tmp_path / "outside.md")
-        if path_kind == "absolute"
-        else "../outside.md"
-    )
+    declared = str(tmp_path / "outside.md") if path_kind == "absolute" else "../outside.md"
 
     with pytest.raises(ValueError, match="canonical manifest path escapes manuscript package"):
         snapshot_module._manifest_format_path(
@@ -1406,43 +1510,29 @@ def test_snapshot_construct_rows_require_generated_table_schema(tmp_path: Path) 
         _construct_alignment_rows(tmp_path)
 
 
-def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifacts(
+@pytest.mark.parametrize(
+    ("diagnostic_dml", "expected_maturity"),
+    [(True, "diagnostic"), (False, "deferred")],
+)
+def test_generated_snapshot_is_owner_directed_results_and_discussion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    diagnostic_dml: bool,
+    expected_maturity: str,
 ) -> None:
-    fixture = _write_snapshot_fixture(tmp_path)
+    fixture = _write_snapshot_fixture(tmp_path, diagnostic_dml=diagnostic_dml)
 
     results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
 
-    for phrase in [
-        "Artifact generation time",
-        "Study commit",
-        "Git dirty",
-        "Config hash",
-        "Input hash",
-        "uv.lock hash",
-        "Public-data as-of date",
-        "Form AP archive hash",
-        "WRDS source",
-        "WRDS version",
-        "WRDS extraction time",
-        "WRDS hash",
-        "Component status",
-        "Claim maturity",
-        "Canonical status",
-        "Detected-misstatement benchmark input",
-        "Public issuer dimension input",
-        "Public issuer-origin panel input",
-        "CIK-GVKEY bridge input",
-        "Public-lake run metadata input",
-        "Form AP source metadata input",
+    experiment_headings = [
         "## Results for Experiment 1: Label Observability and Detection Timing",
         "## Results for Experiment 2: Concept Drift and Model Shelf-Life",
         "## Results for Experiment 3: Opacity and Public Review/Correction Risk",
         "## Results for Experiment 4: Public Cascade Construction",
         "## Results for Experiment 5: Public Cascade Prediction",
         "## Results for Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap",
-        "### Key Readings",
+    ]
+    discussion_headings = [
         "### Answers to the research questions",
         "### Comparison with prior literature",
         "### Accounting and institutional interpretation",
@@ -1450,52 +1540,104 @@ def test_generated_snapshot_exposes_provenance_structure_and_all_package_artifac
         "### Generalizability",
         "### Limitations and future work",
         "### Claim ledger",
-        "`reportable`",
-        "`supporting`",
-        "`diagnostic`",
-        "`deferred`",
-        "Note/disclosure-breadth variables enter `all` without a standalone ablation",
+    ]
+    top_level = [
+        "# Results and Discussion",
+        "## Connection to Paper Plan",
+        "## Results Overview",
+        *experiment_headings,
+        "## Discussion",
+        "## Reproducibility and Provenance",
+    ]
+    positions = [results.index(heading) for heading in top_level]
+    assert positions == sorted(positions)
+    assert results.count("## Results for Experiment ") == 6
+    assert [line for line in results.splitlines() if line.startswith("## ")][-1] == (
+        "## Reproducibility and Provenance"
+    )
+
+    experiment_blocks: dict[str, str] = {}
+    for index, heading in enumerate(experiment_headings):
+        end_heading = (
+            experiment_headings[index + 1]
+            if index + 1 < len(experiment_headings)
+            else "## Discussion"
+        )
+        block = results[results.index(heading) : results.index(end_heading)]
+        assert block.count("### Interpretation") == 1
+        experiment_blocks[f"experiment_{index + 1}"] = block
+    discussion = results[results.index("## Discussion") :]
+    discussion_positions = [discussion.index(heading) for heading in discussion_headings]
+    assert discussion_positions == sorted(discussion_positions)
+
+    owner_blocks = {
+        **experiment_blocks,
+        "reproducibility": results[results.index("## Reproducibility and Provenance") :],
+    }
+    for owner, owned in ARTIFACT_OWNERSHIP.items():
+        for table_key in owned["tables"]:
+            marker = f"#### `{PACKAGE_TABLE_STEMS[table_key]}`"
+            assert results.count(marker) == 1
+            assert marker in owner_blocks[owner]
+        for figure_key in owned["figures"]:
+            stem = PACKAGE_FIGURE_STEMS[figure_key]
+            embeds = re.findall(rf"!\[[^\]]+\]\([^)]*{re.escape(stem)}\.png\)", results)
+            assert len(embeds) == 1
+            assert embeds[0] in owner_blocks[owner]
+    assert sum(results.count(f"#### `{stem}`") for stem in CURRENT_PACKAGE_TABLES) == 16
+    assert results.count("![") == 5
+
+    dynamic_surfaces = {
+        "experiment_1": ["Detected-Misstatement Benchmark Panel", "Full Window Summary"],
+        "experiment_2": [
+            "Strongest Structural-Break Diagnostics",
+            "Mean Feature-Family Importance",
+        ],
+        "experiment_4": ["Public Cascade Readiness", "Public Cascade Fit and Skip Status"],
+        "experiment_5": ["Public Peer Task Summary"],
+        "experiment_6": [
+            "Exploratory maxima (post-hoc)",
+            "Aggregation Sensitivity",
+            "Benchmark-Positive Public-Label Co-occurrence",
+            "Event-Time Concentration",
+        ],
+    }
+    for owner, headings in dynamic_surfaces.items():
+        for heading in headings:
+            assert heading in owner_blocks[owner]
+
+    for phrase in [
+        "Prior-filing history (legacy artifact key: oversight)",
+        "`prior_filing_count`",
+        "not PCAOB inspection",
+        "`is_domestic_us_gaap_proxy`",
+        "10-K/10-K/A with no observed same-year FPI-form proxy",
+        "validates neither FPI status, domicile, nor US GAAP",
+        "PCAOB inspection archives are provenance inputs",
+        "events are not joined to Gold",
+        "no model-eligible inspection features",
+        "adjusted-association diagnostic",
+        f"aggregate maturity is `{expected_maturity}`",
+        "post-year-proxy uncensored public-model panel",
+        "is_constant_zero=false",
+        "all + expanding",
     ]:
         assert phrase in results
-    assert "| Canonical status | `CANONICAL` |" in results
-    assert (
-        "1 observed combination across 1 WRDS source family in the current run; "
-        "full values remain hash-bound in the study manifest"
-        in results
-    )
-    assert "WRDS SEC Analytics Suite 2026-05" in results
-    assert "2026-05-25T00:00:00Z" in results
-    assert "7" * 64 in results
-    for role_hash in ["1", "2", "3", "4", "5", "6"]:
-        assert role_hash * 64 in results
-    for component, status in {
-        "benchmark": "complete",
-        "public_cascade": "complete",
-        "bridge_probe": "crosswalk_available",
-        "peer_comparison": "complete",
-        "public_peer_comparison": "complete",
-        "construct_overlap": "complete",
-    }.items():
-        assert f"| {component} | `{status}` |" in results
-    for claim, maturity in {
-        "public_prediction": "reportable",
-        "feature_and_window_sensitivity": "supporting",
-        "construct_alignment": "supporting",
-        "opacity_dml": "diagnostic",
-    }.items():
-        assert f"| {claim} | `{maturity}` |" in results
     for local_path_marker in [USER_PATH_PREFIX, VOLUME_PATH_PREFIX, CLOUD_STORAGE_MARKER]:
         assert local_path_marker not in results
-    for table in fixture["tables"]:
-        assert f"#### `{table}`" in results
-    for figure in fixture["figures"]:
-        assert f"{figure}.png" in results
-    assert "ARS" not in results
-    assert "Academic Research Suite" not in results
-    assert results.count("- **Claim.**") == len(fixture["tables"]) + len(fixture["figures"])
-    assert results.count("- **Evidence.**") == len(fixture["tables"]) + len(fixture["figures"])
-    assert results.count("- **Boundary.**") == len(fixture["tables"]) + len(fixture["figures"])
-    assert results.count("**Figure note.**") == len(fixture["figures"])
+    for forbidden in [
+        "Evidence Gallery",
+        "Inline Figure Gallery",
+        "Inline Table Gallery",
+        "Manuscript Package Tables and Figures",
+        "Selected Artifact Index",
+        "Full Study Artifact Inventory",
+        "Highest equal-task",
+        "Sellable claim",
+        "Max config PR-AUC",
+        "Domestic US GAAP only",
+    ]:
+        assert forbidden not in results
 
 
 @pytest.mark.parametrize(
@@ -1668,8 +1810,8 @@ def test_generated_snapshot_uses_generated_table_3_for_main_ranking_evidence(
 
     results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
 
-    main_ranking = results.split("### Public Task Metrics", maxsplit=1)[1].split(
-        "These task rows are the main ranking evidence", maxsplit=1
+    main_ranking = results.split("#### `table_03_public_task_metrics`", maxsplit=1)[1].split(
+        "#### `table_04_feature_family_metrics`", maxsplit=1
     )[0]
     assert (
         "| `comment_thread` | 321 | 0.1234 | 0.3000 | 0.7000 | 0.0500 | 0.0400 | 1 | 1 |"
@@ -1713,11 +1855,11 @@ def test_generated_snapshot_keeps_raw_maxima_exploratory_and_post_hoc(
 
     results = _build_fixture_snapshot(fixture, tmp_path, monkeypatch)
 
-    primary = results.split("### Declared primary construct-alignment rows", maxsplit=1)[1].split(
-        "### Exploratory maxima", maxsplit=1
+    primary = results.split("#### `table_09_construct_alignment`", maxsplit=1)[1].split(
+        "#### `table_15_bridge_overlap_matrix`", maxsplit=1
     )[0]
     exploratory = results.split("### Exploratory maxima", maxsplit=1)[1].split(
-        "### Label Contingency and Lift", maxsplit=1
+        "### Aggregation Sensitivity", maxsplit=1
     )[0]
     assert "`public_cascade`" in primary
     assert "`benchmark_xgb`" in primary
@@ -1897,6 +2039,40 @@ def test_paper_plan_documents_required_research_spine() -> None:
     assert "This paper is" not in plan
 
 
+def test_paper_plan_assigns_results_owners_and_exact_claim_boundaries() -> None:
+    plan = _read("docs/paper_plan.md")
+    experiment_2 = plan.split("### Experiment 2:", maxsplit=1)[1].split(
+        "### Experiment 3:", maxsplit=1
+    )[0]
+    experiment_5 = plan.split("### Experiment 5:", maxsplit=1)[1].split(
+        "### Experiment 6:", maxsplit=1
+    )[0]
+
+    assert "Table 4" not in experiment_2
+    assert "Table 14" not in experiment_2
+    assert "dynamic-only" in experiment_2
+    for artifact in ["Table 3", "Table 4", "Table 7", "Table 13", "Table 14", "Table 17"]:
+        assert artifact in experiment_5
+    for phrase in [
+        "Prior-filing history (legacy artifact key: oversight)",
+        "`prior_filing_count`",
+        "not PCAOB inspection",
+        "`is_domestic_us_gaap_proxy`",
+        "10-K/10-K/A with no observed same-year FPI-form proxy",
+        "validates neither FPI status, domicile, nor US GAAP",
+        "PCAOB inspection archives are provenance inputs",
+        "events are not joined to Gold",
+        "no model-eligible inspection features",
+        "at least one required outcome is fitted",
+        "all-skipped or disabled",
+        "post-year-proxy uncensored public-model panel",
+        "counts, range, constant-zero status, and equality to Item 4.02",
+        "source and feature readiness",
+        "revision-frozen `all + expanding`",
+    ]:
+        assert phrase in plan
+
+
 def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
     plan = _read("docs/paper_plan.md")
     required_phrases = [
@@ -2023,7 +2199,7 @@ def test_paper_plan_stabilizes_revision_frozen_methods_and_reporting_contract() 
         "expected calibration error",
         "seed 42 and 1,000 bootstrap draws",
         "primary plus the top five exploratory rows in each direction",
-        "Table 4 and Table 14",
+        "Tables 4 and 14 belong to Experiment 5",
         "Table 18",
         "reviewer archive",
         "canonical manifest gate",

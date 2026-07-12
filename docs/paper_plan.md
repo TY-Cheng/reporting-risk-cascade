@@ -230,7 +230,7 @@ uv run python scripts/run_construct_overlap.py \
 - **XBRL context normalization.** The compact FSDS `num` layer retains all units, `version` as `taxonomy_version`, `segments`, `coreg`, and the raw `value_text`. Its normalized full fact key is `(adsh, tag, taxonomy_version, fact_date, quarters, unit, segments, coreg)`, corresponding to the official SEC `num` key. Blank strings are normalized to null. Batch files are candidate shards only: reconciliation occurs once across all batches. `xbrl_fact_summary.parquet` is likewise computed by globally deduplicating those full-key candidates before aggregation, so its counts do not depend on the archive batch partition. Numeric identity uses the SEC `NUMERIC(28,4)` domain, so exact repeats such as `40.0` and `40.00` deduplicate without collapsing distinct large integers at floating-point precision boundaries. A full key carrying multiple distinct numeric values in any unit is excluded globally and produces one row in `xbrl_context_conflicts.parquet`; its row count becomes `xbrl_context_conflict_count` rather than being resolved by a value-magnitude rule. FSDS and Notes resume markers bind each ordered archive path to its actual SHA-256 and bind normalization settings such as notes mode; changes to those task signatures propagate to their downstream silver and gold outputs.
 - **XBRL issuer-level selection.** After global reconciliation, issuer-level features admit only consolidated facts with null `segments` and null `coreg`, and only USD or null units. Candidate ranking is controlled-tag priority, quarters descending, fact date descending, then unit priority (USD before null), followed by taxonomy version, tag, and raw value text as deterministic ties. This rule prevents segment, co-registrant, lower-priority tag, or stale-period facts from replacing the intended consolidated issuer value merely because they carry a USD unit.
 - **XBRL features.** `xbrl_ratio_*` and `xbrl_coverage_*` features from controlled core tags include size, leverage, profitability, working capital, receivables, inventory, cash, debt, operating cash flow, and year-over-year revenue/assets changes. Year-over-year values require both the current row and the selected prior row to be a normalized 10-K or 10-K/A, and the prior fiscal year must equal the current fiscal year minus one; quarterly current rows, quarterly fallback rows, and nonconsecutive annual observations receive no YoY value or coverage.
-- **Auditor and oversight.** PCAOB Form AP fields, engagement-partner exposure, and PCAOB inspection features in their public source windows.
+- **Auditor and prior-filing history.** PCAOB Form AP fields and engagement-partner exposure enter the public information set. `Prior-filing history (legacy artifact key: oversight)` means `prior_filing_count`, not PCAOB inspection. PCAOB inspection archives are provenance inputs; inspection events are not joined to Gold, and there are no model-eligible inspection features.
 - **Note opacity.** Note count, note character count, note-tag coverage, and tag entropy as a disclosure breadth measure.
 - **Feature-family boundary.** The reported public families are metadata, XBRL, auditor, oversight, visibility/history, and all. The notes/disclosure-breadth variables enter `all`; there is no standalone text-family ablation.
 - **Leakage exclusions.** `source_available_*`, `public_date_*`, `vintage_*`, `fiscal_period_end_source`, `as_of_date`, accession identifiers, CIK/GVKEY identifiers, labels, censoring flags, and direct event-date fields document provenance and timing but are not default predictors.
@@ -355,7 +355,7 @@ bridge_tier: high_confidence
 
 - **Purpose.** Estimate whether reporting-risk models trained in one regime remain useful in later regimes.
 - **Design.** Compare rolling and expanding windows over test years; track feature-family importance; report pre/post diagnostics around major regulatory and data-regime breakpoints.
-- **Outputs.** Annual metrics, window summaries, structural-break diagnostics, feature-family importance, and the full feature/window sensitivities in Table 4 and Table 14.
+- **Outputs.** This dynamic-only experiment reports annual metrics, window summaries, structural-break diagnostics, and feature-importance drift. Experiment 2 owns no manuscript-package display; Tables 4 and 14 belong to Experiment 5.
 - **Interpretation.** The experiment supports model shelf-life and retraining-window evidence; it does not establish structural causality from predictive drift alone.
 
 ### Experiment 3: Opacity and Public Review/Correction Risk
@@ -366,13 +366,13 @@ bridge_tier: high_confidence
 - **Treatment-like variable.** `D = missingness_density_score`.
 - **Controls.** `X = pre-origin metadata, XBRL, filing-friction, public-history, auditor, oversight, note-opacity, and calendar controls`.
 - **Outputs.** Missing-profile clusters, public-label PLR spec results, nuisance-model metadata, and diagnostic benchmark-side DML outputs.
-- **Interpretation.** Coefficients are adjusted associations, not causal effects; the `misstatement firm-year` outcome remains a detected-misstatement benchmark diagnostic only.
+- **Interpretation.** Coefficients are adjusted associations, not causal effects. Opacity DML is diagnostic only when at least one required outcome is fitted; all-skipped or disabled required outcomes are deferred. The `misstatement firm-year` outcome remains a detected-misstatement benchmark diagnostic only.
 
 ### Experiment 4: Public Cascade Construction
 
 - **Purpose.** Demonstrate that public data can support a defensible review-and-correction cascade.
 - **Design.** Build the public lake from SEC/PCAOB sources; construct labels from first public dates; report source coverage, event rates, censoring, and task readiness.
-- **Outputs.** Source coverage tables, event-rate tables, censoring summaries, public-lake metadata, and sequential sample attrition with task eligibility in Table 18.
+- **Outputs.** Table 2 and Table 18, plus dynamic source and feature readiness, event rates, censoring summaries, and fit/skip counts.
 - **Interpretation.** This experiment validates the measurement surface for observable public review and correction states.
 
 ### Experiment 5: Public Cascade Prediction
@@ -380,7 +380,7 @@ bridge_tier: high_confidence
 - **Purpose.** Estimate the pre-disclosure public reporting-risk state from public features.
 - **Design.** Use `issuer_origin_panel` to predict comment-thread scrutiny, broad amendment/friction, and 8-K Item 4.02 outcomes. The headline uses the revision-frozen `all + expanding` specification; metadata, XBRL, auditor, oversight, visibility/history, all-feature, and training-window grids are sensitivities.
 - **Skip rule.** Fits with one-class train or test labels are skipped and reported.
-- **Outputs.** Table 3 and Figure 1 for the primary task-level evidence; Table 4 and Table 14 for grid sensitivities; `public_cascade_metrics.csv`, `public_cascade_predictions.parquet`, `public_cascade_task_status.csv`, `public_cascade_summary.md`, and `public_opacity_dml.csv` for auditability.
+- **Outputs.** Table 3, Table 4, Table 7, Table 13, Table 14, Table 17, Figure 1, Figure 2, and Figure 4. Table 3 and Figure 1 own the primary `all + expanding` evidence; the other displays and dynamic per-task public-peer results are sensitivity evidence. `public_cascade_metrics.csv`, `public_cascade_predictions.parquet`, `public_cascade_task_status.csv`, and `public_cascade_summary.md` remain audit artifacts.
 - **Interpretation.** The primary comparison is against task prevalence and the visibility/history information set. Alternative feature families and windows inform robustness, not headline selection.
 
 ### Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap
@@ -428,6 +428,12 @@ bridge_tier: high_confidence
 > Comment letters are public scrutiny signals, not the full SEC review universe.
 
 > Bridge validation is mandatory for an integrated claim that the public cascade and the detected-misstatement benchmark measure related but non-identical constructs. Without that validation, the public-cascade result remains a public-data measurement result rather than a validated fraud/restatement overlap paper.
+
+- `Prior-filing history (legacy artifact key: oversight)` means `prior_filing_count`, not PCAOB inspection.
+- `is_domestic_us_gaap_proxy` means `10-K/10-K/A with no observed same-year FPI-form proxy` and validates neither FPI status, domicile, nor US GAAP.
+- PCAOB inspection archives are provenance inputs; inspection events are not joined to Gold, and there are no model-eligible inspection features.
+- Opacity DML is an adjusted-association diagnostic only when at least one required outcome is fitted; all-skipped or disabled required outcomes are deferred.
+- Partner nonadministrative-amendment facts use the `post-year-proxy uncensored public-model panel` and report counts, range, constant-zero status, and equality to Item 4.02.
 
 #### Evidence Gates
 

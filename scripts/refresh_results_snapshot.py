@@ -861,7 +861,11 @@ def _public_feature_rows(metrics: pd.DataFrame, summary: dict[str, Any]) -> list
         return []
     grouped = (
         metrics.groupby("feature_set", dropna=False)
-        .agg(rows=("pr_auc", "size"), mean_pr_auc=("pr_auc", "mean"), mean_roc_auc=("roc_auc", "mean"))
+        .agg(
+            rows=("pr_auc", "size"),
+            mean_pr_auc=("pr_auc", "mean"),
+            mean_roc_auc=("roc_auc", "mean"),
+        )
         .reset_index()
         .sort_values("mean_pr_auc", ascending=False)
     )
@@ -993,7 +997,11 @@ def _benchmark_timing_rows(metrics: pd.DataFrame) -> list[list[str]]:
         )
         .reset_index()
     )
-    best = grouped.sort_values("pr_auc", ascending=False).groupby("label_mode", as_index=False).head(1)
+    best = (
+        grouped.sort_values("pr_auc", ascending=False)
+        .groupby("label_mode", as_index=False)
+        .head(1)
+    )
     rows = []
     for _, row in best.sort_values("pr_auc", ascending=False).iterrows():
         rows.append(
@@ -1053,7 +1061,6 @@ def _public_peer_task_rows(path: Path) -> list[list[str]]:
             else ("pr_auc", "size"),
             mean_pr_auc=("pr_auc", "mean"),
             mean_roc_auc=("roc_auc", "mean"),
-            max_pr_auc=("pr_auc", "max"),
         )
         .reset_index()
     )
@@ -1066,7 +1073,6 @@ def _public_peer_task_rows(path: Path) -> list[list[str]]:
                 _fmt(row["mean_prevalence"]),
                 _fmt(row["mean_pr_auc"]),
                 _fmt(row["mean_roc_auc"]),
-                _fmt(row["max_pr_auc"]),
             ]
         )
     return rows
@@ -1114,7 +1120,9 @@ def _benchmark_window_rows(study_dir: Path) -> list[list[str]]:
         .reset_index()
     )
     rows = []
-    for _, row in grouped.sort_values(["label_mode", "pr_auc"], ascending=[True, False]).iterrows():
+    for _, row in grouped.sort_values(
+        ["label_mode", "pr_auc"], ascending=[True, False]
+    ).iterrows():
         rows.append(
             [
                 _code(row["label_mode"]),
@@ -1132,7 +1140,14 @@ def _benchmark_window_rows(study_dir: Path) -> list[list[str]]:
 
 def _structural_break_rows(study_dir: Path, *, max_rows: int = 12) -> list[list[str]]:
     frame = _read_csv(study_dir / "benchmark" / "structural_breaks.csv")
-    if frame.empty or not {"window", "label_mode", "family", "break_year", "f_stat", "p_value"}.issubset(frame.columns):
+    if frame.empty or not {
+        "window",
+        "label_mode",
+        "family",
+        "break_year",
+        "f_stat",
+        "p_value",
+    }.issubset(frame.columns):
         return []
     frame = frame.copy()
     frame["p_value_num"] = pd.to_numeric(frame["p_value"], errors="coerce")
@@ -1163,7 +1178,9 @@ def _feature_importance_rows(study_dir: Path, *, max_rows: int = 12) -> list[lis
     )
     rows = []
     for _, row in grouped.head(max_rows).iterrows():
-        rows.append([_code(row["label_mode"]), _code(row["family"]), _fmt(row["importance_share"])])
+        rows.append(
+            [_code(row["label_mode"]), _code(row["family"]), _fmt(row["importance_share"])]
+        )
     return rows
 
 
@@ -1191,7 +1208,9 @@ def _opacity_rows(study_dir: Path) -> list[list[str]]:
     return rows
 
 
-def _simple_csv_rows(path: Path, columns: list[str], *, max_rows: int | None = None) -> list[list[str]]:
+def _simple_csv_rows(
+    path: Path, columns: list[str], *, max_rows: int | None = None
+) -> list[list[str]]:
     frame = _read_csv(path)
     if frame.empty or not set(columns).issubset(frame.columns):
         return []
@@ -1199,7 +1218,14 @@ def _simple_csv_rows(path: Path, columns: list[str], *, max_rows: int | None = N
         frame = frame.head(max_rows)
     rows = []
     for _, row in frame.iterrows():
-        rows.append([_fmt(row.get(col)) if col not in {"public_label", "bridge_tier", "label_pattern", "metric_status"} else _code(row.get(col)) for col in columns])
+        rows.append(
+            [
+                _fmt(row.get(col))
+                if col not in {"public_label", "bridge_tier", "label_pattern", "metric_status"}
+                else _code(row.get(col))
+                for col in columns
+            ]
+        )
     return rows
 
 
@@ -1329,7 +1355,9 @@ def _table_figure_rows(package_dir: Path) -> list[list[str]]:
         if not root.exists():
             rows.append([kind, _code(subdir), "missing"])
             continue
-        files = sorted(path for path in root.iterdir() if path.is_file() and path.name != ".DS_Store")
+        files = sorted(
+            path for path in root.iterdir() if path.is_file() and path.name != ".DS_Store"
+        )
         for path in files:
             rows.append([kind, _code(path.name), _rel(path)])
     return rows
@@ -1671,27 +1699,13 @@ def build_snapshot(
     resolved_inputs = _resolve_input_records(manifest)
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
     bridge_summary = _read_json(study_dir / "bridge_probe" / "bridge_probe_summary.json")
-    construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
+    construct_manifest = _read_json(
+        study_dir / "construct_overlap" / "construct_overlap_manifest.json"
+    )
     public_lake_report = _load_public_lake_report(manifest, resolved_inputs)
-    public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
-    benchmark_metrics = _read_csv(study_dir / "benchmark" / "rolling_metrics.csv")
     public_task_positive_counts = public_summary.get("task_positive_counts") or {}
     public_task_exclusion_counts = public_summary.get("task_exclusion_counts") or {}
     zero_positive_tasks = public_summary.get("zero_positive_tasks") or []
-
-    best_public = _best_equal_task_config(public_metrics)
-    if public_summary.get("best_feature_set") and public_summary.get("best_train_window"):
-        best_public_text = (
-            f"`{public_summary['best_feature_set']} + {public_summary['best_train_window']}` "
-            f"with reported mean PR-AUC `{_fmt(public_summary.get('best_mean_pr_auc'))}`"
-        )
-    elif best_public is not None:
-        best_public_text = (
-            f"`{best_public['feature_set']} + {best_public['train_window']}` "
-            f"with equal-task mean PR-AUC `{_fmt(best_public['mean_pr_auc'])}`"
-        )
-    else:
-        best_public_text = "not available"
 
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     study_rel = _rel(study_dir)
@@ -1699,6 +1713,94 @@ def build_snapshot(
     _validate_package_bridge_claim_boundary(manuscript_package, bridge_language)
     validation_tier = bridge_language["tier"]
     figure_explanations, table_explanations = _bridge_artifact_explanations(bridge_language)
+    package_manifest = _read_json(manuscript_package / "manifest.json")
+    if package_manifest.get("schema_version") != "manuscript-package-v2":
+        raise ValueError("results snapshot requires manuscript-package-v2")
+    reporting_contract = package_manifest.get("reporting_contract")
+    if not isinstance(reporting_contract, dict):
+        raise ValueError("manuscript package reporting_contract must be an object")
+    artifact_ownership = reporting_contract.get("artifact_ownership")
+    owner_names = {"reproducibility", *(f"experiment_{index}" for index in range(1, 7))}
+    if not isinstance(artifact_ownership, dict) or set(artifact_ownership) != owner_names:
+        raise ValueError("reporting contract artifact_ownership must declare six experiments")
+    owned_tables = [
+        key for owner in artifact_ownership.values() for key in owner.get("tables", [])
+    ]
+    owned_figures = [
+        key for owner in artifact_ownership.values() for key in owner.get("figures", [])
+    ]
+    if (
+        len(owned_tables) != len(set(owned_tables))
+        or set(owned_tables) != set(package_manifest.get("tables", {}))
+        or len(owned_figures) != len(set(owned_figures))
+        or set(owned_figures) != set(package_manifest.get("figures", {}))
+    ):
+        raise ValueError("reporting contract must own every package artifact exactly once")
+    copied_figures = _copy_inline_figures(manuscript_package)
+    rendered_tables: set[str] = set()
+    rendered_figures: set[str] = set()
+
+    def render_table(key: str) -> list[str]:
+        if key in rendered_tables:
+            raise ValueError(f"package table rendered more than once: {key}")
+        rendered_tables.add(key)
+        entry = package_manifest["tables"][key]
+        path = _manifest_format_path(
+            manuscript_package,
+            entry,
+            "md",
+            manuscript_package / "tables" / f"{key}.md",
+        )
+        explanation = table_explanations.get(path.stem, table_explanations.get(key))
+        if explanation is None:
+            raise ValueError(f"missing table explanation: {key}")
+        return [
+            f"#### `{path.stem}`",
+            "",
+            *_explanation_block(explanation),
+            "",
+            _read_text(path).strip(),
+            "",
+        ]
+
+    def render_figure(key: str) -> list[str]:
+        if key in rendered_figures:
+            raise ValueError(f"package figure rendered more than once: {key}")
+        rendered_figures.add(key)
+        entry = package_manifest["figures"][key]
+        path = _manifest_format_path(
+            manuscript_package,
+            entry,
+            "png",
+            manuscript_package / "figures" / f"{key}.png",
+        )
+        explanation = figure_explanations.get(path.stem, figure_explanations.get(key))
+        if explanation is None:
+            raise ValueError(f"missing figure explanation: {key}")
+        image_path = copied_figures.get(path.stem)
+        if image_path is None:
+            raise ValueError(f"missing copied PNG preview: {key}")
+        return [
+            f"#### {explanation['title']}",
+            "",
+            *_explanation_block(explanation),
+            "",
+            f"![{explanation['title']}]({image_path})",
+            "",
+            f"**Figure note.** {FIGURE_NOTES.get(key, FIGURE_NOTES.get(path.stem, ''))}",
+            "",
+        ]
+
+    def render_owner(owner: str) -> list[str]:
+        owned = artifact_ownership[owner]
+        return [
+            *(line for key in owned["tables"] for line in render_table(key)),
+            *(line for key in owned["figures"] for line in render_figure(key)),
+        ]
+
+    # Preserve strict parsing of the two package-owned primary result surfaces.
+    _public_task_rows(manuscript_package)
+    _construct_alignment_rows(manuscript_package)
     bridge_status = bridge_summary.get("status") or manifest.get("bridge", {}).get("status") or ""
     peer_status = manifest.get("runtime", {}).get("peer_comparison_mode") or ""
     provenance = dict(manifest.get("provenance") or {})
@@ -1712,6 +1814,23 @@ def build_snapshot(
         if bridge_language["status"] == "validated"
         else "deferred"
     )
+    reporting_boundaries = reporting_contract["reporting_boundaries"]
+    oversight = reporting_contract["feature_family_summary"]["oversight"]
+    sample_proxy = reporting_boundaries["sample_proxy"]
+    inspection = reporting_boundaries["pcaob_inspection_predictors"]
+    partner = reporting_boundaries["partner_nonadministrative_amendment"]
+    dml_evidence = reporting_contract["opacity_dml_evidence"]
+    dml_maturity = reporting_contract["claim_maturity"]["opacity_dml"]
+    dml_statuses = ", ".join(
+        f"{outcome}={dml_evidence['status_by_outcome'][outcome]}"
+        for outcome in dml_evidence["required_outcomes"]
+    )
+    dml_fit_outcomes = ", ".join(dml_evidence["fit_outcomes"]) or "none"
+    if (
+        inspection["inspection_event_joined_to_gold"] is not False
+        or inspection["model_eligible_features"] != []
+    ):
+        raise ValueError("reporting contract cannot present PCAOB inspections as predictors")
 
     lines = [
         "---",
@@ -1733,16 +1852,14 @@ def build_snapshot(
         "",
         "The structure below follows the planned experiment sequence: benchmark "
         "timing, concept drift, opacity, public-cascade construction, public-cascade "
-        "prediction, and benchmark-public construct overlap. Tables and figures are "
-        "rendered directly at the end and also indexed so manuscript claims can be "
-        "traced to concrete files.",
+        "prediction, and benchmark-public construct overlap. Each package table and "
+        "figure is rendered once in the experiment that owns it.",
         "",
         "When using this page for manuscript prose, read it as an interpretation "
         "guide rather than a model leaderboard.",
         bridge_language["headline_guidance"],
-        "Single best windows, maximum PR-AUC rows, "
-        "and severe-tail lifts are diagnostics unless the manuscript gives a "
-        "pre-specified reason to elevate them.",
+        "Alternative windows and exploratory maxima remain diagnostics; the sole "
+        "headline public specification is `all + expanding`.",
         "",
         "## Results Overview",
         "",
@@ -1768,16 +1885,12 @@ def build_snapshot(
         "ROC-AUC, Brier, Brier Skill Score, ECE, top-k precision, top-decile lift, "
         "and Bao-style top-fraction precision, sensitivity, specificity, BAC, and NDCG.",
         "",
-        "- **Highest equal-task public-cascade row.** " + best_public_text + ". "
-        "Use this as a descriptive configuration diagnostic, not as a model-selection "
-        "headline.",
-        "",
         "- **Bridge boundary.** " + bridge_language["overview_boundary"],
         "",
-        "- **Sellable claim.** The strongest current framing is a measurement-and-ranking "
-        "paper on filing-origin public reporting-risk states. It does not support causal "
-        "claims, hidden-misconduct occurrence claims, or same-estimand performance "
-        "rankings over prior detected-misstatement papers.",
+        "- **Bounded contribution.** The study develops a filing-origin measurement of "
+        "public reporting-risk states and evaluates prevalence-aware ranking. It does not "
+        "identify hidden misconduct, causal regulatory effects, or same-estimand "
+        "superiority over detected-misstatement studies.",
         "",
         "## Reproducibility Metadata",
         "",
@@ -1899,23 +2012,17 @@ def build_snapshot(
         "This experiment reads detected-misstatement benchmark performance as an "
         "observability diagnostic rather than a hidden-misconduct detection result.",
         "",
+        *render_owner("experiment_1"),
+        "### Detected-Misstatement Peer Fit and Skip Status",
+        "",
+        _table(
+            ["Status", "Reason", "Rows"],
+            _status_count_rows(study_dir / "peer_comparison" / "peer_task_status.csv"),
+        ),
+        "",
         "### Detected-Misstatement Benchmark Panel",
         "",
         _table(["Field", "Value"], _benchmark_panel_rows(study_dir)),
-        "",
-        "### Best Timing-Sensitivity Rows by Label Mode",
-        "",
-        _table(
-            [
-                "Label mode",
-                "Best window",
-                "Mean PR-AUC",
-                "Mean ROC-AUC",
-                "Top-100 precision",
-                "Retained positive share",
-            ],
-            _benchmark_timing_rows(benchmark_metrics),
-        ),
         "",
         "### Full Window Summary",
         "",
@@ -1971,37 +2078,29 @@ def build_snapshot(
         "The opacity analysis reports adjusted associations from DML partially linear "
         "regressions. These estimates are not causal effects.",
         "",
-        _table(
-            [
-                "Outcome",
-                "Rows",
-                "Prevalence",
-                "Mean treatment",
-                "Coef",
-                "Std err",
-                "p-value",
-                "Status",
-            ],
-            _opacity_rows(study_dir),
-        ),
-        "",
+        *render_owner("experiment_3"),
         "### Interpretation",
         "",
         "The DML rows report adjusted association between filing-origin opacity and "
         "later public review/correction outcomes. They distinguish source-availability "
-        "and missingness diagnostics from silent-imputation claims, and they support "
-        "discussion of measurement and risk ranking rather than causal claims about "
-        "SEC or issuer behavior.",
+        "and missingness diagnostics from silent-imputation claims. Opacity DML is an "
+        "adjusted-association diagnostic only when at least one required outcome is fitted. "
+        "Required-outcome "
+        f"statuses are {dml_statuses}; fitted outcomes are {dml_fit_outcomes}; aggregate "
+        f"maturity is `{dml_maturity}`. "
+        + (
+            "With at least one fitted required outcome, opacity DML is an adjusted-association "
+            "diagnostic only."
+            if dml_maturity == "diagnostic"
+            else "All-skipped or disabled required outcomes leave the analysis deferred."
+        ),
         "",
         "## Results for Experiment 4: Public Cascade Construction",
         "",
         "This experiment validates whether public SEC/PCAOB data can support the "
         "filing-origin review-and-correction measurement surface.",
         "",
-        "### Public Lake and Gold Panel Scale",
-        "",
-        _table(["Layer", "Artifact", "Rows", "Notes"], _public_lake_rows(public_lake_report)),
-        "",
+        *render_owner("experiment_4"),
         "### Public Cascade Readiness",
         "",
         _table(
@@ -2009,7 +2108,11 @@ def build_snapshot(
             [
                 ["Main sample rows", _fmt(public_summary.get("n_rows"))],
                 ["Fiscal-year span", "-".join(map(str, public_summary.get("sample_years", [])))],
-                ["Domestic US GAAP only", _fmt(public_summary.get("domestic_only"))],
+                [
+                    "Sample proxy",
+                    "10-K/10-K/A with no observed same-year FPI-form proxy; validates neither "
+                    "FPI status, domicile, nor US GAAP",
+                ],
                 ["Task positive counts", _code(public_task_positive_counts)],
                 ["Task exclusion counts", _code(public_task_exclusion_counts)],
                 ["Zero-positive tasks", _code(zero_positive_tasks or "none")],
@@ -2034,132 +2137,14 @@ def build_snapshot(
         "## Results for Experiment 5: Public Cascade Prediction",
         "",
         "This experiment estimates the filing-origin public reporting-risk state and "
-        "compares feature families and peer-compatible model families.",
+        "compares the revision-frozen `all + expanding` headline with feature-family, "
+        "window, calibration, selection, and peer-transfer sensitivity evidence.",
         "",
-        "### Public Task Metrics",
-        "",
-        _table(
-            [
-                "Task",
-                "Positives",
-                "Mean prevalence",
-                "Mean PR-AUC",
-                "Mean ROC-AUC",
-                "Brier Skill",
-                "ECE",
-                "Folds",
-                "Metric rows",
-            ],
-            _public_task_rows(manuscript_package),
-        ),
-        "",
-        "These task rows are the main ranking evidence. Brier Skill Score and ECE "
-        "are calibration diagnostics; negative skill or large ECE should push the "
-        "manuscript toward a ranking/prioritization interpretation rather than a "
-        "calibrated decision-rule interpretation.",
-        "",
-        "### Annual Fold Support",
-        "",
-        _table(
-            ["Task", "Test year", "Configs", "Test rows", "Positives", "Prevalence", "Sparse excluded"],
-            _public_fold_support_rows(public_metrics),
-        ),
-        "",
-        "Fold support is reported to make sparse-label claims auditable. A task-year "
-        "with fewer than 10 positives should not carry a formal interval claim; in "
-        "the current artifact set, Item 4.02 remains rare but has at least 58 "
-        "positives in every annual test fold.",
-        "",
-        "### Public Feature-Family Metrics",
-        "",
-        _table(
-            [
-                "Feature set",
-                "Features",
-                "XBRL ratios",
-                "XBRL coverage",
-                "Mean PR-AUC",
-                "Mean ROC-AUC",
-                "Metric rows",
-            ],
-            _public_feature_rows(public_metrics, public_summary),
-        ),
-        "",
-        "This aggregate table averages across tasks, train windows, and annual folds. "
-        "Use it for the broad information-set claim only; task-specific feature-family "
-        "rows below are the safer source for label-by-label prose.",
-        "",
-        "### Task by Feature-Family Metrics",
-        "",
-        _table(
-            [
-                "Task",
-                "Feature set",
-                "Mean prevalence",
-                "Mean PR-AUC",
-                "Mean ROC-AUC",
-                "Brier Skill",
-                "ECE",
-                "Folds",
-                "Metric rows",
-            ],
-            _task_feature_family_rows(public_metrics),
-        ),
-        "",
-        "The task-by-family matrix clarifies that feature-family rankings are not "
-        "uniform across labels. It supports a measured feature-fusion claim, not a "
-        "feature-importance-as-mechanism claim.",
-        "",
-        "### Selection-Aware Descriptive Profile",
-        "",
-        _table(
-            [
-                "Stratum",
-                "Group",
-                "Issuer-years",
-                "Comment rate",
-                "Amendment rate",
-                "Item 4.02 rate",
-            ],
-            _selection_profile_rows(manuscript_package),
-        ),
-        "",
-        "Selection-profile rows describe where public-label rates are concentrated "
-        "across issuer visibility, filing-history, and public-scrutiny strata. They "
-        "help interpret comment-thread prediction as selected public scrutiny plus "
-        "issuer reporting-risk signals, but they are not a causal SEC-selection model.",
-        "",
-        "### Detected-Misstatement Peer-Compatible Literature Benchmarks",
-        "",
-        "These rows are present only when the peer-enabled study has run. They are "
-        "model-family transfer and metric-language alignment, not exact replications "
-        "of the original-paper samples.",
-        "",
-        _table(
-            ["Model", "Metric rows", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC", "Mean Brier"],
-            _peer_model_rows(study_dir / "peer_comparison" / "detected_misstatement_model_family_metrics.csv"),
-        ),
-        "",
-        "### Detected-Misstatement Peer Fit and Skip Status",
-        "",
-        _table(
-            ["Status", "Reason", "Rows"],
-            _status_count_rows(study_dir / "peer_comparison" / "peer_task_status.csv"),
-        ),
-        "",
-        "### Public-Label Peer Transfer",
-        "",
-        _table(
-            ["Model", "Metric rows", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC", "Mean Brier"],
-            _peer_model_rows(
-                study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
-            ),
-        ),
-        "",
+        *render_owner("experiment_5"),
         "### Public Peer Task Summary",
         "",
         _table(
-            ["Task", "Metric rows", "Mean prevalence", "Mean PR-AUC", "Mean ROC-AUC", "Max config PR-AUC"],
+            ["Task", "Metric rows", "Mean prevalence", "Mean PR-AUC", "Mean ROC-AUC"],
             _public_peer_task_rows(
                 study_dir / "public_peer_comparison" / "public_model_family_metrics.csv"
             ),
@@ -2179,45 +2164,14 @@ def build_snapshot(
         "Prediction results should be read within each label, prevalence, feature "
         "family, training window, and model-family mapping. Public peer rows provide "
         "model-language transfer evidence, not same-estimand superiority over the "
-        "detected-misstatement literature. `Max config PR-AUC` is retained as a "
-        "diagnostic for model-selection optimism; it should not become a headline "
-        "claim without a pre-specified selection rule or external validation.",
+        "detected-misstatement literature. Alternative configurations remain sensitivity "
+        "evidence rather than headline selections.",
         "",
         "## Results for Experiment 6: Detected-Misstatement Benchmark and Public Cascade Overlap",
         "",
         bridge_language["experiment_intro"],
         "",
-        "### Bridge Coverage",
-        "",
-        _table(
-            ["Metric", "Value"],
-            _bridge_coverage_rows(study_dir / "bridge_probe" / "coverage_report.csv"),
-        ),
-        "",
-        "### Overlap Sample Flow",
-        "",
-        _table(["Bridge tier", "Rows", "Benchmark positives"], _overlap_sample_flow_rows(study_dir)),
-        "",
-        "### Declared primary construct-alignment rows",
-        "",
-        "Generated Table 9 is the sole owner of the two declared primary rows shown "
-        "below; the snapshot does not reselect them from the raw alignment grids.",
-        "",
-        _table(
-            [
-                "Direction",
-                "Model",
-                "Target",
-                "PR-AUC",
-                "ROC-AUC",
-                "Top-10% precision",
-                "Top-10% FDR",
-                "Top-decile lift",
-                "Lift interval",
-            ],
-            _construct_alignment_rows(manuscript_package),
-        ),
-        "",
+        *render_owner("experiment_6"),
         bridge_language["primary_alignment_interpretation"],
         "",
         "### Exploratory maxima (post-hoc)",
@@ -2236,26 +2190,6 @@ def build_snapshot(
                 "max_minus_primary",
             ],
             _exploratory_maxima_rows(study_dir, manuscript_package, construct_manifest),
-        ),
-        "",
-        "### Label Contingency and Lift",
-        "",
-        _table(
-            [
-                "Public label",
-                "Bridge tier",
-                "Rows",
-                "Benchmark positives",
-                "Public positives",
-                "Both positive",
-                "Benchmark rate",
-                "Public rate",
-                "Public rate if benchmark pos",
-                "Benchmark rate if public pos",
-                "Lift public given benchmark",
-                "Lift benchmark given public",
-            ],
-            _label_contingency_rows(study_dir),
         ),
         "",
         bridge_language["contingency"],
@@ -2301,7 +2235,9 @@ def build_snapshot(
                 "Display count",
             ],
             _simple_csv_rows(
-                study_dir / "construct_overlap" / "benchmark_positive_public_label_cooccurrence.csv",
+                study_dir
+                / "construct_overlap"
+                / "benchmark_positive_public_label_cooccurrence.csv",
                 [
                     "label_pattern",
                     "label_comment_thread_365",
@@ -2336,8 +2272,6 @@ def build_snapshot(
         "",
         "## Discussion",
         "",
-        "### Key Readings",
-        "",
         bridge_language["key_reading"],
         "",
         "### Answers to the research questions",
@@ -2369,6 +2303,20 @@ def build_snapshot(
         "Comment-thread and correction labels are partly selected by issuer visibility, "
         "filing history, source availability, and public scrutiny. Selection-profile and "
         "opacity rows describe those boundaries without claiming a causal selection correction.",
+        "",
+        f"`{oversight['display_name']}` means `prior_filing_count`, not PCAOB inspection. "
+        f"`{sample_proxy['artifact_field']}` means "
+        f"`{sample_proxy['display_name']}` and validates neither FPI status, domicile, nor "
+        "US GAAP. PCAOB inspection archives are provenance inputs; inspection events are "
+        "not joined to Gold, and there are no model-eligible inspection features.",
+        "",
+        f"Partner nonadministrative-amendment facts use the `{partner['scope']}`: "
+        f"{partner['rows_evaluated']} rows evaluated, {partner['nonmissing_rows']} nonmissing, "
+        f"{partner['nonzero_rows']} nonzero, range [{partner['minimum']}, {partner['maximum']}], "
+        f"is_constant_zero={str(partner['is_constant_zero']).lower()}, and "
+        "equality to Item 4.02 is "
+        f"{str(partner['total_equals_item_402_for_all_rows']).lower()} "
+        f"across {partner['total_equals_item_402_rows']} rows.",
         "",
         "### Generalizability",
         "",
@@ -2432,36 +2380,85 @@ def build_snapshot(
             ],
         ),
         "",
-        "## Tables, Figures, and Artifact Index",
+        "## Reproducibility and Provenance",
         "",
-        "This section is intentionally redundant with the prose results above: it "
-        "renders every current manuscript-package figure and table in one place, "
-        "then keeps the file index for provenance checks.",
+        *render_owner("reproducibility"),
+        "### Run and package identity",
         "",
-        "### Evidence Gallery",
+        _table(
+            ["Field", "Value"],
+            [
+                ["Artifact generation time", _code(manifest.get("generated_at_utc"))],
+                ["Snapshot generation time", _code(generated_at)],
+                ["Snapshot mode", _code("partial" if allow_partial else "full")],
+                ["Study commit", _code(manifest.get("repo_commit"))],
+                ["Git dirty", _code(str(manifest.get("git_dirty")))],
+                ["Package schema", _code(package_manifest.get("schema_version"))],
+                ["Package study commit", _code(package_manifest.get("study_commit"))],
+                [
+                    "Package study-manifest hash",
+                    _code(package_manifest.get("study_manifest_sha256")),
+                ],
+                ["Config hash", _code(provenance.get("config_hash"))],
+                ["Input hash", _code(provenance.get("input_hash"))],
+                ["uv.lock hash", _code(provenance.get("uv_lock_hash"))],
+                ["Public-data as-of date", _code(public_lake.get("as_of_date"))],
+                ["Public-lake fresh build", _code(str(public_lake.get("fresh_build")))],
+                ["Public-lake commit", _code(public_lake.get("commit_sha"))],
+                ["Public-lake Git dirty", _code(str(public_lake.get("git_dirty")))],
+                ["Public-lake config hash", _code(public_lake.get("config_hash"))],
+                ["Public-lake input hash", _code(public_lake.get("input_hash"))],
+                ["Public-lake uv.lock hash", _code(public_lake.get("uv_lock_hash"))],
+                ["Form AP source kind", _code(form_ap.get("source_kind"))],
+                ["Form AP archive hash", _code(form_ap.get("archive_sha256"))],
+                ["Form AP member", _code(form_ap.get("member"))],
+                ["Form AP member hash", _code(form_ap.get("member_sha256"))],
+                ["WRDS source", _code(_summarize_wrds_sources(wrds.get("source_values")))],
+                ["WRDS version", _code(wrds.get("source_version_values"))],
+                ["WRDS extraction time", _code(wrds.get("extracted_at_values"))],
+                ["WRDS hash", _code(wrds.get("sha256"))],
+                ["Canonical status", _code(canonical_status)],
+                [
+                    "Canonical predicate failures",
+                    "; ".join(canonical_failures) if canonical_failures else _code("none"),
+                ],
+                [
+                    "Public-lake final-report schema",
+                    _code(public_lake_report.get("schema_version")),
+                ],
+                ["Peer comparison mode", _code(peer_status)],
+                ["Bridge status", _code(bridge_status)],
+                ["Construct-overlap validation tier", _code(validation_tier)],
+            ],
+        ),
         "",
-        "Each display is paired with a claim, the evidence it contributes, and the "
-        "boundary that prevents over-interpretation.",
+        "### Source roles and hashes",
         "",
-        *_inline_figure_gallery(manuscript_package, figure_explanations),
+        "Local input paths are omitted; stable roles, availability, and content hashes "
+        "identify the evidence inputs.",
         "",
-        *_inline_table_gallery(manuscript_package, table_explanations),
+        _table(
+            ["Source role", "Available", "SHA-256"],
+            _source_role_rows(resolved_inputs),
+        ),
         "",
-        "### Manuscript Package Tables and Figures",
+        "### Claim maturity",
         "",
-        _table(["Kind", "File", "Path"], _table_figure_rows(manuscript_package)),
-        "",
-        "### Selected Artifact Index",
-        "",
-        "This index lists high-signal artifacts referenced by this generated snapshot.",
-        "",
-        *_artifact_index(study_dir),
-        "",
-        "### Full Study Artifact Inventory",
-        "",
-        *_manifest_inventory(study_dir),
+        _table(
+            ["Claim", "Status"],
+            _claim_maturity_rows(manifest, bridge_language),
+        ),
         "",
     ]
+    del lines[
+        lines.index("## Reproducibility Metadata") : lines.index(
+            "## Results for Experiment 1: Label Observability and Detection Timing"
+        )
+    ]
+    if rendered_tables != set(package_manifest["tables"]) or rendered_figures != set(
+        package_manifest["figures"]
+    ):
+        raise ValueError("results snapshot did not render every package artifact exactly once")
     return "\n".join(lines)
 
 
