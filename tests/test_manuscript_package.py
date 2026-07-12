@@ -54,6 +54,65 @@ EXPECTED_ARTIFACT_OWNERSHIP = {
 }
 
 
+def _narrative_reporting_contract(
+    *,
+    diagnostic: bool = True,
+    constant_partner: bool = True,
+) -> dict[str, object]:
+    statuses = (
+        {
+            "comment_thread": "fit",
+            "amendment": "skipped_one_class_or_too_small",
+            "8k_402": "skipped_constant_treatment",
+        }
+        if diagnostic
+        else {
+            "comment_thread": "skipped_one_class_or_too_small",
+            "amendment": "skipped_one_class_or_too_small",
+            "8k_402": "skipped_constant_treatment",
+        }
+    )
+    fit_outcomes = ["comment_thread"] if diagnostic else []
+    maturity_by_outcome = {
+        outcome: "diagnostic" if outcome in fit_outcomes else "deferred"
+        for outcome in ["comment_thread", "amendment", "8k_402"]
+    }
+    partner = {
+        "scope": "post-year-proxy uncensored public-model panel",
+        "rows_evaluated": 12,
+        "nonmissing_rows": 12,
+        "nonzero_rows": 0 if constant_partner else 4,
+        "n_distinct_nonmissing": 1 if constant_partner else 4,
+        "minimum": 0,
+        "maximum": 0 if constant_partner else 3,
+        "is_constant_zero": constant_partner,
+        "total_equals_item_402_rows": 12 if constant_partner else 7,
+        "total_equals_item_402_for_all_rows": constant_partner,
+    }
+    return {
+        "reporting_boundaries": {
+            "sample_proxy": {
+                "artifact_field": "is_domestic_us_gaap_proxy",
+                "display_name": "10-K/10-K/A with no observed same-year FPI-form proxy",
+                "validates_fpi_status": False,
+                "validates_domicile": False,
+                "validates_us_gaap": False,
+            },
+            "partner_nonadministrative_amendment": partner,
+        },
+        "feature_family_summary": {
+            "oversight": {"display_name": "Prior-filing history (legacy artifact key: oversight)"}
+        },
+        "opacity_dml_evidence": {
+            "required_outcomes": ["comment_thread", "amendment", "8k_402"],
+            "status_by_outcome": statuses,
+            "fit_outcomes": fit_outcomes,
+            "maturity_by_outcome": maturity_by_outcome,
+        },
+        "claim_maturity": {"opacity_dml": "diagnostic" if diagnostic else "deferred"},
+    }
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -343,6 +402,7 @@ def test_results_narrative_renders_external_component_path_privately(
         public_peer=pd.DataFrame(),
         construct_alignment=pd.DataFrame(),
         construct_manifest={"validation_tier": "fixture"},
+        reporting_contract=_narrative_reporting_contract(),
     )
 
     assert str(external_output) not in narrative
@@ -383,6 +443,7 @@ def test_candidate_bridge_package_notes_and_narrative_are_nonassertive() -> None
         public_peer=pd.DataFrame(),
         construct_alignment=pd.DataFrame(),
         construct_manifest=construct_manifest,
+        reporting_contract=_narrative_reporting_contract(),
     )
     normalized = " ".join(" ".join([narrative, *language.values()]).lower().split())
 
@@ -397,6 +458,195 @@ def test_candidate_bridge_package_notes_and_narrative_are_nonassertive() -> None
         "support the integrated",
     ]:
         assert forbidden not in normalized
+
+
+@pytest.mark.parametrize("stem", ["table_04", "table_14"])
+def test_feature_family_tables_preserve_raw_csv_and_use_contract_display_labels(
+    tmp_path: Path,
+    stem: str,
+) -> None:
+    contract = _narrative_reporting_contract()
+    raw = pd.DataFrame({"Feature_Set": ["oversight"], "Mean_PR_AUC": ["0.1234"]})
+    display = raw.copy()
+    display["Feature_Set"] = display["Feature_Set"].map(
+        lambda value: manuscript_module._paper_display_name(value, contract)
+    )
+
+    records = manuscript_module._write_table_bundle(
+        raw,
+        display_df=display,
+        out_dir=tmp_path / "tables",
+        stem=stem,
+        caption="Feature family",
+        label=f"tab:{stem}",
+    )
+
+    assert pd.read_csv(tmp_path / records["csv"]["path"]).loc[0, "Feature_Set"] == "oversight"
+    for fmt in ["md", "tex"]:
+        rendered = (tmp_path / records[fmt]["path"]).read_text(encoding="utf-8")
+        assert "Prior-filing history (legacy artifact key: oversight)" in rendered
+
+
+def test_sample_attrition_table_preserves_raw_stage_and_displays_exact_proxy_label(
+    tmp_path: Path,
+) -> None:
+    contract = _narrative_reporting_contract()
+    raw = pd.DataFrame(
+        {
+            "Scope": ["sequential"],
+            "Stage": ["domestic_us_gaap_proxy"],
+            "Task": ["all"],
+            "Rows": [75],
+            "Dropped_From_Parent": [5],
+        }
+    )
+    display = raw.copy()
+    display["Stage"] = display["Stage"].map(
+        lambda value: manuscript_module._paper_display_name(value, contract)
+    )
+
+    records = manuscript_module._write_table_bundle(
+        raw,
+        display_df=display,
+        out_dir=tmp_path / "tables",
+        stem="table_18",
+        caption="Sample attrition",
+        label="tab:sample-attrition",
+    )
+
+    assert pd.read_csv(tmp_path / records["csv"]["path"]).loc[0, "Stage"] == (
+        "domestic_us_gaap_proxy"
+    )
+    expected = "10-K/10-K/A with no observed same-year FPI-form proxy"
+    for fmt in ["md", "tex"]:
+        assert expected in (tmp_path / records[fmt]["path"]).read_text(encoding="utf-8")
+
+
+def test_figure_display_labels_preserve_raw_fold_dot_matching(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import matplotlib.axes
+
+    scatter_calls: list[tuple[list[float], object]] = []
+    tick_labels: list[str] = []
+    original_scatter = matplotlib.axes.Axes.scatter
+    original_set_yticks = matplotlib.axes.Axes.set_yticks
+
+    def scatter_spy(self, x, y, *args, **kwargs):  # type: ignore[no-untyped-def]
+        scatter_calls.append((list(x), kwargs.get("s")))
+        return original_scatter(self, x, y, *args, **kwargs)
+
+    def set_yticks_spy(self, ticks, labels=None, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if labels is not None:
+            tick_labels.extend(str(label) for label in labels)
+        return original_set_yticks(self, ticks, labels, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.axes.Axes, "scatter", scatter_spy)
+    monkeypatch.setattr(matplotlib.axes.Axes, "set_yticks", set_yticks_spy)
+    display_name = "Prior-filing history (legacy artifact key: oversight)"
+    summary = pd.DataFrame(
+        {
+            "Feature_Set": ["oversight"],
+            "Display_Label": [display_name],
+            "mean": [0.2],
+            "ci_low": [0.1],
+            "ci_high": [0.3],
+        }
+    )
+    folds = pd.DataFrame(
+        {
+            "feature_set": ["oversight", "oversight"],
+            "fold_value": [0.18, 0.22],
+            "valid_metric": [True, True],
+        }
+    )
+
+    manuscript_module._plot_metric_with_uncertainty(
+        summary,
+        fold_df=folds,
+        summary_group_col="Feature_Set",
+        summary_label_col="Display_Label",
+        fold_group_col="feature_set",
+        title="Feature family",
+        ylabel="Mean PR-AUC",
+        out_path=tmp_path / "figure_02",
+    )
+
+    assert display_name in tick_labels
+    assert any(len(values) == 2 and size == 15 for values, size in scatter_calls)
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "constant_partner", "expected"),
+    [
+        (
+            True,
+            True,
+            [
+                "`diagnostic`",
+                "comment_thread=fit",
+                "fit outcomes: comment_thread",
+                "comment_thread=diagnostic",
+                "12 rows evaluated",
+                "0 nonzero",
+                "range [0, 0]",
+                "is_constant_zero=true",
+                "total_equals_item_402_for_all_rows=true",
+                "no standalone variation",
+            ],
+        ),
+        (
+            False,
+            False,
+            [
+                "`deferred`",
+                "no required outcome is currently fitted",
+                "fit outcomes: none",
+                "comment_thread=deferred",
+                "4 nonzero",
+                "range [0, 3]",
+                "is_constant_zero=false",
+                "total_equals_item_402_for_all_rows=false",
+                "varies in this vintage",
+            ],
+        ),
+    ],
+    ids=["diagnostic-constant", "deferred-varied"],
+)
+def test_results_narrative_uses_dml_and_partner_contract_without_ranking_language(
+    diagnostic: bool,
+    constant_partner: bool,
+    expected: list[str],
+) -> None:
+    narrative = _result_narrative(
+        manifest={
+            "generated_at_utc": "2026-07-10T00:00:00Z",
+            "components": {"public_cascade": {"out_dir": "artifacts/public_cascade"}},
+        },
+        public_summary={
+            "primary_specification": {"feature_set": "all", "train_window": "expanding"}
+        },
+        public_task=pd.DataFrame(
+            {
+                "Task": ["comment_thread", "amendment", "8k_402"],
+                "Mean_PR_AUC": ["0.3000", "0.2000", "0.1000"],
+            }
+        ),
+        benchmark_peer=pd.DataFrame({"Model": ["benchmark winner"], "Mean_PR_AUC": ["0.9999"]}),
+        public_peer=pd.DataFrame({"Model": ["public leader"], "Mean_PR_AUC": ["0.9999"]}),
+        construct_alignment=pd.DataFrame(),
+        construct_manifest={"validation_tier": "fixture"},
+        reporting_contract=_narrative_reporting_contract(
+            diagnostic=diagnostic,
+            constant_partner=constant_partner,
+        ),
+    ).lower()
+
+    for phrase in expected:
+        assert phrase in narrative
+    for forbidden in ["highest mean pr-auc", "leads on mean pr-auc", "winner", "leader"]:
+        assert forbidden not in narrative
 
 
 @pytest.mark.parametrize(
@@ -825,6 +1075,23 @@ def _selection_panel(rows: int, *, label: int) -> pd.DataFrame:
             "label_8k_402_365": [label] * rows,
         }
     )
+
+
+def test_selection_profile_names_observed_same_year_fpi_form_indicator(
+    tmp_path: Path,
+) -> None:
+    panel = _selection_panel(2, label=0)
+    panel["issuer_has_fpi_form_year"] = [0, 1]
+    panel_path = tmp_path / "issuer_origin_panel.parquet"
+    write_table(panel, panel_path)
+
+    selection = manuscript_module._selection_profile_table(panel_path)
+    fpi_rows = selection.loc[selection["Stratum"].eq("Observed same-year FPI-form indicator")]
+
+    assert fpi_rows["Group"].tolist() == [
+        "No observed 20-F/40-F/6-K",
+        "Observed 20-F/40-F/6-K",
+    ]
 
 
 def _write_bound_study_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict[str, Path]]:

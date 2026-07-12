@@ -145,13 +145,16 @@ SELECTION_PROFILE_NOTE = (
     "issuer profile variables. Parenthetical values in group labels are split thresholds, "
     "not sample sizes; XBRL log-asset strata are limited to observations with available "
     "XBRL asset values; days since prior filing refers to any prior EDGAR filing, "
-    "not only a prior annual report. The table is selection-aware evidence, not a causal "
+    "not only a prior annual report. The observed same-year FPI-form indicator records "
+    "whether a 20-F, 40-F, or 6-K is observed for the issuer fiscal year; it does not "
+    "validate FPI status or domicile. The table is selection-aware evidence, not a causal "
     "adjustment model or proof that SEC scrutiny selection has been solved."
 )
 PUBLIC_ATTRITION_NOTE = (
     "Sequential rows compare with the preceding sample-construction stage. Task rows "
     "branch from observable_365_day_horizon and therefore compare with that common "
-    "observable parent rather than with one another."
+    "observable parent rather than with one another. The 10-K/10-K/A same-year "
+    "FPI-form proxy validates neither FPI status, domicile, nor US GAAP."
 )
 
 
@@ -618,6 +621,18 @@ def _dispersion_text(row: pd.Series) -> str:
 
 def _table_view(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return df[[col for col in columns if col in df.columns]].copy()
+
+
+def _paper_display_name(value: object, reporting_contract: dict[str, Any]) -> str:
+    raw = str(value)
+    family = reporting_contract.get("feature_family_summary", {}).get(raw, {})
+    if isinstance(family, dict) and family.get("display_name"):
+        return str(family["display_name"])
+    if raw == "domestic_us_gaap_proxy":
+        proxy = reporting_contract.get("reporting_boundaries", {}).get("sample_proxy", {})
+        if isinstance(proxy, dict) and proxy.get("display_name"):
+            return str(proxy["display_name"])
+    return raw
 
 
 def _bound_input_path(record: Any, key: str) -> Path:
@@ -1341,8 +1356,16 @@ def _selection_profile_table(panel_path: Path) -> pd.DataFrame:
     )
     add_profile("Annual form", "10-K", panel["form"].astype("string").eq("10-K"))
     add_profile("Annual form", "10-K/A", panel["form"].astype("string").eq("10-K/A"))
-    add_profile("Foreign issuer proxy", "No FPI-year flag", panel["issuer_has_fpi_form_year"].fillna(0).eq(0))
-    add_profile("Foreign issuer proxy", "FPI-year flag", panel["issuer_has_fpi_form_year"].fillna(0).eq(1))
+    add_profile(
+        "Observed same-year FPI-form indicator",
+        "No observed 20-F/40-F/6-K",
+        panel["issuer_has_fpi_form_year"].fillna(0).eq(0),
+    )
+    add_profile(
+        "Observed same-year FPI-form indicator",
+        "Observed 20-F/40-F/6-K",
+        panel["issuer_has_fpi_form_year"].fillna(0).eq(1),
+    )
 
     out = pd.DataFrame(rows)
     if out.empty:
@@ -1394,6 +1417,7 @@ def _plot_metric_with_uncertainty(
     *,
     fold_df: pd.DataFrame,
     summary_group_col: str,
+    summary_label_col: str | None = None,
     fold_group_col: str,
     title: str,
     ylabel: str,
@@ -1411,7 +1435,8 @@ def _plot_metric_with_uncertainty(
     plot_df["ci_low_num"] = pd.to_numeric(plot_df["ci_low"], errors="coerce")
     plot_df["ci_high_num"] = pd.to_numeric(plot_df["ci_high"], errors="coerce")
     plot_df = plot_df.sort_values("mean_num", ascending=False)
-    labels = plot_df[summary_group_col].astype(str)
+    label_col = summary_label_col or summary_group_col
+    labels = plot_df[label_col].astype(str)
     horizontal = labels.map(len).max() > 14
     rng = np.random.default_rng(20260526)
     fig, ax = plt.subplots(figsize=(7.2, 4.6 if horizontal else 4.2))
@@ -1430,7 +1455,7 @@ def _plot_metric_with_uncertainty(
             )
         else:
             ax.barh(y_pos, plot_df["mean_num"], color=color, edgecolor="#1f2933", linewidth=0.6)
-        ax.set_yticks(y_pos, plot_df[summary_group_col].astype(str))
+        ax.set_yticks(y_pos, plot_df[label_col].astype(str))
         for idx, row in plot_df.iterrows():
             if pd.notna(row["ci_low_num"]) and pd.notna(row["ci_high_num"]):
                 ax.errorbar(
@@ -1466,7 +1491,7 @@ def _plot_metric_with_uncertainty(
             )
         else:
             ax.bar(x_pos, plot_df["mean_num"], color=color, edgecolor="#1f2933", linewidth=0.6)
-        ax.set_xticks(x_pos, plot_df[summary_group_col].astype(str))
+        ax.set_xticks(x_pos, plot_df[label_col].astype(str))
         for idx, row in plot_df.iterrows():
             if pd.notna(row["ci_low_num"]) and pd.notna(row["ci_high_num"]):
                 ax.errorbar(
@@ -1600,6 +1625,7 @@ def _result_narrative(
     public_peer: pd.DataFrame,
     construct_alignment: pd.DataFrame,
     construct_manifest: dict[str, Any],
+    reporting_contract: dict[str, Any],
 ) -> str:
     primary_public = _package_primary_identity(public_summary)[
         "primary_public_specification"
@@ -1610,13 +1636,50 @@ def _result_narrative(
     comment_row = public_task[public_task["Task"].eq("comment_thread")].head(1)
     amendment_row = public_task[public_task["Task"].eq("amendment")].head(1)
     severe_row = public_task[public_task["Task"].eq("8k_402")].head(1)
-    benchmark_leader = benchmark_peer.iloc[0] if not benchmark_peer.empty else None
-    public_peer_leader = public_peer.iloc[0] if not public_peer.empty else None
     bridge_language = _bridge_language(manifest, construct_manifest)
     validation_tier = bridge_language["tier"]
     generated = manifest.get("generated_at_utc", "")
     public_out_dir = manifest.get("components", {}).get("public_cascade", {}).get("out_dir", "")
     public_out_dir_display = _rel(public_out_dir) if public_out_dir else ""
+    dml_evidence = reporting_contract["opacity_dml_evidence"]
+    required_outcomes = dml_evidence["required_outcomes"]
+    status_by_outcome = dml_evidence["status_by_outcome"]
+    fit_outcomes = dml_evidence["fit_outcomes"]
+    maturity_by_outcome = dml_evidence["maturity_by_outcome"]
+    dml_maturity = reporting_contract["claim_maturity"]["opacity_dml"]
+    required_display = ", ".join(required_outcomes)
+    statuses_display = ", ".join(
+        f"{outcome}={status_by_outcome[outcome]}" for outcome in required_outcomes
+    )
+    fit_display = ", ".join(fit_outcomes) if fit_outcomes else "none"
+    maturities_display = ", ".join(
+        f"{outcome}={maturity_by_outcome[outcome]}" for outcome in required_outcomes
+    )
+    if dml_maturity == "diagnostic":
+        dml_boundary = (
+            "Fitted estimates are adjusted-association diagnostics only, not identified "
+            "structural or causal effects."
+        )
+    else:
+        dml_boundary = (
+            "No required outcome is currently fitted; the adjusted-association analysis "
+            "therefore remains deferred."
+        )
+    partner = reporting_contract["reporting_boundaries"][
+        "partner_nonadministrative_amendment"
+    ]
+    partner_constant = str(partner["is_constant_zero"]).lower()
+    partner_equal = str(partner["total_equals_item_402_for_all_rows"]).lower()
+    if partner["is_constant_zero"] is True:
+        partner_boundary = (
+            "The statistic has no standalone variation in this vintage and cannot support "
+            "a standalone partner-history inference."
+        )
+    else:
+        partner_boundary = (
+            "The statistic varies in this vintage, but remains a descriptive filing-history "
+            "input rather than evidence of a causal partner effect."
+        )
 
     def value(row: pd.DataFrame, col: str) -> str:
         if row.empty:
@@ -1648,17 +1711,31 @@ def _result_narrative(
         f"a clear correction/friction channel (mean PR-AUC `{value(amendment_row, 'Mean_PR_AUC')}`), "
         f"and 8-K Item 4.02 is rarer but still rankable (mean PR-AUC `{value(severe_row, 'Mean_PR_AUC')}`).",
         "",
+        "## Opacity Adjusted-Association Diagnostic",
+        "",
+        f"The reporting contract classifies opacity DML as `{dml_maturity}`. Required "
+        f"outcomes: {required_display}; raw statuses: {statuses_display}; fit outcomes: "
+        f"{fit_display}; outcome maturities: {maturities_display}. {dml_boundary}",
+        "",
+        "## Partner-History Boundary",
+        "",
+        f"The partner nonadministrative-amendment statistic is scoped to "
+        f"`{partner['scope']}`: {partner['rows_evaluated']} rows evaluated, "
+        f"{partner['nonmissing_rows']} nonmissing, {partner['nonzero_rows']} nonzero, "
+        f"{partner['n_distinct_nonmissing']} distinct nonmissing values, and range "
+        f"[{partner['minimum']}, {partner['maximum']}]. The artifact records "
+        f"is_constant_zero={partner_constant}, "
+        f"total_equals_item_402_rows={partner['total_equals_item_402_rows']}, and "
+        f"total_equals_item_402_for_all_rows={partner_equal}. {partner_boundary}",
+        "",
         "## Peer-Compatible Model Families",
         "",
         "The peer suites are model-family transfer exercises. They align the public "
         "reporting-risk task with familiar Dechow, Perols, Bao, and Bertomeu-style "
-        "vocabularies without claiming original-paper numeric replication. In the "
-        f"detected-misstatement peer benchmark, `{benchmark_leader['Model'] if benchmark_leader is not None else 'n/a'}` "
-        f"has the highest mean PR-AUC (`{benchmark_leader['Mean_PR_AUC'] if benchmark_leader is not None else 'n/a'}`). "
-        f"In the public-label peer suite, `{public_peer_leader['Model'] if public_peer_leader is not None else 'n/a'}` "
-        f"leads on mean PR-AUC (`{public_peer_leader['Mean_PR_AUC'] if public_peer_leader is not None else 'n/a'}`). "
-        "These comparisons should be read within task and estimand, not as cross-"
-        "estimand performance rankings against prior fraud-prediction papers.",
+        "vocabularies without claiming original-paper numeric replication. Reported "
+        "metrics document within-task model-family transfer and metric-language "
+        "alignment. They should not be read as cross-estimand performance rankings "
+        "against prior fraud-prediction papers.",
         "",
         "## Construct-Overlap Evidence",
         "",
@@ -1908,6 +1985,52 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
     public_opacity_dml = _public_opacity_dml_table(study_dir)
     component_status = _component_status(manifest, bridge_language)
 
+    feature_family_display = _table_view(
+        feature_family,
+        [
+            "Feature_Set",
+            "Features",
+            "XBRL_Ratios",
+            "XBRL_Coverage",
+            "Best_Window",
+            "n_folds",
+            "valid_folds",
+            "Mean_PR_AUC",
+            "PR_AUC_Dispersion",
+            "Mean_ROC_AUC",
+        ],
+    )
+    feature_family_display["Feature_Set"] = feature_family_display["Feature_Set"].map(
+        lambda value: _paper_display_name(value, reporting_contract)
+    )
+    task_feature_family_display = _table_view(
+        task_feature_family,
+        [
+            "Task",
+            "Feature_Set",
+            "n_folds",
+            "valid_folds",
+            "Mean_Prevalence",
+            "Mean_PR_AUC",
+            "PR_AUC_Dispersion",
+            "Mean_ROC_AUC",
+            "Mean_Brier_Skill",
+            "Mean_ECE",
+        ],
+    )
+    if "Feature_Set" in task_feature_family_display:
+        task_feature_family_display["Feature_Set"] = task_feature_family_display[
+            "Feature_Set"
+        ].map(lambda value: _paper_display_name(value, reporting_contract))
+    public_sample_attrition_display = public_sample_attrition.copy()
+    public_sample_attrition_display["Stage"] = public_sample_attrition_display["Stage"].map(
+        lambda value: _paper_display_name(value, reporting_contract)
+    )
+    feature_family_plot = feature_family.copy()
+    feature_family_plot["Display_Label"] = feature_family_plot["Feature_Set"].map(
+        lambda value: _paper_display_name(value, reporting_contract)
+    )
+
     public_task_folds = _annual_fold_frame(public_primary_metrics, ["task"])
     feature_family_folds = _annual_fold_frame(public_metrics, ["feature_set"])
     benchmark_peer_folds = _annual_fold_frame(benchmark_peer_metrics, ["peer_model_id"])
@@ -1961,21 +2084,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             caption="Public cascade feature-family metrics",
             label="tab:feature-family-metrics",
             note=FEATURE_FAMILY_NOTE,
-            display_df=_table_view(
-                feature_family,
-                [
-                    "Feature_Set",
-                    "Features",
-                    "XBRL_Ratios",
-                    "XBRL_Coverage",
-                    "Best_Window",
-                    "n_folds",
-                    "valid_folds",
-                    "Mean_PR_AUC",
-                    "PR_AUC_Dispersion",
-                    "Mean_ROC_AUC",
-                ],
-            ),
+            display_df=feature_family_display,
         ),
         "table_05": _write_table_bundle(
             benchmark_timing,
@@ -2091,21 +2200,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             caption="Task-by-feature-family public-cascade metrics",
             label="tab:task-feature-family",
             note=TASK_FEATURE_NOTE,
-            display_df=_table_view(
-                task_feature_family,
-                [
-                    "Task",
-                    "Feature_Set",
-                    "n_folds",
-                    "valid_folds",
-                    "Mean_Prevalence",
-                    "Mean_PR_AUC",
-                    "PR_AUC_Dispersion",
-                    "Mean_ROC_AUC",
-                    "Mean_Brier_Skill",
-                    "Mean_ECE",
-                ],
-            ),
+            display_df=task_feature_family_display,
         )
     if not bridge_overlap.empty:
         table_manifest["table_15"] = _write_table_bundle(
@@ -2150,6 +2245,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
         caption="Public sample attrition and task eligibility",
         label="tab:public-sample-attrition",
         note=PUBLIC_ATTRITION_NOTE,
+        display_df=public_sample_attrition_display,
     )
     if not public_opacity_dml.empty:
         table_manifest["table_12"] = _write_table_bundle(
@@ -2189,9 +2285,10 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             color="#2a9d8f",
         ),
         "figure_02": _plot_metric_with_uncertainty(
-            feature_family,
+            feature_family_plot,
             fold_df=feature_family_folds,
             summary_group_col="Feature_Set",
+            summary_label_col="Display_Label",
             fold_group_col="feature_set",
             title="Feature-family comparison",
             ylabel="Mean PR-AUC",
@@ -2236,6 +2333,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             public_peer=public_peer,
             construct_alignment=construct_alignment,
             construct_manifest=construct_manifest,
+            reporting_contract=reporting_contract,
         ),
         encoding="utf-8",
     )
