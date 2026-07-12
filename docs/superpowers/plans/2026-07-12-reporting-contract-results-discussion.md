@@ -240,7 +240,7 @@ Commit message: `feat(reporting): attest package claim contract`.
 - Consumes: the Task 3 reporting contract and existing package tables/figures/narrative.
 - Produces: safe paper-facing display labels and artifact-derived DML/partner caveats while preserving raw CSV keys.
 
-- [ ] **Step 1: Write RED display and narrative tests**
+- [x] **Step 1: Write RED display and narrative tests**
 
 Require Tables 4/14 to display family names while their CSV `Feature_Set` keys remain raw.
 Require Figure 2 fold dots to remain after tick-label substitution. Require Table 17 to
@@ -248,7 +248,7 @@ describe the observed same-year FPI-form indicator and Table 18 to display the e
 proxy label. Require diagnostic/deferred DML and constant/varied partner narrative cases;
 forbid `highest mean PR-AUC`, `leads on mean PR-AUC`, `winner`, and `leader` prose.
 
-- [ ] **Step 2: Add one scalar display-name helper**
+- [x] **Step 2: Add one scalar display-name helper**
 
 Use the upstream `feature_family_summary` display name in Markdown/LaTeX and plot ticks only.
 Preserve raw keys for CSVs and Figure 2 fold-row matching. Table 17 owns the observed
@@ -256,13 +256,13 @@ Preserve raw keys for CSVs and Figure 2 fold-row matching. Table 17 owns the obs
 its raw stage `domestic_us_gaap_proxy` to the contract display name only in Markdown/LaTeX;
 the contract artifact field is `is_domestic_us_gaap_proxy` and is not the raw stage key.
 
-- [ ] **Step 3: Generate caveats from the contract**
+- [x] **Step 3: Generate caveats from the contract**
 
 Build DML prose from all four evidence fields plus aggregate maturity. Build the partner
 caveat from scope/count/range/constant/equality fields. Remove ranking language while
 retaining the peer transfer/estimand boundary.
 
-- [ ] **Step 4: Run package tests, full related suites, Ruff/format/diff, and commit**
+- [x] **Step 4: Run package tests, full related suites, Ruff/format/diff, and commit**
 
 Commit message: `fix(reporting): align package labels and caveats`.
 
@@ -274,7 +274,9 @@ Commit message: `fix(reporting): align package labels and caveats`.
 - Modify: `docs/paper_plan.md`
 - Modify: `scripts/refresh_results_snapshot.py`
 - Modify: `tests/test_docs.py`
-- Modify only if needed for stable links: `docs/faq.md`
+
+`docs/faq.md` requires no change: its links target the page rather than removed gallery
+fragments. Do not add a legacy package-v1 compatibility branch.
 
 **Interfaces:**
 - Consumes: package `reporting_contract`, its 16 Markdown tables and 5 PNG figures, and dynamic experiment-only artifacts.
@@ -282,17 +284,38 @@ Commit message: `fix(reporting): align package labels and caveats`.
 
 - [ ] **Step 1: Write RED structure/ownership/wording tests**
 
-Assert six ordered experiment sections, an interpretation subsection for each, a conventional Discussion spine, and every package artifact exactly once in its declared owner section. Assert absence of gallery headings, `Highest equal-task`, `Sellable claim`, paper-facing `Max config PR-AUC`, `Domestic US GAAP only`, and inspection-as-predictor prose.
+Assert six ordered experiment sections, an interpretation subsection for each, a conventional
+Discussion spine, provenance last, and every package artifact exactly once in its declared
+owner section. Use a package-v2 fixture with the reporting contract; the checked-in historical
+study/package is v1 and cannot prove this structure. Assert absence of gallery headings,
+`Highest equal-task`, `Sellable claim`, paper-facing `Max config PR-AUC`, `Domestic US GAAP
+only`, and inspection-as-predictor prose. Static tests must not require the checked-in generated
+snapshot to change before Task 6.
 
 - [ ] **Step 2: Tighten `paper_plan.md` without rewriting its valid spine**
 
-Keep Introduction, Materials and Methods, Mermaid preprocessing flow, models, metric rationale, six expected experiments, and reproducibility contract. Move Tables 4/14 from Experiment 2 to Experiment 5; mark DML diagnostic; add source/feature readiness to Experiment 4; keep only `all + expanding` as headline; state the five claim boundaries verbatim.
+Keep Introduction, Materials and Methods, Mermaid preprocessing flow, models, metric rationale,
+six expected experiments, and reproducibility contract. Make the Introduction explicitly cover
+overview and motivation, prior literature and current evidence, the gap, research question, and
+bounded contributions. Make Materials and Methods explicitly cover institutional/data context,
+preprocessing/pretreatment/features, ours and benchmark models, and metric-selection rationale.
+Move Tables 4/14 from Experiment 2 to Experiment 5; make Experiment 2 dynamic-only; mark DML
+diagnostic only when at least one required outcome is fit; add source/feature readiness to
+Experiment 4; keep only `all + expanding` as headline; state the five claim boundaries verbatim.
 
 - [ ] **Step 3: Rewrite only the snapshot assembly layer**
 
-Keep existing data loaders/calculations that do not duplicate package displays. Replace the gallery assembly with owner-directed `render_table(key)` and `render_figure(key)` calls. Keep dynamic window, break, feature-importance, readiness/skip, aggregation, co-occurrence, and event-time results in their experiments. Put provenance last.
+Keep existing data loaders/calculations that do not duplicate package displays. Replace the
+gallery assembly with singular owner-directed `render_table(key)` and `render_figure(key)` calls
+driven by `manifest.reporting_contract.artifact_ownership`. Keep dynamic benchmark-panel,
+window, break, feature-importance, readiness/skip, per-task peer, exploratory-maxima,
+aggregation, co-occurrence, and event-time results in their experiments. Remove raw displays
+duplicated by package owners. Put provenance last and render Table 1 there.
 
-- [ ] **Step 4: Run docs tests, generate a temporary snapshot from the latest historical study, build MkDocs strict, full suite, Ruff/format/diff, and commit**
+- [ ] **Step 4: Run docs tests against fixture-generated output, build MkDocs strict, full suite, Ruff/format/diff, and commit**
+
+Do not regenerate the tracked `docs/results_snapshot.md` from the historical package v1. Task 6
+owns the first real package-v2 snapshot refresh and the constrained report child commit.
 
 Commit message: `docs: align plan and generated results discussion`.
 
