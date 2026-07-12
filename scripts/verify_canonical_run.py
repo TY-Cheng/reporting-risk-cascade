@@ -37,7 +37,7 @@ from src.provenance import (  # noqa: E402
 
 
 ATTESTATION_SCHEMA = "canonical-attestation-v1"
-VERIFIER_VERSION = "4"
+VERIFIER_VERSION = "5"
 RUNTIME_CONTRACT = {
     "parallel_jobs": 4,
     "model_threads": 2,
@@ -115,6 +115,7 @@ POST_ENCODING_DML_STATUSES = {
     "fit",
     "skipped_constant_residual_treatment",
 }
+REQUIRED_DML_OUTCOMES = ["comment_thread", "amendment", "8k_402"]
 SOURCE_INVENTORY_BASE_FIELDS = {"metadata_file", "metadata_sha256"}
 SOURCE_INVENTORY_SIDECAR_FIELDS = SOURCE_INVENTORY_BASE_FIELDS | {
     "source_name",
@@ -430,6 +431,26 @@ def _dml_matches(
         ):
             return False
     return True
+
+
+def _artifact_dml_evidence(dml: pd.DataFrame) -> dict[str, Any] | None:
+    if not {"outcome", "status"} <= set(dml):
+        return None
+    outcomes = dml["outcome"].astype(str).tolist()
+    if outcomes != REQUIRED_DML_OUTCOMES:
+        return None
+    status_by_outcome = dict(zip(outcomes, dml["status"].astype(str), strict=True))
+    return {
+        "required_outcomes": REQUIRED_DML_OUTCOMES,
+        "status_by_outcome": status_by_outcome,
+        "fit_outcomes": [
+            outcome for outcome, status in status_by_outcome.items() if status == "fit"
+        ],
+        "maturity_by_outcome": {
+            outcome: "diagnostic" if status == "fit" else "deferred"
+            for outcome, status in status_by_outcome.items()
+        },
+    }
 
 
 TABLE_03_REQUIRED = {
@@ -1104,6 +1125,17 @@ def _semantic_errors(
     public_component = _as_object(
         components.get("public_cascade"), "public-cascade component object", errors
     )
+    package_reporting_contract = _as_object(
+        package_manifest.get("reporting_contract"), "package reporting contract object", errors
+    )
+    artifact_dml_evidence = _artifact_dml_evidence(dml)
+    artifact_dml_maturity = (
+        "diagnostic"
+        if public_component.get("status") == "complete"
+        and artifact_dml_evidence is not None
+        and artifact_dml_evidence["fit_outcomes"]
+        else "deferred"
+    )
     bridge_component = _as_object(
         components.get("bridge_probe"), "bridge component object", errors
     )
@@ -1141,12 +1173,19 @@ def _semantic_errors(
         "public source inventory": _source_inventory_is_valid(
             public_lake.get("source_metadata_inventory")
         ),
+        "artifact-derived DML evidence": artifact_dml_evidence is not None
+        and public_summary.get("opacity_dml_evidence") == artifact_dml_evidence
+        and public_component.get("opacity_dml_evidence") == artifact_dml_evidence
+        and package_reporting_contract.get("opacity_dml_evidence") == artifact_dml_evidence,
+        "artifact-derived DML maturity": artifact_dml_evidence is not None
+        and claim_maturity.get("opacity_dml") == artifact_dml_maturity
+        and package_reporting_contract.get("claim_maturity") == claim_maturity,
         "claim maturity": claim_maturity
         == {
             "public_prediction": "reportable",
             "feature_and_window_sensitivity": "supporting",
             "construct_alignment": "supporting",
-            "opacity_dml": "diagnostic",
+            "opacity_dml": artifact_dml_maturity,
         },
         "study commit": _is_hex(manifest.get("repo_commit"), 40),
         "provenance commit": _is_hex(provenance.get("commit_sha"), 40),

@@ -32,6 +32,9 @@ REQUIRED_ARTIFACTS = [
     "benchmark/benchmark_summary.md",
     "public_cascade/public_cascade_summary.json",
     "public_cascade/public_cascade_metrics.csv",
+    "public_cascade/public_cascade_task_status.csv",
+    "public_cascade/public_opacity_dml.csv",
+    "public_cascade/public_opacity_dml_meta.json",
     "peer_comparison/detected_misstatement_model_family_metrics.csv",
     "peer_comparison/peer_task_status.csv",
     "public_peer_comparison/public_model_family_metrics.csv",
@@ -48,12 +51,27 @@ REQUIRED_ARTIFACTS = [
 
 MIN_VALID_FOLDS_FOR_CI = 5
 SPARSE_POSITIVE_THRESHOLD = 10
-MANUSCRIPT_PACKAGE_SCHEMA = "manuscript-package-v1"
+MANUSCRIPT_PACKAGE_SCHEMA = "manuscript-package-v2"
 PACKAGE_TABLE_KEYS = {
     *(f"table_{index:02d}" for index in range(1, 10)),
     *(f"table_{index:02d}" for index in range(12, 19)),
 }
 PACKAGE_FIGURE_KEYS = {f"figure_{index:02d}" for index in range(1, 6)}
+ARTIFACT_OWNERSHIP = {
+    "reproducibility": {"tables": ["table_01"], "figures": []},
+    "experiment_1": {"tables": ["table_05", "table_06"], "figures": ["figure_03"]},
+    "experiment_2": {"tables": [], "figures": []},
+    "experiment_3": {"tables": ["table_12"], "figures": []},
+    "experiment_4": {"tables": ["table_02", "table_18"], "figures": []},
+    "experiment_5": {
+        "tables": ["table_03", "table_04", "table_07", "table_13", "table_14", "table_17"],
+        "figures": ["figure_01", "figure_02", "figure_04"],
+    },
+    "experiment_6": {
+        "tables": ["table_08", "table_09", "table_15", "table_16"],
+        "figures": ["figure_05"],
+    },
+}
 
 ANNUAL_INTERVAL_NOTE = (
     "PR-AUC dispersion entries are descriptive fold-dispersion intervals over "
@@ -238,6 +256,63 @@ def _bridge_claim_boundary(bridge_language: dict[str, str]) -> dict[str, str | b
         "construct_overlap_artifact_tier": bridge_language["artifact_tier"],
         "causal_claims_supported": False,
         "unobserved_true_fraud_claims_supported": False,
+    }
+
+
+def _validate_artifact_ownership(
+    ownership: object,
+    *,
+    table_keys: set[str],
+    figure_keys: set[str],
+) -> None:
+    if ownership != ARTIFACT_OWNERSHIP:
+        raise ValueError(
+            "reporting contract artifact ownership must match the exact ownership map"
+        )
+    tables = [key for owner in ARTIFACT_OWNERSHIP.values() for key in owner["tables"]]
+    figures = [key for owner in ARTIFACT_OWNERSHIP.values() for key in owner["figures"]]
+    if (
+        len(tables) != len(set(tables))
+        or set(tables) != table_keys
+        or len(figures) != len(set(figures))
+        or set(figures) != figure_keys
+    ):
+        raise ValueError("reporting contract artifact ownership must own every artifact once")
+
+
+def _reporting_contract(
+    study_manifest: dict[str, Any],
+    public_summary: dict[str, Any],
+) -> dict[str, Any]:
+    components = study_manifest.get("components")
+    if type(components) is not dict:
+        raise ValueError("components must be an object")
+    public_component = components.get("public_cascade")
+    if type(public_component) is not dict:
+        raise ValueError("public-cascade component must be an object for reporting contract")
+    summary_evidence = public_summary.get("opacity_dml_evidence")
+    component_evidence = public_component.get("opacity_dml_evidence")
+    if type(summary_evidence) is not dict or summary_evidence != component_evidence:
+        raise ValueError("public summary DML evidence must equal the public component copy")
+    reporting_boundaries = public_summary.get("reporting_boundaries")
+    feature_family_summary = public_summary.get("feature_family_summary")
+    claim_maturity = study_manifest.get("claim_maturity")
+    if not all(
+        type(value) is dict
+        for value in (reporting_boundaries, feature_family_summary, claim_maturity)
+    ):
+        raise ValueError("reporting contract sources must be objects")
+    _validate_artifact_ownership(
+        ARTIFACT_OWNERSHIP,
+        table_keys=PACKAGE_TABLE_KEYS,
+        figure_keys=PACKAGE_FIGURE_KEYS,
+    )
+    return {
+        "reporting_boundaries": reporting_boundaries,
+        "feature_family_summary": feature_family_summary,
+        "opacity_dml_evidence": component_evidence,
+        "claim_maturity": claim_maturity,
+        "artifact_ownership": ARTIFACT_OWNERSHIP,
     }
 
 
@@ -1682,6 +1757,27 @@ def _validate_package_tree(
     figures = manifest.get("figures")
     if type(figures) is not dict or set(figures) != PACKAGE_FIGURE_KEYS:
         raise ValueError(f"package figures keys must be exactly {sorted(PACKAGE_FIGURE_KEYS)}")
+    public_summary = _read_json(
+        Path(study_manifest_path).parent / "public_cascade" / "public_cascade_summary.json"
+    )
+    expected_contract = _reporting_contract(study_manifest, public_summary)
+    reporting_contract = manifest.get("reporting_contract")
+    if type(reporting_contract) is not dict or set(reporting_contract) != set(expected_contract):
+        raise ValueError("package reporting contract must exactly match upstream facts")
+    if reporting_contract != expected_contract:
+        unchanged = {
+            key
+            for key in expected_contract
+            if key != "claim_maturity" and reporting_contract.get(key) == expected_contract[key]
+        }
+        if unchanged == set(expected_contract) - {"claim_maturity"}:
+            raise ValueError("claim maturity")
+        raise ValueError("package reporting contract must exactly match upstream facts")
+    _validate_artifact_ownership(
+        reporting_contract["artifact_ownership"],
+        table_keys=set(tables),
+        figure_keys=set(figures),
+    )
 
     declared: set[str] = set()
     for key, formats in tables.items():
@@ -1779,6 +1875,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
         study_manifest_path=study_manifest_path,
     )
     public_summary = _read_json(study_dir / "public_cascade" / "public_cascade_summary.json")
+    reporting_contract = _reporting_contract(manifest, public_summary)
     construct_manifest = _read_json(study_dir / "construct_overlap" / "construct_overlap_manifest.json")
     bridge_language = _bridge_language(manifest, construct_manifest)
     public_metrics = _read_csv(study_dir / "public_cascade" / "public_cascade_metrics.csv")
@@ -2152,6 +2249,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
         "tables": table_manifest,
         "figures": figure_manifest,
         "narrative": _artifact_record(narrative_path, out_dir),
+        "reporting_contract": reporting_contract,
         "uncertainty": {
             "annual_metric_interval": "descriptive fold-dispersion interval over valid annual out-of-time fold means when valid_folds >= 5",
             "sparse_fold_rule": f"folds with positive count < {SPARSE_POSITIVE_THRESHOLD} are excluded from dispersion calculations and listed in excluded_sparse_years",

@@ -82,6 +82,23 @@ def test_r4_exact_precommit_surface_is_a_valid_r3_fixture(tmp_path: Path) -> Non
     assert _verify(fixture) == []
 
 
+def test_r5_accepts_all_skipped_dml_with_deferred_maturity(tmp_path: Path) -> None:
+    fixture = canonical_fixture(
+        tmp_path,
+        dml_statuses=(
+            "skipped_one_class_or_too_small",
+            "skipped_missing_label_or_censor",
+            "skipped_constant_treatment",
+        ),
+    )
+
+    assert _verify(fixture) == []
+    package_manifest = json.loads(fixture["package_manifest"].read_text(encoding="utf-8"))
+    contract = package_manifest["reporting_contract"]
+    assert contract["opacity_dml_evidence"]["fit_outcomes"] == []
+    assert contract["claim_maturity"]["opacity_dml"] == "deferred"
+
+
 def test_canonical_suite_is_in_core_gate_exactly_once() -> None:
     justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text(encoding="utf-8")
     core = justfile.split("\n_test-core:\n", 1)[1].split("\n_test-public-lake:", 1)[0]
@@ -505,6 +522,98 @@ def test_r4_shared_collector_preserves_research_semantic_gates(
     assert message in _verify(fixture)
 
 
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("reporting_boundaries", "sample_proxy", "validates_us_gaap"), True),
+        (("feature_family_summary", "oversight", "model_eligible_features"), []),
+        (
+            (
+                "reporting_boundaries",
+                "pcaob_inspection_predictors",
+                "inspection_event_joined_to_gold",
+            ),
+            True,
+        ),
+        (
+            (
+                "reporting_boundaries",
+                "partner_nonadministrative_amendment",
+                "nonzero_rows",
+            ),
+            0,
+        ),
+        (("opacity_dml_evidence", "fit_outcomes"), []),
+        (("claim_maturity", "opacity_dml"), "deferred"),
+        (("artifact_ownership", "experiment_3", "tables"), ["table_12", "table_01"]),
+    ],
+    ids=[
+        "proxy-flag",
+        "oversight-features",
+        "inspection-status",
+        "partner-variation",
+        "dml-evidence",
+        "dml-maturity",
+        "ownership",
+    ],
+)
+def test_r5_rejects_package_reporting_contract_mutation(
+    tmp_path: Path,
+    path: tuple[str, ...],
+    replacement: object,
+) -> None:
+    fixture = canonical_fixture(tmp_path)
+    package_manifest = json.loads(fixture["package_manifest"].read_text(encoding="utf-8"))
+    cursor = package_manifest["reporting_contract"]
+    for key in path[:-1]:
+        cursor = cursor[key]
+    cursor[path[-1]] = replacement
+    _write_json(fixture["package_manifest"], package_manifest)
+
+    error = _verify(fixture)[0]
+    expected = "claim maturity" if path[0] == "claim_maturity" else "reporting contract"
+    assert expected in error
+
+
+def test_r5_rejects_coordinated_dml_evidence_forgery(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    public_summary = json.loads(fixture["public"].read_text(encoding="utf-8"))
+    forged_evidence = public_summary["opacity_dml_evidence"]
+    forged_evidence["status_by_outcome"] = {
+        outcome: "fit" for outcome in forged_evidence["required_outcomes"]
+    }
+    forged_evidence["fit_outcomes"] = list(forged_evidence["required_outcomes"])
+    forged_evidence["maturity_by_outcome"] = {
+        outcome: "diagnostic" for outcome in forged_evidence["required_outcomes"]
+    }
+    _write_json(fixture["public"], public_summary)
+
+    study_manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    study_manifest["components"]["public_cascade"]["opacity_dml_evidence"] = forged_evidence
+    _write_json(fixture["manifest"], study_manifest)
+
+    package_manifest = json.loads(fixture["package_manifest"].read_text(encoding="utf-8"))
+    package_manifest["reporting_contract"]["opacity_dml_evidence"] = forged_evidence
+    package_manifest["study_manifest_sha256"] = sha256_path(fixture["manifest"])
+    _write_json(fixture["package_manifest"], package_manifest)
+
+    assert "artifact-derived DML evidence" in _verify(fixture)
+
+
+def test_r5_rejects_coordinated_dml_maturity_forgery(tmp_path: Path) -> None:
+    fixture = canonical_fixture(tmp_path)
+    study_manifest = json.loads(fixture["manifest"].read_text(encoding="utf-8"))
+    study_manifest["claim_maturity"]["opacity_dml"] = "deferred"
+    _write_json(fixture["manifest"], study_manifest)
+
+    package_manifest = json.loads(fixture["package_manifest"].read_text(encoding="utf-8"))
+    package_manifest["reporting_contract"]["claim_maturity"]["opacity_dml"] = "deferred"
+    package_manifest["study_manifest_sha256"] = sha256_path(fixture["manifest"])
+    _write_json(fixture["package_manifest"], package_manifest)
+
+    assert "artifact-derived DML maturity" in _verify(fixture)
+
+
 def test_r4_rejects_unpaired_construct_tier(tmp_path: Path) -> None:
     fixture = canonical_fixture(tmp_path)
     construct = json.loads(fixture["construct"].read_text(encoding="utf-8"))
@@ -513,7 +622,7 @@ def test_r4_rejects_unpaired_construct_tier(tmp_path: Path) -> None:
     assert "paired bridge tier" in _verify(fixture)[0]
 
 
-def test_r4_cli_writes_complete_sanitized_atomic_attestation(tmp_path: Path) -> None:
+def test_r5_cli_writes_complete_sanitized_atomic_attestation(tmp_path: Path) -> None:
     fixture = canonical_fixture(tmp_path)
     completed = _run_cli(fixture)
     assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -543,7 +652,8 @@ def test_r4_cli_writes_complete_sanitized_atomic_attestation(tmp_path: Path) -> 
         "report_surface",
     }
     assert attestation["schema_version"] == "canonical-attestation-v1"
-    assert attestation["verifier_version"] == "4"
+    assert attestation["verifier_version"] == "5"
+    assert "reporting_contract" not in attestation
     timestamp = datetime.fromisoformat(attestation["verified_at_utc"])
     assert timestamp.tzinfo is not None and timestamp.utcoffset() == timedelta(0)
     assert attestation["study_commit"] == fixture["commit"]

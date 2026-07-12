@@ -446,11 +446,23 @@ def test_reviewer_accepts_exact_attested_direct_child_and_anonymizes(tmp_path: P
         names = set(archive.namelist())
         assert "provenance/canonical_attestation.sanitized.json" in names
         package_manifest = json.loads(archive.read("provenance/package_manifest.json"))
+        generated_manifest = json.loads(archive.read("generated/manuscript_package/manifest.json"))
+        attestation = json.loads(archive.read("provenance/canonical_attestation.sanitized.json"))
         payload = b"\n".join(archive.read(name) for name in names).decode("utf-8", errors="ignore")
     assert package_manifest["study_commit"] == fixture["commit"]
     assert package_manifest["report_commit"] == _git(fixture["repo"], "rev-parse", "HEAD")
     assert package_manifest["upstream_study_commit"] == fixture["commit"]
     assert package_manifest["upstream_report_commit"] == package_manifest["report_commit"]
+    assert generated_manifest["schema_version"] == "manuscript-package-v2"
+    assert set(generated_manifest["reporting_contract"]) == {
+        "reporting_boundaries",
+        "feature_family_summary",
+        "opacity_dml_evidence",
+        "claim_maturity",
+        "artifact_ownership",
+    }
+    assert attestation["verifier_version"] == "5"
+    assert "reporting_contract" not in attestation
     for original in ("Avery Example", "avery@example.invalid", "example-owner"):
         assert original.casefold() not in payload.casefold()
     for replacement in ("Anonymous Researcher", "researcher@example.invalid", "anonymous-owner"):

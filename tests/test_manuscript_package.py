@@ -37,6 +37,21 @@ PACKAGE_TABLE_KEYS = {
 PACKAGE_FIGURE_KEYS = {f"figure_{index:02d}" for index in range(1, 6)}
 STUDY_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 MISSING_COMMIT = object()
+EXPECTED_ARTIFACT_OWNERSHIP = {
+    "reproducibility": {"tables": ["table_01"], "figures": []},
+    "experiment_1": {"tables": ["table_05", "table_06"], "figures": ["figure_03"]},
+    "experiment_2": {"tables": [], "figures": []},
+    "experiment_3": {"tables": ["table_12"], "figures": []},
+    "experiment_4": {"tables": ["table_02", "table_18"], "figures": []},
+    "experiment_5": {
+        "tables": ["table_03", "table_04", "table_07", "table_13", "table_14", "table_17"],
+        "figures": ["figure_01", "figure_02", "figure_04"],
+    },
+    "experiment_6": {
+        "tables": ["table_08", "table_09", "table_15", "table_16"],
+        "figures": ["figure_05"],
+    },
+}
 
 
 def _sha256(path: Path) -> str:
@@ -954,8 +969,78 @@ def test_selection_profile_rejects_malformed_bound_panel(tmp_path: Path) -> None
 def _write_package_manifest_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     study_manifest_path = tmp_path / "study" / "study_run_manifest.json"
     study_manifest_path.parent.mkdir()
+    evidence = {
+        "required_outcomes": ["comment_thread", "amendment", "8k_402"],
+        "status_by_outcome": {
+            "comment_thread": "fit",
+            "amendment": "skipped_one_class_or_too_small",
+            "8k_402": "skipped_constant_treatment",
+        },
+        "fit_outcomes": ["comment_thread"],
+        "maturity_by_outcome": {
+            "comment_thread": "diagnostic",
+            "amendment": "deferred",
+            "8k_402": "deferred",
+        },
+    }
+    feature_family_summary = {
+        "oversight": {
+            "model_eligible_features": ["prior_filing_count"],
+            "reported_as_standalone": True,
+        },
+        "visibility_history": {"n_features": 24},
+    }
+    reporting_boundaries = {
+        "schema_version": "public-reporting-boundaries-v1",
+        "sample_proxy": {
+            "artifact_field": "is_domestic_us_gaap_proxy",
+            "validates_fpi_status": False,
+            "validates_domicile": False,
+            "validates_us_gaap": False,
+        },
+        "pcaob_inspection_predictors": {
+            "inspection_event_joined_to_gold": False,
+            "model_eligible_features": [],
+            "excluded_availability_markers": ["source_available_pcaob_inspections"],
+        },
+        "partner_nonadministrative_amendment": {
+            "scope": "post-year-proxy uncensored public-model panel",
+            "nonzero_rows": 1200,
+            "n_distinct_nonmissing": 8,
+            "is_constant_zero": False,
+        },
+    }
+    public_dir = study_manifest_path.parent / "public_cascade"
+    public_dir.mkdir()
+    public_summary = {
+        "reporting_boundaries": reporting_boundaries,
+        "feature_family_summary": feature_family_summary,
+        "opacity_dml_evidence": evidence,
+    }
+    (public_dir / "public_cascade_summary.json").write_text(
+        json.dumps(public_summary, indent=2), encoding="utf-8"
+    )
+    claim_maturity = {
+        "public_prediction": "reportable",
+        "feature_and_window_sensitivity": "supporting",
+        "construct_alignment": "supporting",
+        "opacity_dml": "diagnostic",
+    }
     study_manifest_path.write_text(
-        json.dumps({"repo_commit": STUDY_COMMIT}, indent=2), encoding="utf-8"
+        json.dumps(
+            {
+                "repo_commit": STUDY_COMMIT,
+                "components": {
+                    "public_cascade": {
+                        "status": "complete",
+                        "opacity_dml_evidence": evidence,
+                    }
+                },
+                "claim_maturity": claim_maturity,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
     )
     package_dir = tmp_path / "manuscript_package"
     (package_dir / "tables").mkdir(parents=True)
@@ -980,24 +1065,108 @@ def _write_package_manifest_fixture(tmp_path: Path) -> tuple[Path, Path, dict[st
         for key in sorted(PACKAGE_FIGURE_KEYS)
     }
     manifest: dict[str, object] = {
-        "schema_version": "manuscript-package-v1",
+        "schema_version": "manuscript-package-v2",
         "study_commit": STUDY_COMMIT,
         "study_manifest_sha256": _sha256(study_manifest_path),
         "tables": tables,
         "figures": figures,
         "narrative": record("results_narrative.md", b"narrative"),
+        "reporting_contract": {
+            "reporting_boundaries": reporting_boundaries,
+            "feature_family_summary": feature_family_summary,
+            "opacity_dml_evidence": evidence,
+            "claim_maturity": claim_maturity,
+            "artifact_ownership": json.loads(json.dumps(EXPECTED_ARTIFACT_OWNERSHIP)),
+        },
     }
     (package_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return package_dir, study_manifest_path, manifest
 
 
 def test_exact_package_manifest_and_inventory_validate(tmp_path: Path) -> None:
-    package_dir, study_manifest_path, _ = _write_package_manifest_fixture(tmp_path)
+    package_dir, study_manifest_path, manifest = _write_package_manifest_fixture(tmp_path)
 
     validated = manuscript_module._validate_package_tree(package_dir, study_manifest_path)
 
     assert set(validated["tables"]) == PACKAGE_TABLE_KEYS
     assert set(validated["figures"]) == PACKAGE_FIGURE_KEYS
+    assert validated["schema_version"] == "manuscript-package-v2"
+    assert validated["reporting_contract"] == manifest["reporting_contract"]
+
+
+def test_package_contract_owns_every_artifact_key_exactly_once(tmp_path: Path) -> None:
+    package_dir, study_manifest_path, _ = _write_package_manifest_fixture(tmp_path)
+
+    contract = manuscript_module._validate_package_tree(package_dir, study_manifest_path)[
+        "reporting_contract"
+    ]
+    ownership = contract["artifact_ownership"]
+    tables = [key for owner in ownership.values() for key in owner["tables"]]
+    figures = [key for owner in ownership.values() for key in owner["figures"]]
+
+    assert len(tables) == len(set(tables))
+    assert len(figures) == len(set(figures))
+    assert set(tables) == PACKAGE_TABLE_KEYS
+    assert set(figures) == PACKAGE_FIGURE_KEYS
+
+
+def test_package_requires_raw_reporting_contract_artifacts_early() -> None:
+    assert {
+        "public_cascade/public_cascade_task_status.csv",
+        "public_cascade/public_opacity_dml.csv",
+        "public_cascade/public_opacity_dml_meta.json",
+    } <= set(manuscript_module.REQUIRED_ARTIFACTS)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("reporting_boundaries", "sample_proxy", "validates_fpi_status"), True),
+        (("feature_family_summary", "oversight", "model_eligible_features"), []),
+        (
+            (
+                "reporting_boundaries",
+                "pcaob_inspection_predictors",
+                "inspection_event_joined_to_gold",
+            ),
+            True,
+        ),
+        (
+            (
+                "reporting_boundaries",
+                "partner_nonadministrative_amendment",
+                "is_constant_zero",
+            ),
+            True,
+        ),
+        (("opacity_dml_evidence", "fit_outcomes"), []),
+        (("claim_maturity", "opacity_dml"), "deferred"),
+        (("artifact_ownership", "experiment_3", "tables"), ["table_12", "table_01"]),
+    ],
+    ids=[
+        "proxy-flag",
+        "oversight-features",
+        "inspection-status",
+        "partner-variation",
+        "dml-evidence",
+        "dml-maturity",
+        "ownership",
+    ],
+)
+def test_package_contract_rejects_mutation_against_upstream(
+    tmp_path: Path,
+    path: tuple[str, ...],
+    replacement: object,
+) -> None:
+    package_dir, study_manifest_path, manifest = _write_package_manifest_fixture(tmp_path)
+    cursor = manifest["reporting_contract"]
+    for key in path[:-1]:
+        cursor = cursor[key]
+    cursor[path[-1]] = replacement
+    (package_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="reporting contract|claim maturity"):
+        manuscript_module._validate_package_tree(package_dir, study_manifest_path)
 
 
 def test_package_manifest_accepts_case_insensitive_full_commit_match(tmp_path: Path) -> None:

@@ -9,7 +9,6 @@ from typing import Any
 import pandas as pd
 
 from scripts.build_manuscript_package import (
-    MANUSCRIPT_PACKAGE_SCHEMA,
     PACKAGE_FIGURE_KEYS,
     PACKAGE_TABLE_KEYS,
     _construct_alignment,
@@ -27,6 +26,24 @@ from src.provenance import (
     sha256_path,
     uv_lock_provenance,
 )
+
+
+REQUIRED_DML_OUTCOMES = ["comment_thread", "amendment", "8k_402"]
+ARTIFACT_OWNERSHIP = {
+    "reproducibility": {"tables": ["table_01"], "figures": []},
+    "experiment_1": {"tables": ["table_05", "table_06"], "figures": ["figure_03"]},
+    "experiment_2": {"tables": [], "figures": []},
+    "experiment_3": {"tables": ["table_12"], "figures": []},
+    "experiment_4": {"tables": ["table_02", "table_18"], "figures": []},
+    "experiment_5": {
+        "tables": ["table_03", "table_04", "table_07", "table_13", "table_14", "table_17"],
+        "figures": ["figure_01", "figure_02", "figure_04"],
+    },
+    "experiment_6": {
+        "tables": ["table_08", "table_09", "table_15", "table_16"],
+        "figures": ["figure_05"],
+    },
+}
 
 
 def git(repo: Path, *args: str) -> str:
@@ -181,11 +198,84 @@ def _write_public_lake_inputs(root: Path, repo: Path, commit: str) -> dict[str, 
     }
 
 
-def _public_summary() -> dict[str, Any]:
+def _opacity_dml_evidence(statuses: tuple[str, str, str]) -> dict[str, Any]:
+    status_by_outcome = dict(zip(REQUIRED_DML_OUTCOMES, statuses, strict=True))
+    return {
+        "required_outcomes": REQUIRED_DML_OUTCOMES,
+        "status_by_outcome": status_by_outcome,
+        "fit_outcomes": [
+            outcome for outcome, status in status_by_outcome.items() if status == "fit"
+        ],
+        "maturity_by_outcome": {
+            outcome: "diagnostic" if status == "fit" else "deferred"
+            for outcome, status in status_by_outcome.items()
+        },
+    }
+
+
+def _public_summary(statuses: tuple[str, str, str]) -> dict[str, Any]:
     return {
         "primary_specification": {"feature_set": "all", "train_window": "expanding"},
         "primary_specification_status": "revision_frozen",
-        "feature_family_summary": {"visibility_history": {"n_features": 24}},
+        "feature_family_summary": {
+            "oversight": {
+                "display_name": "Prior-filing history (legacy artifact key: oversight)",
+                "model_eligible_features": ["prior_filing_count"],
+                "reported_as_standalone": True,
+                "n_features": 1,
+                "empty": False,
+                "same_as_metadata": False,
+                "n_xbrl_ratio_features": 0,
+                "n_xbrl_coverage_features": 0,
+            },
+            "visibility_history": {
+                "display_name": "Visibility history",
+                "model_eligible_features": ["prior_filing_count"],
+                "reported_as_standalone": True,
+                "n_features": 24,
+                "empty": False,
+                "same_as_metadata": False,
+                "n_xbrl_ratio_features": 0,
+                "n_xbrl_coverage_features": 0,
+                "configured_features": ["prior_filing_count"],
+                "available_features": ["prior_filing_count"],
+                "unavailable_features": [],
+            },
+        },
+        "reporting_boundaries": {
+            "schema_version": "public-reporting-boundaries-v1",
+            "sample_proxy": {
+                "artifact_field": "is_domestic_us_gaap_proxy",
+                "display_name": "10-K/10-K/A with no observed same-year FPI-form proxy",
+                "definition": (
+                    "selected 10-K or 10-K/A with no observed 20-F, 40-F, or 6-K mapped "
+                    "to the same issuer fiscal year"
+                ),
+                "validates_fpi_status": False,
+                "validates_domicile": False,
+                "validates_us_gaap": False,
+            },
+            "pcaob_inspection_predictors": {
+                "inspection_event_joined_to_gold": False,
+                "model_eligible_features": [],
+                "excluded_availability_markers": ["source_available_pcaob_inspections"],
+            },
+            "partner_nonadministrative_amendment": {
+                "artifact_field": ("auditor_partner_prior_other_issuer_nonadmin_amendment_count"),
+                "item_402_comparison_field": ("auditor_partner_prior_other_issuer_8k_402_count"),
+                "scope": "post-year-proxy uncensored public-model panel",
+                "rows_evaluated": 96733,
+                "nonmissing_rows": 96000,
+                "nonzero_rows": 1200,
+                "n_distinct_nonmissing": 8,
+                "minimum": 0,
+                "maximum": 7,
+                "is_constant_zero": False,
+                "total_equals_item_402_rows": 95000,
+                "total_equals_item_402_for_all_rows": False,
+            },
+        },
+        "opacity_dml_evidence": _opacity_dml_evidence(statuses),
         "sample_attrition": [
             {"stage": "source_issuer_origin", "n_rows": 205652, "task": "all"},
             {"stage": "fiscal_year_2011_2024", "n_rows": 97027, "task": "all"},
@@ -257,8 +347,11 @@ def _construct_manifest() -> dict[str, Any]:
     }
 
 
-def _write_study_raw(study_dir: Path) -> dict[str, Path]:
-    summary = _public_summary()
+def _write_study_raw(
+    study_dir: Path,
+    dml_statuses: tuple[str, str, str],
+) -> dict[str, Path]:
+    summary = _public_summary(dml_statuses)
     public_dir = study_dir / "public_cascade"
     construct_dir = study_dir / "construct_overlap"
     summary_path = public_dir / "public_cascade_summary.json"
@@ -304,40 +397,47 @@ def _write_study_raw(study_dir: Path) -> dict[str, Path]:
     pd.DataFrame(status_rows).to_csv(status_path, index=False)
 
     dml_path = public_dir / "public_opacity_dml.csv"
+    encoded_statuses = {"fit", "skipped_constant_residual_treatment"}
+    encoded_outcomes = {
+        outcome
+        for outcome, status in zip(REQUIRED_DML_OUTCOMES, dml_statuses, strict=True)
+        if status in encoded_statuses
+    }
     pd.DataFrame(
-        {
-            "outcome": ["comment_thread", "amendment"],
-            "n_raw_controls": [60, 60],
-            "n_encoded_controls": [64, float("nan")],
-            "n_controls": [64, float("nan")],
-            "n_effective_nuisance_folds": [3, float("nan")],
-            "n_controls_definition": [
-                "maximum_fold_local_encoded_nuisance_columns",
-                "maximum_fold_local_encoded_nuisance_columns",
-            ],
-            "n_opacity_components": [17, 17],
-            "status": ["fit", "skipped_one_class_or_too_small"],
-            "coef": [0.12, float("nan")],
-            "std_err": [0.03, float("nan")],
-            "p_value": [0.001, float("nan")],
-            "n_obs": [90000, 0],
-            "prevalence": [0.02, 0.01],
-        }
+        [
+            {
+                "outcome": outcome,
+                "n_raw_controls": 60,
+                "n_encoded_controls": 64 if outcome in encoded_outcomes else float("nan"),
+                "n_controls": 64 if outcome in encoded_outcomes else float("nan"),
+                "n_effective_nuisance_folds": (3 if outcome in encoded_outcomes else float("nan")),
+                "n_controls_definition": "maximum_fold_local_encoded_nuisance_columns",
+                "n_opacity_components": 17,
+                "status": status,
+                "coef": 0.12 if status == "fit" else float("nan"),
+                "std_err": 0.03 if status == "fit" else float("nan"),
+                "p_value": 0.001 if status == "fit" else float("nan"),
+                "n_obs": 90000 if status == "fit" else 0,
+                "prevalence": 0.02 if status == "fit" else 0.01,
+            }
+            for outcome, status in zip(REQUIRED_DML_OUTCOMES, dml_statuses, strict=True)
+        ]
     ).to_csv(dml_path, index=False)
     dml_meta_path = public_dir / "public_opacity_dml_meta.json"
     write_json(
         dml_meta_path,
         {
             "n_raw_controls": 60,
-            "n_encoded_controls_by_outcome": {"comment_thread": 64},
+            "n_encoded_controls_by_outcome": {outcome: 64 for outcome in encoded_outcomes},
             "n_encoded_controls_by_fold": {
-                "comment_thread": [
+                outcome: [
                     {"fold_id": 1, "n_encoded_controls": 63},
                     {"fold_id": 2, "n_encoded_controls": 64},
                     {"fold_id": 3, "n_encoded_controls": 64},
                 ]
+                for outcome in encoded_outcomes
             },
-            "n_effective_nuisance_folds_by_outcome": {"comment_thread": 3},
+            "n_effective_nuisance_folds_by_outcome": {outcome: 3 for outcome in encoded_outcomes},
             "n_opacity_components": 17,
             "n_controls_definition": "maximum_fold_local_encoded_nuisance_columns",
         },
@@ -453,11 +553,13 @@ def _write_package(package_dir: Path, study_dir: Path, study_manifest: Path) -> 
         }
     narrative = package_dir / "results_narrative.md"
     _write(narrative, "Canonical fixture narrative.\n")
+    manifest = json.loads(study_manifest.read_text())
+    public_component = manifest["components"]["public_cascade"]
     write_json(
         package_dir / "manifest.json",
         {
-            "schema_version": MANUSCRIPT_PACKAGE_SCHEMA,
-            "study_commit": json.loads(study_manifest.read_text())["repo_commit"],
+            "schema_version": "manuscript-package-v2",
+            "study_commit": manifest["repo_commit"],
             "study_manifest_sha256": sha256_path(study_manifest),
             "generated_at_utc": "2026-07-06T00:00:00+00:00",
             "primary_public_specification": {
@@ -467,6 +569,13 @@ def _write_package(package_dir: Path, study_dir: Path, study_manifest: Path) -> 
             "tables": table_manifest,
             "figures": figure_manifest,
             "narrative": _artifact_record(narrative, package_dir),
+            "reporting_contract": {
+                "reporting_boundaries": summary["reporting_boundaries"],
+                "feature_family_summary": summary["feature_family_summary"],
+                "opacity_dml_evidence": public_component["opacity_dml_evidence"],
+                "claim_maturity": manifest["claim_maturity"],
+                "artifact_ownership": ARTIFACT_OWNERSHIP,
+            },
         },
     )
     return {
@@ -476,14 +585,22 @@ def _write_package(package_dir: Path, study_dir: Path, study_manifest: Path) -> 
     }
 
 
-def canonical_fixture(tmp_path: Path) -> dict[str, Any]:
+def canonical_fixture(
+    tmp_path: Path,
+    *,
+    dml_statuses: tuple[str, str, str] = (
+        "fit",
+        "skipped_one_class_or_too_small",
+        "skipped_constant_treatment",
+    ),
+) -> dict[str, Any]:
     repo = tmp_path / "repo"
     commit = _init_repo(repo)
     evidence_root = tmp_path / "evidence"
     lake = _write_public_lake_inputs(evidence_root, repo, commit)
     study_dir = evidence_root / "study"
     package_dir = evidence_root / "package"
-    raw = _write_study_raw(study_dir)
+    raw = _write_study_raw(study_dir, dml_statuses)
 
     raw_data = evidence_root / "inputs" / "raw.csv"
     issuer_dim = evidence_root / "inputs" / "issuer_dim.parquet"
@@ -517,6 +634,7 @@ def canonical_fixture(tmp_path: Path) -> dict[str, Any]:
         **uv_lock_provenance(repo),
     }
     manifest_path = study_dir / "study_run_manifest.json"
+    opacity_dml_evidence = _opacity_dml_evidence(dml_statuses)
     write_json(
         manifest_path,
         {
@@ -543,7 +661,10 @@ def canonical_fixture(tmp_path: Path) -> dict[str, Any]:
             ),
             "components": {
                 "benchmark": {"status": "complete"},
-                "public_cascade": {"status": "complete"},
+                "public_cascade": {
+                    "status": "complete",
+                    "opacity_dml_evidence": opacity_dml_evidence,
+                },
                 "bridge_probe": {"status": "crosswalk_available"},
                 "peer_comparison": {"status": "complete"},
                 "public_peer_comparison": {"status": "complete"},
@@ -556,7 +677,9 @@ def canonical_fixture(tmp_path: Path) -> dict[str, Any]:
                 "public_prediction": "reportable",
                 "feature_and_window_sensitivity": "supporting",
                 "construct_alignment": "supporting",
-                "opacity_dml": "diagnostic",
+                "opacity_dml": (
+                    "diagnostic" if opacity_dml_evidence["fit_outcomes"] else "deferred"
+                ),
             },
         },
     )
