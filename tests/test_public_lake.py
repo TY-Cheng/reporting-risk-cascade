@@ -3330,25 +3330,49 @@ def _write_shared_accession_partner_prior_fixture(
     )
 
 
-def test_duckdb_gold_partner_prior_joins_shared_accession_at_issuer_grain(
+def test_gold_partner_prior_shared_accession_matches_engines_and_threads(
     tmp_path: Path,
 ) -> None:
     silver = tmp_path / "silver"
-    gold = tmp_path / "gold"
     _write_shared_accession_partner_prior_fixture(silver)
+    feature_cols = [
+        "auditor_partner_prior_other_issuer_8k_402_count",
+        "auditor_partner_prior_other_issuer_nonadmin_amendment_count",
+        "auditor_partner_prior_other_issuer_total_count",
+    ]
+    compare_cols = ["issuer_cik", "accession", *feature_cols]
+    panels: dict[str, pd.DataFrame] = {}
+    for name, engine, threads in [
+        ("pandas", "pandas", 4),
+        ("duckdb_1", "duckdb", 1),
+        ("duckdb_4", "duckdb", 4),
+    ]:
+        gold = tmp_path / f"gold_{name}"
+        build_gold_panels(
+            silver_dir=silver,
+            gold_dir=gold,
+            as_of_date="2026-04-23",
+            engine=engine,
+            duckdb_threads=threads,
+        )
+        panels[name] = (
+            read_table(gold / "issuer_origin_panel.parquet")[compare_cols]
+            .sort_values(["issuer_cik", "accession"], kind="mergesort")
+            .reset_index(drop=True)
+        )
 
-    build_gold_panels(
-        silver_dir=silver,
-        gold_dir=gold,
-        as_of_date="2026-04-23",
-        engine="duckdb",
+    expected = pd.DataFrame(
+        {
+            "issuer_cik": ["0000000001", "0000000002"],
+            "accession": ["shared-accession", "shared-accession"],
+            "auditor_partner_prior_other_issuer_8k_402_count": [3, 1],
+            "auditor_partner_prior_other_issuer_nonadmin_amendment_count": [0, 0],
+            "auditor_partner_prior_other_issuer_total_count": [3, 1],
+        }
     )
-    panel = read_table(gold / "issuer_origin_panel.parquet")
-    actual = panel.set_index("issuer_cik")[
-        "auditor_partner_prior_other_issuer_total_count"
-    ].to_dict()
-
-    assert actual == {"0000000001": 3, "0000000002": 1}
+    pd.testing.assert_frame_equal(panels["pandas"], expected, check_dtype=False)
+    pd.testing.assert_frame_equal(panels["duckdb_1"], panels["pandas"], check_dtype=False)
+    pd.testing.assert_frame_equal(panels["duckdb_4"], panels["pandas"], check_dtype=False)
 
 
 def test_duckdb_gold_rejects_duplicate_partner_prior_keys(tmp_path: Path) -> None:
