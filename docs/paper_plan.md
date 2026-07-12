@@ -30,7 +30,7 @@ Working title:
 | Detected misstatement and fraud prediction | [Dechow, Ge, Larson, and Sloan (2011)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=997483); [Perols (2011)](https://doi.org/10.2308/ajpt-50009); [Bao, Ke, Li, Yu, and Zhang (2020)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2670703); [Bertomeu, Cheynel, Floyd, and Pan (2021)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3496297), "Using Machine Learning to Detect Misstatements" | Logistic/F-score models, SVM, decision trees, bagging, stacking, neural nets, and tree ensembles; AUC, classification rates, lift, variable importance, and top-fraction ranking metrics | Supplies the benchmark peer suite: Dechow-style scores, a Perols-style benchmark model zoo, Bao-style top-fraction balanced accuracy and NDCG, and Bertomeu-style XGBoost feature importance. |
 | Partial observability and hidden misconduct | [Barton, Burnett, Gunny, and Miller (2024)](https://pubsonline.informs.org/doi/10.1287/mnsc.2022.4627); [Dyck, Morse, and Zingales (2024)](https://link.springer.com/article/10.1007/s11142-022-09738-5) | Occurrence/detection separation, hidden misconduct estimation, likelihood and coefficient evidence | Motivates the estimand shift; these models are not PR-AUC comparators for the current design. |
 | SEC comment-letter and disclosure-review research | [Cassell, Cunningham, and Myers (2013)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1951445); [Bozanic, Dietrich, and Johnson (2018)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2989164); [Brown, Tian, and Tucker (2018)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2551451); the [SEC filing review process](https://www.sec.gov/about/divisions-offices/division-corporation-finance/filing-review-process-corp-fin) | Regression-style evidence on comment receipt, remediation, and disclosure response | Establishes public comment-letter scrutiny as economically meaningful; this paper embeds it as one public-cascade outcome rather than the sole endpoint. This stream supplies regression-style evidence rather than direct ranking-score comparators. |
-| Public regulatory and structured-data sources | [SEC Item 4.02 guidance](https://www.sec.gov/about/divisions-offices/division-corporation-finance/financial-reporting-manual/frm-topic-4); [PCAOB Form AP](https://pcaobus.org/oversight/standards/implementation-resources-PCAOB-standards-rules/form-ap-auditor-reporting-certain-audit-participants); [SEC Inline eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl) | Public filing events, audit-participant data, oversight data, and standardized financial facts | Supplies the filing-native public lake and reproducible feature construction. |
+| Public regulatory and structured-data sources | [SEC Item 4.02 guidance](https://www.sec.gov/about/divisions-offices/division-corporation-finance/financial-reporting-manual/frm-topic-4); [PCAOB Form AP](https://pcaobus.org/oversight/standards/implementation-resources-PCAOB-standards-rules/form-ap-auditor-reporting-certain-audit-participants); [SEC Inline eXtensible Business Reporting Language (XBRL)](https://www.sec.gov/data-research/structured-data/inline-xbrl) | Public filing events, audit-participant data, inspection-archive provenance, and standardized financial facts | Supplies the filing-native public lake and reproducible feature construction. |
 
 ### Positioning Against Existing Results
 
@@ -68,7 +68,7 @@ Working title:
 
 ### Data and Market/Institutional Setting
 
-- **Issuer setting.** The empirical setting is U.S. public-company reporting, where issuers release periodic filings into EDGAR and public downstream signals emerge through SEC review, amended filings, 8-K Item 4.02 non-reliance disclosures, PCAOB auditor-participant records, and inspection histories.
+- **Issuer setting.** The empirical setting is U.S. public-company reporting, where issuers release periodic filings into EDGAR and public downstream signals emerge through SEC review, amended filings, 8-K Item 4.02 non-reliance disclosures, and PCAOB Form AP auditor-participant records. PCAOB inspection archives are retained for provenance only.
 - **Information set.** The public-cascade information set is filing-origin: predictors must be observable at or before `origin_date`.
 - **Two data layers.** The detected-misstatement benchmark supplies the historical `gvkey x data_year` diagnostic layer; the SEC/PCAOB public lake supplies the filing-native `issuer_cik x fiscal_year` public review-and-correction layer.
 - **Bridge layer.** A `gvkey-CIK-year` bridge is needed only for construct-overlap interpretation between the benchmark layer and the public layer.
@@ -102,10 +102,10 @@ flowchart LR
     end
 
     subgraph PUBLIC["Public filing-origin cascade: SEC/PCAOB public information set"]
-        P0["Public inputs<br/>EDGAR filings, FSDS/XBRL, Notes summaries,<br/>comment letters, amendments, 8-K Item 4.02,<br/>PCAOB Form AP, PCAOB inspections<br/>public sample 2011-2024, as-of 2026-07-06"]
+        P0["Public inputs<br/>EDGAR filings, FSDS/XBRL, Notes summaries,<br/>comment letters, amendments, 8-K Item 4.02,<br/>PCAOB Form AP; inspection archives are Bronze provenance only<br/>public sample 2011-2024, as-of 2026-07-06"]
         P1["Parquet public lake<br/>Bronze source cache<br/>Silver normalized event and fact tables<br/>Gold filing_origin_panel and issuer_origin_panel"]
         P2["Public modeling grain<br/>issuer_cik x fiscal_year<br/>origin_date is selected annual filing date<br/>features visible at or before origin_date"]
-        P3["Public X<br/>metadata, XBRL ratios, auditor, oversight, all<br/>rolling public history requires event_date < origin_date<br/>exclude source_available_*, public_date_*, vintage_* fields"]
+        P3["Public X<br/>metadata, XBRL ratios, auditor, prior-filing history, all<br/>rolling public history requires event_date < origin_date<br/>exclude source_available_*, public_date_*, vintage_* fields"]
         P4["Public Y<br/>label_comment_thread_365: SEC comment-thread scrutiny<br/>label_amendment_365: amended filing or filing friction<br/>label_8k_402_365: Item 4.02 non-reliance"]
         P5["Public prediction loops<br/>annual out-of-time fiscal-year tests<br/>rolling/expanding windows from earlier years only<br/>core cascade model plus public-label peer suite<br/>same Dechow / Perols / Bao / Bertomeu families"]
         P6["Public metrics<br/>same metric vocabulary as benchmark where defined<br/>PR-AUC vs prevalence, ROC-AUC, Brier/BSS, ECE,<br/>top-50/100/200 precision, top-decile lift,<br/>Bao-style top-fraction metrics"]
@@ -153,12 +153,12 @@ flowchart LR
 
 - **Storage design.** `$DATA_DIR/public_lake/` is organized as bronze, silver, and gold.
 - **Bronze.** Downloaded public files with source URL, timestamp, SHA256 hash, parser version, schema version, and as-of date.
-- **Silver.** Normalized issuer, filing, XBRL, Notes, comment-thread, correction, Form AP, and PCAOB inspection tables; large Silver tables are Parquet-first.
+- **Silver.** Normalized issuer, filing, XBRL, Notes, comment-thread, correction, and Form AP tables; large Silver tables are Parquet-first.
 - **Gold.** `issuer_origin_panel.parquet` and `filing_origin_panel.parquet`.
 - **DuckDB path.** The default DuckDB path uses SQL for XBRL core-tag pivoting, label-horizon joins, and Parquet output on the annual issuer-year modeling panel.
 - **Filing-origin provenance.** The full filing-origin panel is retained as a lightweight, year-sharded provenance panel rather than expanded into a fully labeled modeling table.
-- **Required paper sources.** SEC submissions, [SEC Financial Statement Data Sets (FSDS)](https://www.sec.gov/data-research/sec-markets-data/financial-statement-data-sets), SEC `UPLOAD` and `CORRESP`, 10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, and PCAOB inspection datasets. FSDS field definitions follow the official [Financial Statement Data Sets data dictionary](https://www.sec.gov/files/financial-statement-data-sets.pdf).
-- **Main public sample.** Domestic U.S. GAAP issuer-years from 2011-2024, with `2026-07-06` as the current reproducibility as-of date.
+- **Required paper sources.** SEC submissions, [SEC Financial Statement Data Sets (FSDS)](https://www.sec.gov/data-research/sec-markets-data/financial-statement-data-sets), SEC `UPLOAD` and `CORRESP`, 10-K/A and 10-Q/A amendments, 8-K Item 4.02, PCAOB Form AP, and PCAOB inspection archives for Bronze provenance only. FSDS field definitions follow the official [Financial Statement Data Sets data dictionary](https://www.sec.gov/files/financial-statement-data-sets.pdf).
+- **Main public sample.** The sample comprises selected 10-K/10-K/A issuer-years with no observed same-year 20-F/40-F/6-K proxy, from fiscal years 2011-2024. This selection validates neither FPI status, domicile, nor US GAAP. The current reproducibility as-of date is `2026-07-06`.
 - **Form AP provenance.** The archive-first Form AP source contract makes `FirmFilings.zip` authoritative when present. The build first verifies its metadata sidecar and requires exactly one `FirmFilings.csv` member. It extracts that member to a temporary file on the same filesystem and atomically replaces the derived CSV before normalization. An invalid archive, missing verified metadata sidecar, or missing member fails the build and must not fall back to an older CSV. Only when the archive is absent may a standalone `FirmFilings.csv` serve as an explicit compatibility fallback.
 - **Source-to-table mapping.**
     - SEC submissions and filing index data form `filing_dim.parquet`, `issuer_dim.parquet`, `filing_origin_panel.parquet`, and the annual `issuer_origin_panel.parquet`.
@@ -167,7 +167,7 @@ flowchart LR
     - SEC `UPLOAD` and `CORRESP` produce `comment_thread.csv.gz` with first public correspondence dates.
     - 10-K/A and 10-Q/A filings, explanatory notes, and form-level filters produce `correction_event.csv.gz` and `amendment_annotation.csv.gz`.
     - 8-K Item 4.02 parsing produces `issuer_8k_item_event.csv.gz`.
-    - PCAOB Form AP and inspection sources produce auditor and oversight features in the Silver/Gold panels.
+    - PCAOB Form AP may supply auditor and engagement-partner features. PCAOB inspection archives are provenance/Bronze inputs only; current inspection events are not joined to Gold, and there are no inspection model features.
 
 ### Public Review-and-Correction Labels
 
@@ -230,9 +230,9 @@ uv run python scripts/run_construct_overlap.py \
 - **XBRL context normalization.** The compact FSDS `num` layer retains all units, `version` as `taxonomy_version`, `segments`, `coreg`, and the raw `value_text`. Its normalized full fact key is `(adsh, tag, taxonomy_version, fact_date, quarters, unit, segments, coreg)`, corresponding to the official SEC `num` key. Blank strings are normalized to null. Batch files are candidate shards only: reconciliation occurs once across all batches. `xbrl_fact_summary.parquet` is likewise computed by globally deduplicating those full-key candidates before aggregation, so its counts do not depend on the archive batch partition. Numeric identity uses the SEC `NUMERIC(28,4)` domain, so exact repeats such as `40.0` and `40.00` deduplicate without collapsing distinct large integers at floating-point precision boundaries. A full key carrying multiple distinct numeric values in any unit is excluded globally and produces one row in `xbrl_context_conflicts.parquet`; its row count becomes `xbrl_context_conflict_count` rather than being resolved by a value-magnitude rule. FSDS and Notes resume markers bind each ordered archive path to its actual SHA-256 and bind normalization settings such as notes mode; changes to those task signatures propagate to their downstream silver and gold outputs.
 - **XBRL issuer-level selection.** After global reconciliation, issuer-level features admit only consolidated facts with null `segments` and null `coreg`, and only USD or null units. Candidate ranking is controlled-tag priority, quarters descending, fact date descending, then unit priority (USD before null), followed by taxonomy version, tag, and raw value text as deterministic ties. This rule prevents segment, co-registrant, lower-priority tag, or stale-period facts from replacing the intended consolidated issuer value merely because they carry a USD unit.
 - **XBRL features.** `xbrl_ratio_*` and `xbrl_coverage_*` features from controlled core tags include size, leverage, profitability, working capital, receivables, inventory, cash, debt, operating cash flow, and year-over-year revenue/assets changes. Year-over-year values require both the current row and the selected prior row to be a normalized 10-K or 10-K/A, and the prior fiscal year must equal the current fiscal year minus one; quarterly current rows, quarterly fallback rows, and nonconsecutive annual observations receive no YoY value or coverage.
-- **Auditor and prior-filing history.** PCAOB Form AP fields and engagement-partner exposure enter the public information set. `Prior-filing history (legacy artifact key: oversight)` means `prior_filing_count`, not PCAOB inspection. PCAOB inspection archives are provenance inputs; inspection events are not joined to Gold, and there are no model-eligible inspection features.
+- **Auditor and prior-filing history.** PCAOB Form AP may supply auditor and engagement-partner features. `Prior-filing history (legacy artifact key: oversight)` means `prior_filing_count`, not PCAOB inspection. PCAOB inspection archives are provenance/Bronze inputs only; current inspection events are not joined to Gold, and there are no inspection model features.
 - **Note opacity.** Note count, note character count, note-tag coverage, and tag entropy as a disclosure breadth measure.
-- **Feature-family boundary.** The reported public families are metadata, XBRL, auditor, oversight, visibility/history, and all. The notes/disclosure-breadth variables enter `all`; there is no standalone text-family ablation.
+- **Feature-family boundary.** The reported public families are metadata, XBRL, auditor, Prior-filing history (legacy artifact key: oversight), visibility/history, and all. The notes/disclosure-breadth variables enter `all`; there is no standalone text-family ablation.
 - **Leakage exclusions.** `source_available_*`, `public_date_*`, `vintage_*`, `fiscal_period_end_source`, `as_of_date`, accession identifiers, CIK/GVKEY identifiers, labels, censoring flags, and direct event-date fields document provenance and timing but are not default predictors.
 - **Fold-local transformations.** The categoricals are fitted on training years only, constant-imputed to `__MISSING__`, and one-hot encoded with unknown test categories ignored. Scaling and any adapter-specific preprocessing are likewise fit inside the training fold and then applied to the held-out fiscal year.
 - **Deferred extensions.** Proxy-governance content, SEC insider-pressure features, macro-vintage controls, auditor-firm public-status fields, and broader security/attention layers are useful extensions, not required for the current v1 paper claim.
@@ -251,7 +251,7 @@ uv run python scripts/run_construct_overlap.py \
 - **Censoring.** Horizon-specific censoring flags remove issuer-years whose outcome window extends beyond the as-of date. Current public labels use 365-day censoring.
 - **Split design.** Prediction experiments use annual out-of-time evaluation, not random cross-validation.
 - **Training windows.** For a given test year, training uses earlier years only, with expanding and rolling 5-, 7-, and 10-year windows.
-- **Sequential attrition.** Table 18 begins with source issuer-origin rows, then applies the fiscal years 2011-2024 restriction, the domestic U.S. GAAP proxy, the observable 365-day horizon, and task-specific exclusions. Each stage reports its parent-relative loss; task branches share the observable-horizon parent and are not subtracted sequentially from one another. Realized row counts belong in generated artifacts, not this design contract.
+- **Sequential attrition.** Table 18 begins with source issuer-origin rows, then applies the fiscal years 2011-2024 restriction, the selected-form proxy (`is_domestic_us_gaap_proxy`: 10-K/10-K/A with no observed same-year 20-F/40-F/6-K), the observable 365-day horizon, and task-specific exclusions. The proxy validates neither FPI status, domicile, nor US GAAP. Each stage reports its parent-relative loss; task branches share the observable-horizon parent and are not subtracted sequentially from one another. Realized row counts belong in generated artifacts, not this design contract.
 
 ### Methods Including Models
 
@@ -272,7 +272,7 @@ uv run python scripts/run_construct_overlap.py \
 | --- | --- | --- | --- |
 | Detected-misstatement benchmark core | XGBoost classifier over engineered benchmark predictors | `raw_dataset_misstatement.parquet`, excluding ids, labels, `res_an*`, missingness labels, and post-outcome fields | Timing, drift, and missingness diagnostics on the detected-misstatement label. |
 | Detected-misstatement peer benchmark | Dechow fixed and variable logit, Perols logit/tree/bagging/SVM/stacking/MLP, Bao-style or Bao-inspired ensemble, Bertomeu-style XGBoost | Same benchmark folds and repo-native variable mappings | Model-family transfer and metric-language compatibility, not original-paper numeric replication. |
-| Public cascade core | XGBoost classifier over metadata, XBRL, auditor, oversight, visibility/history, and all feature sets; notes/disclosure-breadth variables enter `all` only | `issuer_origin_panel` rows with pre-origin public features | Main filing-origin public review-and-correction prediction task. |
+| Public cascade core | XGBoost classifier over metadata, XBRL, auditor, Prior-filing history (legacy artifact key: oversight), visibility/history, and all feature sets; notes/disclosure-breadth variables enter `all` only | `issuer_origin_panel` rows with pre-origin public features | Main filing-origin public review-and-correction prediction task. |
 | Public-label peer suite | Dechow variable/fixed mapped variants and Bao-inspired tree ensemble when mapping gates permit | Public issuer-origin feature families | Checks whether familiar model-family vocabularies transfer to the public-label task. |
 | Public-label opacity DML | Double / Debiased Machine Learning (DML) partially linear regressions with cross-fitted nuisance models | `missingness_density_score` and pre-origin controls | Adjusted association between opacity/missingness and public labels, not a causal effect. |
 | Construct-overlap layer | Contingency, top-decile lift, reciprocal ranking, and event-time concentration checks | Raw-only WRDS gvkey-CIK-year bridge, benchmark predictions, public predictions | Tests related but non-identical construct evidence. |
@@ -364,7 +364,7 @@ bridge_tier: high_confidence
 - **Design.** Construct missingness-density and missing-profile indicators; estimate Double / Debiased Machine Learning (DML) partially linear regressions on public labels.
 - **Primary outcomes.** `label_comment_thread_365`, `label_amendment_365`, and `label_8k_402_365`.
 - **Treatment-like variable.** `D = missingness_density_score`.
-- **Controls.** `X = pre-origin metadata, XBRL, filing-friction, public-history, auditor, oversight, note-opacity, and calendar controls`.
+- **Controls.** `X = pre-origin metadata, XBRL, filing-friction, public-history, auditor, prior-filing history, note-opacity, and calendar controls`.
 - **Outputs.** Missing-profile clusters, public-label PLR spec results, nuisance-model metadata, and diagnostic benchmark-side DML outputs.
 - **Interpretation.** Coefficients are adjusted associations, not causal effects. Opacity DML is diagnostic only when at least one required outcome is fitted; all-skipped or disabled required outcomes are deferred. The `misstatement firm-year` outcome remains a detected-misstatement benchmark diagnostic only.
 
@@ -378,7 +378,7 @@ bridge_tier: high_confidence
 ### Experiment 5: Public Cascade Prediction
 
 - **Purpose.** Estimate the pre-disclosure public reporting-risk state from public features.
-- **Design.** Use `issuer_origin_panel` to predict comment-thread scrutiny, broad amendment/friction, and 8-K Item 4.02 outcomes. The headline uses the revision-frozen `all + expanding` specification; metadata, XBRL, auditor, oversight, visibility/history, all-feature, and training-window grids are sensitivities.
+- **Design.** Use `issuer_origin_panel` to predict comment-thread scrutiny, broad amendment/friction, and 8-K Item 4.02 outcomes. The headline uses the revision-frozen `all + expanding` specification; metadata, XBRL, auditor, Prior-filing history (legacy artifact key: oversight), visibility/history, all-feature, and training-window grids are sensitivities.
 - **Skip rule.** Fits with one-class train or test labels are skipped and reported.
 - **Outputs.** Table 3, Table 4, Table 7, Table 13, Table 14, Table 17, Figure 1, Figure 2, and Figure 4. Table 3 and Figure 1 own the primary `all + expanding` evidence; the other displays and dynamic per-task public-peer results are sensitivity evidence. `public_cascade_metrics.csv`, `public_cascade_predictions.parquet`, `public_cascade_task_status.csv`, and `public_cascade_summary.md` remain audit artifacts.
 - **Interpretation.** The primary comparison is against task prevalence and the visibility/history information set. Alternative feature families and windows inform robustness, not headline selection.
@@ -397,7 +397,7 @@ bridge_tier: high_confidence
 
 - **Benchmark expectation.** Detected-misstatement benchmark performance should be sensitive to timing assumptions, label observability, class balance, and retraining window.
 - **Public-cascade expectation.** Public features should predict later public review-and-correction outcomes above each task's prevalence baseline, especially for comment-thread and amendment/friction labels.
-- **Feature-family expectation.** The reported grid contains metadata, XBRL, auditor, oversight, visibility/history, and all; notes/disclosure-breadth variables enter `all` only, with no standalone text-family ablation.
+- **Feature-family expectation.** The reported grid contains metadata, XBRL, auditor, Prior-filing history (legacy artifact key: oversight), visibility/history, and all; notes/disclosure-breadth variables enter `all` only, with no standalone text-family ablation.
 - **Overlap expectation.** Detected-misstatement benchmark labels and public labels should show enrichment and reciprocal ranking alignment, but not one-to-one equivalence.
 - **Reporting ownership.** The primary analysis maps to Table 3/Figure 1 only; Table 4/Table 14 grid sensitivities retain alternative feature families and windows; Table 18 attrition owns realized sample construction; the canonical manifest gate precedes the reviewer archive.
 
@@ -430,8 +430,8 @@ bridge_tier: high_confidence
 > Bridge validation is mandatory for an integrated claim that the public cascade and the detected-misstatement benchmark measure related but non-identical constructs. Without that validation, the public-cascade result remains a public-data measurement result rather than a validated fraud/restatement overlap paper.
 
 - `Prior-filing history (legacy artifact key: oversight)` means `prior_filing_count`, not PCAOB inspection.
-- `is_domestic_us_gaap_proxy` means `10-K/10-K/A with no observed same-year FPI-form proxy` and validates neither FPI status, domicile, nor US GAAP.
-- PCAOB inspection archives are provenance inputs; inspection events are not joined to Gold, and there are no model-eligible inspection features.
+- `is_domestic_us_gaap_proxy` selects 10-K/10-K/A issuer-years with no observed same-year 20-F/40-F/6-K proxy and validates neither FPI status, domicile, nor US GAAP.
+- PCAOB inspection archives are provenance/Bronze inputs only; current inspection events are not joined to Gold, and there are no inspection model features. PCAOB Form AP may supply auditor and engagement-partner features.
 - Opacity DML is an adjusted-association diagnostic only when at least one required outcome is fitted; all-skipped or disabled required outcomes are deferred.
 - Partner nonadministrative-amendment facts use the `post-year-proxy uncensored public-model panel` and report counts, range, constant-zero status, and equality to Item 4.02.
 

@@ -2058,11 +2058,12 @@ def test_paper_plan_assigns_results_owners_and_exact_claim_boundaries() -> None:
         "`prior_filing_count`",
         "not PCAOB inspection",
         "`is_domestic_us_gaap_proxy`",
-        "10-K/10-K/A with no observed same-year FPI-form proxy",
+        "selected 10-K/10-K/A issuer-years with no observed same-year 20-F/40-F/6-K proxy",
         "validates neither FPI status, domicile, nor US GAAP",
-        "PCAOB inspection archives are provenance inputs",
+        "PCAOB inspection archives are provenance/Bronze inputs only",
         "events are not joined to Gold",
-        "no model-eligible inspection features",
+        "no inspection model features",
+        "PCAOB Form AP may supply auditor and engagement-partner features",
         "at least one required outcome is fitted",
         "all-skipped or disabled",
         "post-year-proxy uncensored public-model panel",
@@ -2071,6 +2072,51 @@ def test_paper_plan_assigns_results_owners_and_exact_claim_boundaries() -> None:
         "revision-frozen `all + expanding`",
     ]:
         assert phrase in plan
+
+
+def test_paper_plan_states_public_sample_and_inspection_boundaries() -> None:
+    plan = _read("docs/paper_plan.md")
+
+    for phrase in [
+        "selected 10-K/10-K/A issuer-years with no observed same-year 20-F/40-F/6-K proxy",
+        "validates neither FPI status, domicile, nor US GAAP",
+        "PCAOB inspection archives are provenance/Bronze inputs only",
+        "inspection events are not joined to Gold",
+        "no inspection model features",
+        "PCAOB Form AP may supply auditor and engagement-partner features",
+    ]:
+        assert phrase in plan
+
+    for stale_claim in [
+        "Domestic U.S. GAAP issuer-years",
+        "domestic U.S. GAAP proxy",
+        "PCAOB inspection tables",
+        "PCAOB Form AP and inspection sources produce auditor and oversight features",
+    ]:
+        assert stale_claim not in plan
+
+
+def test_paper_plan_displays_prior_filing_history_on_paper_facing_surfaces() -> None:
+    plan = _read("docs/paper_plan.md")
+    legacy_display = "Prior-filing history (legacy artifact key: oversight)"
+    blocks = [
+        plan.split('subgraph PUBLIC["', maxsplit=1)[1].split("    end", maxsplit=1)[0],
+        plan.split("### Preprocessing and Feature Construction", maxsplit=1)[1].split(
+            "#### Visibility/History Baseline", maxsplit=1
+        )[0],
+        plan.split("#### Model Families", maxsplit=1)[1].split(
+            "#### Model Selection and Skip Rules", maxsplit=1
+        )[0],
+        plan.split("### Experiment 3:", maxsplit=1)[1].split("### Experiment 4:", maxsplit=1)[0],
+        plan.split("### Experiment 5:", maxsplit=1)[1].split("### Experiment 6:", maxsplit=1)[0],
+        plan.split("#### Expected Evidence Pattern", maxsplit=1)[1].split(
+            "#### Connection to Results Snapshot", maxsplit=1
+        )[0],
+    ]
+
+    for block in blocks:
+        assert "prior-filing history" in block.lower()
+        assert re.search(r"\boversight\b", block.replace(legacy_display, "")) is None
 
 
 def test_paper_plan_is_p0_executable_spec_not_result_prompt() -> None:
@@ -2137,7 +2183,7 @@ def test_paper_plan_stabilizes_revision_frozen_methods_and_reporting_contract() 
         "metadata": "metadata",
         "xbrl": "XBRL",
         "auditor": "auditor",
-        "oversight": "oversight",
+        "oversight": "Prior-filing history (legacy artifact key: oversight)",
         "visibility_history": "visibility/history",
         "all": "all",
     }
