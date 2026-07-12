@@ -3248,6 +3248,125 @@ def test_partner_risk_history_uses_preaggregation_and_strict_pre_origin(tmp_path
     assert featured.loc[0, "auditor_partner_prior_other_issuer_total_count"] == 1
 
 
+def _write_shared_accession_partner_prior_fixture(
+    silver: Path,
+    *,
+    duplicate_partner_key: bool = False,
+) -> None:
+    write_table(
+        pd.DataFrame(
+            [
+                {
+                    "issuer_cik": "1",
+                    "entity_name": "Issuer One",
+                    "sic": 1000,
+                    "sic_description": "Industry",
+                    "entity_type": "operating",
+                },
+                {
+                    "issuer_cik": "2",
+                    "entity_name": "Issuer Two",
+                    "sic": 1000,
+                    "sic_description": "Industry",
+                    "entity_type": "operating",
+                },
+            ]
+        ),
+        silver / "issuer_dim.parquet",
+    )
+    filing_rows = [
+        {
+            "issuer_cik": issuer_cik,
+            "accession": "shared-accession",
+            "accession_nodash": "sharedaccession",
+            "filing_date": "2022-03-01",
+            "report_date": "2021-12-31",
+            "acceptance_datetime": "2022-03-01 08:00:00",
+            "form": "10-K",
+            "items": "",
+            "primary_document": "annual.htm",
+        }
+        for issuer_cik in ["1", "2"]
+    ]
+    if duplicate_partner_key:
+        filing_rows.append(dict(filing_rows[0]))
+    write_table(pd.DataFrame(filing_rows), silver / "filing_dim.parquet")
+    _write_csv_gz(
+        silver / "partner_issuer_engagement.csv.gz",
+        [
+            {
+                "issuer_cik": issuer_cik,
+                "form_ap_public_date": "2020-01-01",
+                "engagement_partner_id": "P1",
+            }
+            for issuer_cik in ["1", "2"]
+        ],
+    )
+    _write_csv_gz(
+        silver / "partner_risk_history.csv.gz",
+        [
+            {
+                "engagement_partner_id": "P1",
+                "event_date": "2021-01-01",
+                "partner_prior_8k_402_count": 5,
+                "partner_prior_nonadmin_amendment_count": 0,
+                "partner_prior_total_count": 5,
+            }
+        ],
+    )
+    _write_csv_gz(
+        silver / "partner_issuer_risk_history.csv.gz",
+        [
+            {
+                "engagement_partner_id": "P1",
+                "issuer_cik": issuer_cik,
+                "event_date": "2021-01-01",
+                "partner_issuer_prior_8k_402_count": current_issuer_count,
+                "partner_issuer_prior_nonadmin_amendment_count": 0,
+                "partner_issuer_prior_total_count": current_issuer_count,
+            }
+            for issuer_cik, current_issuer_count in [("1", 2), ("2", 4)]
+        ],
+    )
+
+
+def test_duckdb_gold_partner_prior_joins_shared_accession_at_issuer_grain(
+    tmp_path: Path,
+) -> None:
+    silver = tmp_path / "silver"
+    gold = tmp_path / "gold"
+    _write_shared_accession_partner_prior_fixture(silver)
+
+    build_gold_panels(
+        silver_dir=silver,
+        gold_dir=gold,
+        as_of_date="2026-04-23",
+        engine="duckdb",
+    )
+    panel = read_table(gold / "issuer_origin_panel.parquet")
+    actual = panel.set_index("issuer_cik")[
+        "auditor_partner_prior_other_issuer_total_count"
+    ].to_dict()
+
+    assert actual == {"0000000001": 3, "0000000002": 1}
+
+
+def test_duckdb_gold_rejects_duplicate_partner_prior_keys(tmp_path: Path) -> None:
+    silver = tmp_path / "silver"
+    _write_shared_accession_partner_prior_fixture(silver, duplicate_partner_key=True)
+
+    with pytest.raises(
+        ValueError,
+        match="Partner-prior features contain duplicate issuer_cik x accession keys",
+    ):
+        build_gold_panels(
+            silver_dir=silver,
+            gold_dir=tmp_path / "gold",
+            as_of_date="2026-04-23",
+            engine="duckdb",
+        )
+
+
 def test_comment_threads_and_correction_events_nonempty_branches(tmp_path: Path) -> None:
     silver = tmp_path / "silver"
     filing_dim = tmp_path / "filing_dim.parquet"

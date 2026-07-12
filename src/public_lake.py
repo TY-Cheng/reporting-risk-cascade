@@ -4772,6 +4772,7 @@ def _build_gold_panels_duckdb(
             CREATE OR REPLACE TEMP VIEW filing_partner_prior_raw_gold AS
             SELECT
                 f.accession,
+                f.issuer_cik,
                 COALESCE((
                     SELECT max(hist.partner_prior_8k_402_count)
                     FROM partner_risk_history_norm_gold hist
@@ -4824,9 +4825,10 @@ def _build_gold_panels_duckdb(
         )
         con.execute(
             """
-            CREATE OR REPLACE TEMP VIEW filing_partner_prior_gold AS
+            CREATE OR REPLACE TEMP TABLE filing_partner_prior_gold AS
             SELECT
                 accession,
+                issuer_cik,
                 partner_total_prior_8k_402_count - current_issuer_prior_8k_402_count
                     AS raw_other_issuer_8k_402_count,
                 partner_total_prior_nonadmin_amendment_count
@@ -4850,6 +4852,37 @@ def _build_gold_panels_duckdb(
             FROM filing_partner_prior_raw_gold
             """
         )
+        duplicate_partner_prior_keys = int(
+            con.execute(
+                """
+                SELECT count(*)
+                FROM (
+                    SELECT issuer_cik, accession
+                    FROM filing_partner_prior_gold
+                    GROUP BY issuer_cik, accession
+                    HAVING count(*) > 1
+                ) duplicates
+                """
+            ).fetchone()[0]
+        )
+        if duplicate_partner_prior_keys:
+            raise ValueError(
+                "Partner-prior features contain duplicate issuer_cik x accession keys."
+            )
+        source_partner_rows, joined_partner_rows = con.execute(
+            """
+            SELECT
+                (SELECT count(*) FROM filing_model_source_gold),
+                (
+                    SELECT count(*)
+                    FROM filing_model_source_gold f
+                    LEFT JOIN filing_partner_prior_gold partner_prior
+                        USING (accession, issuer_cik)
+                )
+            """
+        ).fetchone()
+        if int(joined_partner_rows) != int(source_partner_rows):
+            raise ValueError("Partner-prior join expanded filing model rows.")
         negative_partner_rows = int(
             con.execute(
                 """
@@ -4874,7 +4907,7 @@ def _build_gold_panels_duckdb(
         filing_from = "filing_model_source_gold f"
         joins = [
             "LEFT JOIN form_ap_summary_gold form_ap USING (accession, issuer_cik)",
-            "LEFT JOIN filing_partner_prior_gold partner_prior USING (accession)",
+            "LEFT JOIN filing_partner_prior_gold partner_prior USING (accession, issuer_cik)",
         ]
         if has_xbrl_summary:
             joins.append("LEFT JOIN xbrl_summary_gold xbrl_summary USING (accession)")
