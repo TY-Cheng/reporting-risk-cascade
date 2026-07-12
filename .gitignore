@@ -227,3 +227,6 @@ __marimo__/
 
 # Local Git worktrees used for isolated implementation
 .worktrees/
+
+# Local Superpowers execution ledger and handoff packages
+.superpowers/
