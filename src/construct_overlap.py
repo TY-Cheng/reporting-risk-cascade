@@ -418,8 +418,13 @@ def _top_precision(y: np.ndarray, score: np.ndarray, fraction: float) -> float:
     if len(y) == 0:
         return float("nan")
     k = min(max(matlab_round_positive(len(y) * fraction), 1), len(y))
-    ranked = np.argsort(-np.nan_to_num(score, nan=-np.inf), kind="mergesort")[:k]
-    return float(np.mean(y[ranked])) if k else float("nan")
+    normalized_score = np.nan_to_num(score, nan=-np.inf)
+    cutoff = np.sort(normalized_score)[-k]
+    above = normalized_score > cutoff
+    tied = normalized_score == cutoff
+    remaining = k - int(above.sum())
+    expected_hits = float(np.sum(y[above])) + remaining * float(np.mean(y[tied]))
+    return expected_hits / k
 
 
 def _top_decile_lift(y: np.ndarray, score: np.ndarray) -> float:
@@ -440,15 +445,18 @@ def _bootstrap_lift_ci(
     """Row-level percentile bootstrap for top-decile lift.
 
     The implementation resamples rows with replacement by drawing multinomial
-    row counts. Rows are sorted by score once; for each bootstrap draw, the
-    top-decile set is recomputed from the resampled row counts.
+    row counts. Rows are canonicalized by score and label once; for each draw,
+    the top-decile cutoff and any fractional boundary allocation are recomputed.
     """
     y = np.asarray(y_true, dtype=int)
     s = np.asarray(score, dtype=float)
     if int(y.sum()) < BOOTSTRAP_POSITIVE_THRESHOLD or len(y) == 0:
         return (float("nan"), float("nan"))
-    order = np.argsort(-np.nan_to_num(s, nan=-np.inf), kind="mergesort")
+    normalized_score = np.nan_to_num(s, nan=-np.inf)
+    order = np.lexsort((y, -normalized_score))
     y_sorted = y[order].astype(np.int64)
+    score_sorted = normalized_score[order]
+    group_starts = np.r_[0, np.flatnonzero(score_sorted[1:] != score_sorted[:-1]) + 1]
     sample_size = len(y_sorted)
     top_k = min(max(matlab_round_positive(sample_size * 0.10), 1), sample_size)
     row_prob = np.full(sample_size, 1.0 / sample_size)
@@ -457,15 +465,23 @@ def _bootstrap_lift_ci(
     for start in range(0, int(reps), BOOTSTRAP_CHUNK_REPS):
         batch_reps = min(BOOTSTRAP_CHUNK_REPS, int(reps) - start)
         counts = rng.multinomial(sample_size, row_prob, size=batch_reps).astype(np.int64)
-        cumulative = np.cumsum(counts, axis=1)
-        top_counts = counts * (cumulative <= top_k)
+        group_counts = np.add.reduceat(counts, group_starts, axis=1)
+        group_positive = np.add.reduceat(counts * y_sorted, group_starts, axis=1)
+        cumulative = np.cumsum(group_counts, axis=1)
         boundary = np.argmax(cumulative >= top_k, axis=1)
         previous = np.where(boundary > 0, cumulative[np.arange(batch_reps), boundary - 1], 0)
-        boundary_take = np.maximum(top_k - previous, 0)
-        top_counts[np.arange(batch_reps), boundary] = boundary_take
+        boundary_take = top_k - previous
+        positive_cumulative = np.cumsum(group_positive, axis=1)
+        prior_positive = np.where(
+            boundary > 0,
+            positive_cumulative[np.arange(batch_reps), boundary - 1],
+            0,
+        )
+        boundary_positive = group_positive[np.arange(batch_reps), boundary]
+        boundary_count = group_counts[np.arange(batch_reps), boundary]
+        top_positive = prior_positive + boundary_take * boundary_positive / boundary_count
 
-        top_positive = top_counts @ y_sorted
-        total_positive = counts @ y_sorted
+        total_positive = group_positive.sum(axis=1)
         with np.errstate(divide="ignore", invalid="ignore"):
             batch_lift = (top_positive / top_k) / (total_positive / sample_size)
         finite = batch_lift[np.isfinite(batch_lift)]
@@ -869,6 +885,7 @@ def _mark_alignment_rows(
     frame: pd.DataFrame,
     *,
     primary_keys: dict[str, object],
+    key_columns: Sequence[str],
     exploratory_top_n: int,
     direction: str,
 ) -> pd.DataFrame:
@@ -881,7 +898,15 @@ def _mark_alignment_rows(
         & pd.to_numeric(out["top_decile_lift"], errors="coerce").notna()
         & ~out["is_primary"]
     ]
-    top_index = fitted.nlargest(exploratory_top_n, "top_decile_lift").index
+    top_index = (
+        fitted.sort_values(
+            ["top_decile_lift", *key_columns],
+            ascending=[False, *([True] * len(key_columns))],
+            na_position="last",
+        )
+        .head(exploratory_top_n)
+        .index
+    )
     out["is_exploratory_top5"] = out.index.isin(top_index)
     return out
 
@@ -927,6 +952,7 @@ def _finalize_alignment_rows(
     marked = _mark_alignment_rows(
         pd.DataFrame(rows),
         primary_keys=primary_keys,
+        key_columns=group_cols,
         exploratory_top_n=exploratory_top_n,
         direction=direction,
     )
@@ -1470,7 +1496,11 @@ def _exploratory_maximum(
     ]
     if fitted.empty:
         raise ValueError(f"{direction} has no fitted exploratory rows")
-    maximum = fitted.nlargest(1, "top_decile_lift").iloc[0]
+    maximum = fitted.sort_values(
+        ["top_decile_lift", *key_columns],
+        ascending=[False, *([True] * len(key_columns))],
+        na_position="last",
+    ).iloc[0]
     maximum_lift = float(maximum["top_decile_lift"])
     primary_lift = float(primary_row["top_decile_lift"])
     return {

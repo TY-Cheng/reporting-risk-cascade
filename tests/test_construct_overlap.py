@@ -1074,6 +1074,17 @@ def test_ranking_metric_sparse_and_bootstrap_thresholds() -> None:
     assert large["top_decile_lift_ci_high"] == repeat["top_decile_lift_ci_high"]
 
 
+def test_top_fraction_metrics_fractionally_allocate_cutoff_ties() -> None:
+    y = np.array([1, 1, 0, 0, 0, *([0] * 15)])
+    score = np.array([0.9, 0.5, 0.5, 0.5, 0.5, *([0.1] * 15)])
+
+    assert construct_overlap._top_precision(y, score, 0.10) == pytest.approx(0.625)
+    assert construct_overlap._top_decile_lift(y, score) == pytest.approx(6.25)
+    assert construct_overlap._top_precision(
+        np.array([1, 0, 1, 0]), np.array([0.9, 0.8, 0.7, 0.6]), 0.50
+    ) == pytest.approx(0.50)
+
+
 def test_select_unique_row_ignores_higher_lift_distractor() -> None:
     frame = pd.DataFrame(
         [
@@ -1201,6 +1212,168 @@ def test_bootstrap_union_excludes_top_ranked_primary_before_selecting_five(
     assert not finalized[0]["is_exploratory_top5"]
     assert sum(row["is_exploratory_top5"] for row in finalized) == 5
     assert sum(pd.notna(row.get("top_decile_lift_ci_low")) for row in finalized) == 6
+
+
+def test_alignment_ranking_and_intervals_ignore_physical_row_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = pd.DataFrame(
+        {
+            "gvkey": [str(1000 + idx) for idx in range(40)],
+            "data_year": [2018] * 40,
+            "benchmark_label": [1] * 30 + [0] * 10,
+            "bridge_tier": ["high_confidence"] * 40,
+            "feature_set": ["all"] * 40,
+            "train_window": ["expanding"] * 40,
+            "task": ["8k_402"] * 40,
+            "score": [0.9] * 3 + [0.5] * 37,
+            "label_comment_thread_365": [1] * 30 + [0] * 10,
+            "label_amendment_365": [1] * 30 + [0] * 10,
+            "label_8k_402_365": [1] * 30 + [0] * 10,
+        }
+    )
+    config = {**TEST_ALIGNMENT_CONFIG, "bootstrap_reps": 100}
+
+    def public_frames(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        outputs = {
+            aggregation: frame.assign(score_aggregation=aggregation)
+            for aggregation in ["mean", "median", "max"]
+        }
+        outputs["ambiguous_excluded"] = frame.assign(score_aggregation="ambiguous_excluded")
+        return outputs
+
+    public_results = []
+    for name, frame in [("ordered", rows), ("shuffled", rows.iloc[::-1])]:
+        monkeypatch.setattr(
+            construct_overlap,
+            "_public_score_frames",
+            lambda con, path, frame=frame: public_frames(frame),
+        )
+        ranking, _ = construct_overlap._public_ranking(
+            object(),
+            Path("unused.parquet"),
+            tmp_path / name / "public",
+            "test_bridge",
+            alignment_config=config,
+        )
+        public_results.append(ranking.loc[ranking["is_primary"]].iloc[0])
+
+    class ReciprocalConnection:
+        def __init__(self, frame: pd.DataFrame) -> None:
+            self.frame = frame
+            self.result: pd.DataFrame | None = None
+
+        def execute(self, sql: str) -> ReciprocalConnection:
+            self.result = None
+            for label in construct_overlap.PUBLIC_LABELS:
+                if f"'{label}' AS target_public_label" in sql:
+                    self.result = self.frame.assign(
+                        target_public_label=label,
+                        target_label=self.frame[label],
+                    )
+                    break
+            return self
+
+        def fetchdf(self) -> pd.DataFrame:
+            assert self.result is not None
+            return self.result.copy()
+
+    reciprocal_base = rows.assign(
+        model_id="benchmark_xgb",
+        feature_set="benchmark_all",
+        label_mode="naive",
+        score_aggregation="benchmark_score",
+    )
+    reciprocal_results = []
+    for name, frame in [
+        ("ordered", reciprocal_base),
+        ("shuffled", reciprocal_base.iloc[::-1]),
+    ]:
+        reciprocal = construct_overlap._reciprocal_alignment(
+            ReciprocalConnection(frame),
+            benchmark_predictions_path=Path("unused.parquet"),
+            peer_predictions_path=None,
+            out_dir=tmp_path / name / "reciprocal",
+            bridge_source="test_bridge",
+            alignment_config=config,
+        )
+        reciprocal_results.append(reciprocal.loc[reciprocal["is_primary"]].iloc[0])
+
+    metrics = [
+        "top_10pct_precision",
+        "top_decile_lift",
+        "top_decile_lift_ci_low",
+        "top_decile_lift_ci_high",
+    ]
+    expected_precision = (3 + 27 / 37) / 4
+    expected_lift = expected_precision / 0.75
+    for result in [*public_results, *reciprocal_results]:
+        assert result["top_10pct_precision"] == pytest.approx(expected_precision)
+        assert result["top_decile_lift"] == pytest.approx(expected_lift)
+    pd.testing.assert_series_equal(public_results[0][metrics], public_results[1][metrics])
+    pd.testing.assert_series_equal(reciprocal_results[0][metrics], reciprocal_results[1][metrics])
+
+
+def test_exploratory_ties_use_alignment_keys_not_row_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {"model_id": "m", "task": "primary", "metric_status": "fit", "top_decile_lift": 1.0},
+        {"model_id": "m", "task": "max_b", "metric_status": "fit", "top_decile_lift": 10.0},
+        {"model_id": "m", "task": "max_a", "metric_status": "fit", "top_decile_lift": 10.0},
+        {"model_id": "m", "task": "middle_c", "metric_status": "fit", "top_decile_lift": 9.0},
+        {"model_id": "m", "task": "middle_d", "metric_status": "fit", "top_decile_lift": 8.0},
+        {"model_id": "m", "task": "edge_b", "metric_status": "fit", "top_decile_lift": 7.0},
+        {"model_id": "m", "task": "edge_a", "metric_status": "fit", "top_decile_lift": 7.0},
+    ]
+    samples = pd.DataFrame(
+        {
+            "model_id": ["m"] * 14,
+            "task": [row["task"] for row in rows for _ in range(2)],
+            "target": [0, 1] * 7,
+            "score": [0.1, 0.9] * 7,
+        }
+    )
+    monkeypatch.setattr(
+        construct_overlap,
+        "_bootstrap_lift_ci",
+        lambda y, score, *, reps, seed: (1.0, 2.0),
+    )
+
+    selections = []
+    maxima = []
+    for ordered_rows in [rows, list(reversed(rows))]:
+        finalized = _finalize_alignment_rows(
+            ordered_rows,
+            frame=samples,
+            group_cols=["model_id", "task"],
+            target_col="target",
+            score_col="score",
+            primary_keys={"model_id": "m", "task": "primary"},
+            exploratory_top_n=5,
+            direction="public_to_benchmark",
+            bootstrap_seed=42,
+            bootstrap_reps=100,
+        )
+        frame = pd.DataFrame(finalized)
+        selections.append(set(frame.loc[frame["is_exploratory_top5"], "task"]))
+        primary = frame.loc[frame["is_primary"]].iloc[0]
+        maxima.append(
+            construct_overlap._exploratory_maximum(
+                frame,
+                primary_row=primary,
+                key_columns=["model_id", "task"],
+                direction="public_to_benchmark",
+            )["keys"]
+        )
+
+    expected = {"max_a", "max_b", "middle_c", "middle_d", "edge_a"}
+    assert selections == [expected, expected]
+    assert maxima == [
+        {"model_id": "m", "task": "max_a"},
+        {"model_id": "m", "task": "max_a"},
+    ]
 
 
 def test_select_unique_row_rejects_missing_primary() -> None:

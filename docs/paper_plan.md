@@ -327,7 +327,7 @@ bridge_tier: high_confidence
 - **Primary criterion.** PR-AUC relative to prevalence is the first-read metric because the labels are rare and ranking useful public review-and-correction cases is the main empirical task.
 - **Discrimination criterion.** ROC-AUC is reported for compatibility with prior fraud-prediction studies, but it is not sufficient on its own in rare-event settings.
 - **Calibration criterion.** Brier score, Brier Skill Score, and expected calibration error are reported because risk scores should be interpretable as probabilities, not only rankings.
-- **Operational ranking criterion.** Top-50/100/200 precision and top-decile lift describe what a reviewer sees when inspecting the highest-risk issuer-years.
+- **Operational ranking criterion.** Top-50/100/200 precision and top-decile lift describe what a reviewer sees when inspecting the highest-risk issuer-years. In the construct-overlap analysis, top-fraction precision at 1%, 5%, and 10% retains `k = round(n × fraction)`; when the cutoff falls inside an exact score tie, the remaining slots are allocated fractionally across that tie block, preserving an effective inspected count of `k` without an arbitrary firm-identifier tie-break. Top-decile lift inherits the same rule, which is recomputed within each bootstrap replicate.
 - **Literature-comparability criterion.** Bao-style top-fraction precision, sensitivity, specificity, balanced accuracy, and binary-relevance NDCG@k are retained for model-family comparability.
 
 #### Metric Definitions and Interpretation
