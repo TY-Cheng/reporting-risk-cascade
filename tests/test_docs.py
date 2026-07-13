@@ -2524,6 +2524,23 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
         assert phrase in prompt
 
 
+def test_manuscript_audit_prompt_displays_prior_filing_history_in_feature_directives() -> None:
+    prompt = _read("docs/manuscript_audit_prompt.md")
+    legacy_display = "Prior-filing history (legacy artifact key: oversight)"
+    directives = [
+        prompt.split("- Apply a common-sample / coverage caveat", maxsplit=1)[1].split(
+            "- **Missingness and opacity check.**", maxsplit=1
+        )[0],
+        prompt.split("- Use common-sample / coverage caveat language", maxsplit=1)[1].split(
+            "- Treat public-data reproducibility", maxsplit=1
+        )[0],
+    ]
+
+    for directive in directives:
+        assert legacy_display in directive
+        assert re.search(r"\boversight\b", directive.replace(legacy_display, "")) is None
+
+
 def test_manuscript_audit_prompt_has_structural_hardening_rules() -> None:
     prompt = _read("docs/manuscript_audit_prompt.md")
 

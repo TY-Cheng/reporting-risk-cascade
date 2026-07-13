@@ -337,8 +337,9 @@ P1 checks:
   require explicit exclusion or a look-ahead-bias caveat.
 - Keep feature-family results as feature fusion, not XBRL dominance. The bounded
   phrase is: feature fusion helps, metadata remains strong.
-- Apply a common-sample / coverage caveat to XBRL, auditor, oversight, and
-  other narrower feature-family comparisons. If the comparison is not on a
+- Apply a common-sample / coverage caveat to XBRL, auditor,
+  Prior-filing history (legacy artifact key: oversight), and other narrower
+  feature-family comparisons. If the comparison is not on a
   common evaluation sample, the text must state that differences may reflect
   both source coverage and signal content.
 - **Missingness and opacity check.** Distinguish missingness cases before
@@ -576,8 +577,8 @@ Results and Discussion polish:
 - Treat best-model, best-window, and max-PR-AUC language as descriptive ranking
   evidence unless selection was pre-specified or separately validated.
 - Keep feature-family results as feature fusion, not XBRL dominance.
-- Use common-sample / coverage caveat language for XBRL, auditor, and oversight
-  feature-family comparisons.
+- Use common-sample / coverage caveat language for XBRL, auditor, and
+  Prior-filing history (legacy artifact key: oversight) feature-family comparisons.
 - Treat public-data reproducibility as open-science and accounting-measurement
   value. Do not oversell deployment-ready RegTech.
 
