@@ -414,7 +414,7 @@ def _xgb_model(*, seed: int, n_estimators: int, max_depth: int, n_jobs: int) -> 
 
 
 def _svm_pipeline(*, seed: int) -> Pipeline:
-    svm = LinearSVC(class_weight="balanced", max_iter=5000, random_state=seed, tol=1e-3)
+    svm = LinearSVC(class_weight="balanced", max_iter=20_000, random_state=seed, tol=1e-3)
     return Pipeline(
         steps=[
             ("impute", _median_imputer()),

@@ -173,6 +173,12 @@ def test_median_imputer_keeps_empty_features_without_warning() -> None:
     assert not any("Skipping features without any observed values" in str(w.message) for w in caught)
 
 
+def test_svm_pipeline_uses_convergence_budget() -> None:
+    estimator = pc._svm_pipeline(seed=42).named_steps["model"].estimator
+    assert estimator.max_iter == 20_000
+    assert estimator.tol == 1e-3
+
+
 def test_peer_comparison_light_mode_writes_pr1_artifacts(tmp_path: Path) -> None:
     out_dir = tmp_path / "peer"
     result = run_peer_comparison(
