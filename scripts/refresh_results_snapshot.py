@@ -94,7 +94,7 @@ FIGURE_EXPLANATIONS = {
     "figure_02_feature_family_pr_auc": {
         "title": "Feature-family PR-AUC",
         "claim": "Feature-family comparisons provide sensitivity evidence around the frozen public specification.",
-        "evidence": "The figure compares all-feature, metadata, XBRL, auditor, oversight, and visibility/history information sets under the same public-label evaluation frame.",
+        "evidence": "The figure compares all-feature, metadata, XBRL, auditor, Prior-filing history (legacy artifact key: oversight), and visibility/history information sets under the same public-label evaluation frame.",
         "boundary": "Interpret as information-set evidence rather than a structural source-importance or mechanism claim.",
     },
     "figure_03_detected_misstatement_peer_pr_auc": {
@@ -1348,7 +1348,8 @@ def build_snapshot(
         + ".",
         "",
         "- **Models.** The core public cascade uses XGBoost over metadata, XBRL, "
-        "auditor, oversight, visibility/history, and all-feature sets. "
+        "auditor, Prior-filing history (legacy artifact key: oversight), "
+        "visibility/history, and all-feature sets. "
         "Note/disclosure-breadth variables enter `all` without a standalone ablation. "
         "Peer-compatible "
         "Dechow, Perols, Bao, and Bertomeu-style suites are included when the "

@@ -119,7 +119,8 @@ BAR-specific positioning:
 
 - Route the paper primarily as financial-reporting measurement and disclosure
   review, with audit/regulatory oversight as a secondary fit because PCAOB Form
-  AP and inspection features are part of the public information set.
+  AP can supply auditor and engagement-partner features. PCAOB inspection
+  archives are Bronze/provenance inputs only, not Gold or model features.
 - Let the UK/EU discussion support cautious portability. The paper can say that
   the measurement design is portable to settings with dated filings and public
   review or correction channels; it cannot claim out-of-U.S. validation.

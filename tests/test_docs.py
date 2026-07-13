@@ -1490,6 +1490,14 @@ def test_generated_snapshot_is_owner_directed_results_and_discussion(
         "all + expanding",
     ]:
         assert phrase in results
+    legacy_display = "Prior-filing history (legacy artifact key: oversight)"
+    figure_2 = results.split("#### Feature-family PR-AUC", maxsplit=1)[1].split(
+        "\n#### ", maxsplit=1
+    )[0]
+    models = results.split("- **Models.**", maxsplit=1)[1].split("- **Metrics.**", maxsplit=1)[0]
+    for paper_facing_block in [figure_2, models]:
+        assert legacy_display in paper_facing_block
+        assert re.search(r"\boversight\b", paper_facing_block.replace(legacy_display, "")) is None
     for local_path_marker in [USER_PATH_PREFIX, VOLUME_PATH_PREFIX, CLOUD_STORAGE_MARKER]:
         assert local_path_marker not in results
     for forbidden in [
