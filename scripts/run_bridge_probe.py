@@ -32,12 +32,6 @@ def parse_args() -> argparse.Namespace:
         help="Old gvkey firm-year table",
     )
     parser.add_argument(
-        "--raw-csv",
-        type=Path,
-        default=None,
-        help="Deprecated alias for --raw-data",
-    )
-    parser.add_argument(
         "--issuer-dim",
         type=Path,
         default=LAKE_SILVER_DIR / "issuer_dim.parquet",
@@ -71,7 +65,7 @@ def main() -> None:
     from src import RAW_DATASET_PATH
 
     args = parse_args()
-    raw_data = args.raw_data or args.raw_csv or RAW_DATASET_PATH
+    raw_data = args.raw_data or RAW_DATASET_PATH
     summary = run_bridge_probe(
         raw_data_path=raw_data,
         issuer_dim_path=args.issuer_dim,

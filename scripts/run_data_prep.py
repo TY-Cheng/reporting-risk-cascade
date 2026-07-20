@@ -41,12 +41,6 @@ def parse_args() -> argparse.Namespace:
         help="Optional explicit raw table path; overrides --dataset",
     )
     parser.add_argument(
-        "--raw-csv",
-        type=Path,
-        default=None,
-        help="Deprecated alias for --raw-data",
-    )
-    parser.add_argument(
         "--out-dir",
         type=Path,
         default=None,
@@ -65,7 +59,7 @@ def main() -> None:
 
     args = parse_args()
 
-    raw_override = args.raw_data or args.raw_csv
+    raw_override = args.raw_data
     if raw_override is not None:
         raw_csv = raw_override
     elif args.dataset == "sample":

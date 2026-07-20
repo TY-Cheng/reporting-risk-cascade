@@ -164,19 +164,6 @@ def _raw_years(raw: Optional[pd.DataFrame], *, year_col: str) -> List[int]:
     return sorted(years.unique().tolist())
 
 
-def _resolve_optional_path_arg(
-    *,
-    preferred_name: str,
-    preferred_value: Optional[Path],
-    deprecated_name: str,
-    deprecated_value: Optional[Path],
-) -> Optional[Path]:
-    if preferred_value is not None and deprecated_value is not None:
-        if Path(preferred_value) != Path(deprecated_value):
-            raise ValueError(f"Pass only one of {preferred_name} or deprecated {deprecated_name}.")
-    return preferred_value if preferred_value is not None else deprecated_value
-
-
 def _raw_identifier_columns(raw: pd.DataFrame) -> Dict[str, Optional[str]]:
     return {
         "cik": _first_existing(raw.columns, RAW_CIK_COLS),
@@ -763,9 +750,6 @@ def run_bridge_probe(
     issuer_dim_path: Optional[Path] = None,
     issuer_origin_panel_path: Optional[Path] = None,
     crosswalk_path: Optional[Path] = None,
-    raw_csv: Optional[Path] = None,
-    issuer_dim_csv: Optional[Path] = None,
-    issuer_origin_panel_csv: Optional[Path] = None,
     firm_col: str = "gvkey",
     year_col: str = "data_year",
     target_col: str = "misstatement firm-year",
@@ -773,24 +757,6 @@ def run_bridge_probe(
     """Run a public-only bridge feasibility audit and write required reports."""
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    raw_data_path = _resolve_optional_path_arg(
-        preferred_name="raw_data_path",
-        preferred_value=raw_data_path,
-        deprecated_name="raw_csv",
-        deprecated_value=raw_csv,
-    )
-    issuer_dim_path = _resolve_optional_path_arg(
-        preferred_name="issuer_dim_path",
-        preferred_value=issuer_dim_path,
-        deprecated_name="issuer_dim_csv",
-        deprecated_value=issuer_dim_csv,
-    )
-    issuer_origin_panel_path = _resolve_optional_path_arg(
-        preferred_name="issuer_origin_panel_path",
-        preferred_value=issuer_origin_panel_path,
-        deprecated_name="issuer_origin_panel_csv",
-        deprecated_value=issuer_origin_panel_csv,
-    )
     if raw_data_path is None:
         raise ValueError("raw_data_path is required.")
 

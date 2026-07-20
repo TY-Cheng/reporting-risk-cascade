@@ -224,7 +224,6 @@ def _write_study_fixture(
         benchmark_config=paths["benchmark_config"],
         public_cascade_config=paths["public_cascade_config"],
         raw_data=None,
-        raw_csv=None,
         timing_csv=None,
         issuer_origin_panel=None,
         issuer_dim=None,

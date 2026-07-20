@@ -35,12 +35,6 @@ def parse_args() -> argparse.Namespace:
         help="Path to the raw firm-year table",
     )
     parser.add_argument(
-        "--raw-csv",
-        type=Path,
-        default=None,
-        help="Deprecated alias for --raw-data",
-    )
-    parser.add_argument(
         "--timing-csv",
         type=Path,
         default=None,
@@ -81,7 +75,7 @@ def main() -> None:
     args = parse_args()
     from src import RAW_DATASET_PATH
 
-    raw_data = args.raw_data or args.raw_csv or RAW_DATASET_PATH
+    raw_data = args.raw_data or RAW_DATASET_PATH
     run_benchmark(
         config_path=args.config,
         raw_csv=raw_data,

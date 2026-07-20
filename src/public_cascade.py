@@ -930,18 +930,11 @@ def run_public_cascade(
     config_path: Path,
     issuer_origin_panel_path: Optional[Path] = None,
     out_dir: Path,
-    issuer_origin_panel_csv: Optional[Path] = None,
     parallel_jobs: Optional[int] = None,
     model_threads: Optional[int] = None,
     seed_policy: Optional[str] = None,
 ) -> Dict[str, object]:
     config = _load_config(config_path)
-    if issuer_origin_panel_path is not None and issuer_origin_panel_csv is not None:
-        if Path(issuer_origin_panel_path) != Path(issuer_origin_panel_csv):
-            raise ValueError(
-                "Pass only one of issuer_origin_panel_path or deprecated issuer_origin_panel_csv."
-            )
-    issuer_origin_panel_path = issuer_origin_panel_path or issuer_origin_panel_csv
     if issuer_origin_panel_path is None:
         raise ValueError("issuer_origin_panel_path is required.")
     panel = read_table(

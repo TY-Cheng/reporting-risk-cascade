@@ -157,12 +157,6 @@ def parse_args() -> argparse.Namespace:
         help="Path to the old gvkey firm-year table",
     )
     parser.add_argument(
-        "--raw-csv",
-        type=Path,
-        default=None,
-        help="Deprecated alias for --raw-data",
-    )
-    parser.add_argument(
         "--timing-csv",
         type=Path,
         default=None,
@@ -350,9 +344,8 @@ def main() -> None:
     run_benchmark_peer = peer_mode != "none" and peer_target in {"benchmark", "both"}
     run_public_peer = peer_mode == "full" and peer_target in {"public", "both"}
 
-    raw_data_arg = args.raw_data or args.raw_csv
     raw_csv = _resolve_project_path(
-        raw_data_arg or inputs.get("raw_data") or inputs.get("raw_csv"),
+        args.raw_data or inputs.get("raw_data"),
         default=RAW_DATASET_PATH,
         data_dir=DATA_DIR,
         artifacts_dir=ARTIFACTS_DIR,

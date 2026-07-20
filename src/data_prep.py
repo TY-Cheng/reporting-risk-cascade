@@ -593,15 +593,11 @@ def main(config_path: Path, raw_csv: Path, out_dir: Path):
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Misstatement data prep & CV runner")
     p.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    p.add_argument("--raw_data", type=str, required=False, help="Path to raw table file")
-    p.add_argument("--raw_csv", type=str, required=False, help="Deprecated alias for --raw_data")
+    p.add_argument("--raw_data", type=str, required=True, help="Path to raw table file")
     p.add_argument("--out_dir", type=str, required=True, help="Directory to write artifacts")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    raw_data = args.raw_data or args.raw_csv
-    if raw_data is None:
-        raise SystemExit("--raw_data is required")
-    main(config_path=Path(args.config), raw_csv=Path(raw_data), out_dir=Path(args.out_dir))
+    main(config_path=Path(args.config), raw_csv=Path(args.raw_data), out_dir=Path(args.out_dir))

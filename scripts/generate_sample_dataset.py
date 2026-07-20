@@ -23,9 +23,7 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="Generate the runtime sample dataset")
     parser.add_argument("--raw-data", type=Path, default=None)
-    parser.add_argument("--raw-csv", type=Path, default=None, help="Deprecated alias for --raw-data")
     parser.add_argument("--out-data", type=Path, default=None)
-    parser.add_argument("--out-csv", type=Path, default=None, help="Deprecated alias for --out-data")
     parser.add_argument("--firm-col", default="gvkey")
     parser.add_argument("--n-firms", type=int, default=500)
     parser.add_argument("--seed", type=int, default=SEED_DEFAULT)
@@ -38,8 +36,8 @@ def main() -> None:
     from src.sample_dataset import materialize_sample_dataset
 
     args = parse_args()
-    raw_data = args.raw_data or args.raw_csv
-    out_data = args.out_data or args.out_csv
+    raw_data = args.raw_data
+    out_data = args.out_data
     if raw_data is None:
         from src import RAW_DATASET_PATH
         from src.raw_dataset import materialize_raw_dataset

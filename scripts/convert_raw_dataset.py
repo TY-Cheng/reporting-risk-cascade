@@ -35,12 +35,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--input-csv",
-        type=Path,
-        default=None,
-        help="Deprecated alias for --input-data",
-    )
-    parser.add_argument(
         "--out-data",
         type=Path,
         default=RAW_DATASET_PATH,
@@ -56,9 +50,8 @@ def main() -> None:
     from src.raw_dataset import materialize_raw_dataset
 
     args = parse_args()
-    source = args.input_data or args.input_csv
     result = materialize_raw_dataset(
-        source_path=source,
+        source_path=args.input_data,
         out_data=args.out_data,
         overwrite=args.overwrite,
     )

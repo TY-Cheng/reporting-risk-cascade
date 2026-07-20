@@ -3487,7 +3487,9 @@ def _event_within_horizon(
             continue
         origins = group.loc[valid, "origin_date"]
         lo = origins.to_numpy(dtype="datetime64[ns]")
-        hi = (origins + pd.Timedelta(days=int(horizon_days))).to_numpy(dtype="datetime64[ns]")
+        hi = (origins + pd.to_timedelta(int(horizon_days), unit="D")).to_numpy(
+            dtype="datetime64[ns]"
+        )
         left = np.searchsorted(event_dates, lo, side="right")
         right = np.searchsorted(event_dates, hi, side="right")
         flags.loc[origins.index] = (right > left).astype(int)
@@ -3531,7 +3533,9 @@ def _event_count_prior_window(
         if event_dates is None or len(event_dates) == 0:
             continue
         origins = group["origin_date"]
-        lo = (origins - pd.Timedelta(days=int(window_days))).to_numpy(dtype="datetime64[ns]")
+        lo = (origins - pd.to_timedelta(int(window_days), unit="D")).to_numpy(
+            dtype="datetime64[ns]"
+        )
         hi = origins.to_numpy(dtype="datetime64[ns]")
         left = np.searchsorted(event_dates, lo, side="left")
         right = np.searchsorted(event_dates, hi, side="left")
@@ -5806,7 +5810,7 @@ def build_gold_panels(
     filing["label_8k_402_365"] = label_8k_402
     filing["k402_item_metadata_unknown_365"] = k402_unknown
     filing["censored_365"] = (
-        filing["origin_date"] + pd.Timedelta(days=365) > filing["as_of_date"]
+        filing["origin_date"] + pd.to_timedelta(365, unit="D") > filing["as_of_date"]
     ).astype(int)
 
     issuer_panel = filing.loc[
