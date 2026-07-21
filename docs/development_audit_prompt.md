@@ -9,7 +9,7 @@ evaluation. Do not turn it into a generic code review or a data-shopping list.
 
 ```text
 You are auditing the reporting-risk-cascade paper repo. The paper is about a
-public-data-first workflow for estimating a pre-disclosure reporting-risk state,
+public-data-first workflow for estimating a filing-origin, submission-dated review-and-correction outcome state,
 not a generic corporate misstatement prediction task.
 
 Role:
@@ -170,7 +170,7 @@ Audit dimensions:
   paper-grade label maturation?
 - Are unknown-timing positives counted, and are drop-observed versus imputed-lag
   sensitivity scenarios clearly separated?
-- Are public cascade labels based on first public event dates?
+- Is the correspondence label based on the first underlying EDGAR submission date and explicitly distinguished from public release, while amendment and Item 4.02 labels use filing dates?
 - Are source_available_*, public_date_*, vintage_*, and as_of_date excluded from
   default public-cascade predictors?
 - Does the bridge path avoid silent many-to-many gvkey-CIK joins?
@@ -189,9 +189,11 @@ Audit dimensions:
   date-only fields, record same-day predictor/label ambiguity as a
   timing-resolution limitation unless the code proves acceptance-time-safe
   ordering.
-- Check whether all rolling history features use event_date < origin_date,
-  including prior comment threads, prior NT filings, prior amendments, prior
-  8-K instability items, and prior auditor/oversight events.
+- Check whether all eligible rolling history features use
+  `event_date < origin_date`, including prior NT filings, prior amendments, prior 8-K
+  instability items, and prior auditor/oversight events. Submission-dated
+  correspondence history is ineligible unless release-time availability is
+  independently verified.
 - Require code or artifact evidence for temporal ordering. Do not accept a
   narrative statement that there is no post-origin leakage without checking the
   joins or generated feature dates.
@@ -203,8 +205,9 @@ Audit dimensions:
   facts must be tied to filings available before or at the origin, and later
   amendments or restated values must not overwrite what was known at origin_date.
 - Check whether censoring is horizon-specific and task-specific.
-- Check whether comment letters are described as public comment-letter scrutiny,
-  not full SEC review.
+- Check whether comment threads are described as submission-dated, eventually
+  disclosed SEC correspondence, not correspondence public on submission and not
+  the full SEC review universe.
 - Check whether label_comment_thread_365, label_amendment_365,
   and label_8k_402_365 remain separate rather than being collapsed into a single
   fraud or restatement label.
@@ -321,7 +324,7 @@ Audit dimensions:
   public-history rolling counts.
 - Check whether note tag entropy has a formal definition and is interpreted as
   disclosure dispersion/breadth rather than mechanically as opacity.
-- Check whether source availability masks, first-public dates, hashes, parser
+- Check whether source availability masks, documented event dates, hashes, parser
   versions, and as-of dates are preserved through bronze, silver, and gold.
 - Check whether non-CIK-native public sources retain original identifiers and
   provenance before any CIK bridge.

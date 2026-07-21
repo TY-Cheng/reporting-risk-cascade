@@ -40,8 +40,8 @@ not an algorithm leaderboard, not a network cascade paper, and not a causal
 enforcement study.
 
 The likely rejection path is clear: BAR reviewers may decide that the accounting
-contribution is obscured by workflow detail, that selected public
-comment-letter scrutiny is oversold as reporting failure, that sparse Item 4.02
+contribution is obscured by workflow detail, that selected submission-dated
+correspondence is oversold as reporting failure or contemporaneously public scrutiny, that sparse Item 4.02
 evidence carries too much weight, or that the study is too close to a
 comment-letter prediction paper. Every review pass should therefore protect the
 construct first, then the evidence, then the style.
@@ -52,14 +52,18 @@ tables/figures, or current artifacts.
 
 ## Research Object
 
-The central construct is the **filing-origin public reporting-risk state**:
-whether information observable when an annual filing becomes public can rank
-issuers that later enter observable public review-and-correction channels.
+The central construct is the **filing-origin, submission-dated
+review-and-correction outcome state**: whether information verifiably available
+when an annual filing becomes public can rank issuers that later enter typed
+recorded outcome channels. SEC correspondence is eventually disclosed but is
+dated here by the underlying EDGAR submission date, not by an unverified public-
+release date.
 
 For continuity with older drafts, the phrase **pre-disclosure reporting-risk state**
 may appear in notes, but article prose should prefer
-**filing-origin public reporting-risk state**. This reduces terminology drift
-and ties the construct to the actual origin date used in the design.
+**filing-origin, submission-dated review-and-correction outcome state**. This
+reduces terminology drift and ties the construct to the actual predictor and
+outcome clocks used in the design.
 
 The paper has three evidence layers:
 
@@ -80,11 +84,11 @@ The paper has three evidence layers:
    candidate-only, integrated overlap claims must be downgraded. The standalone
    public-cascade measurement claim does not require bridge validation.
 
-The public labels are typed public observability states:
+The public-cascade labels are typed recorded outcome states:
 
 | Artifact label | Stable manuscript term | Use when | Claim boundary |
 | --- | --- | --- | --- |
-| `comment_thread_365` | public comment-letter scrutiny | Describing the public correspondence outcome. | Selected and publicly released correspondence, not the full SEC review universe. |
+| `comment_thread_365` | submission-dated, eventually disclosed SEC correspondence | Describing the correspondence outcome. | Dated by the underlying EDGAR submission, not public release; selected and not the full SEC review universe. |
 | `amendment_365` | public amendment/friction/correction channel | Describing the broad amendment or filing-friction outcome. | A heterogeneous filing-friction and correction state, not automatically a material misstatement. |
 | `8k_402_365` | Item 4.02 non-reliance event | Describing the underlying 8-K event. | A severe public correction signal, rare but rankable, not fraud occurrence. |
 | `8k_402_365` | public Item 4.02 material-correction proxy | Describing the label's construct role. | A proxy for severe public correction, not a complete material-misstatement or fraud label. |
@@ -139,9 +143,9 @@ Preferred terms:
 
 | Term | Use when | Do not confuse with |
 | --- | --- | --- |
-| filing-origin public reporting-risk state | Naming the paper's central construct. | Detected misstatement or latent fraud occurrence. |
-| public review-and-correction risk | Describing the observable downstream public outcome family. | Full SEC review, enforcement, or hidden misconduct. |
-| public comment-letter scrutiny | Describing public SEC correspondence outcomes. | The complete SEC review universe. |
+| filing-origin, submission-dated review-and-correction outcome state | Naming the paper's central construct. | Detected misstatement, latent fraud occurrence, or a release-time backtest. |
+| submission-dated review-and-correction outcomes | Describing the downstream outcome family. | Full SEC review, enforcement, or hidden misconduct. |
+| submission-dated, eventually disclosed SEC correspondence | Describing the comment-thread outcome. | Correspondence public availability on the submission date or the complete SEC review universe. |
 | public amendment/friction/correction channel | Describing the heterogeneous amendment outcome. | A material-misstatement label. |
 | Item 4.02 non-reliance event | Describing the 8-K event itself. | Fraud occurrence. |
 | public Item 4.02 material-correction proxy | Describing the label's role as a severe public-correction proxy. | A complete public-material-misstatement universe. |
@@ -165,13 +169,13 @@ Avoid or replace:
 | Avoid | Replace with |
 | --- | --- |
 | fraud detection, true fraud, latent fraud occurrence | detected-misstatement benchmark; unobserved fraud occurrence only when stating a boundary |
-| SEC review | selected public comment-letter scrutiny, unless explicitly discussing the broader institutional process |
+| SEC review | selected, eventually disclosed SEC correspondence, unless explicitly discussing the broader institutional process |
 | complete enforcement universe | public review-and-correction channels |
 | causal effect | adjusted association or predictive association |
 | outperforms prior studies | metric-compatible evidence within this estimand |
 | state-of-the-art model | implemented model family or peer-compatible model family |
 | model-driven insight | measurement-and-ranking evidence |
-| cascade as contagion, transmission, diffusion, or spillover | typed public observability states |
+| cascade as contagion, transmission, diffusion, or spillover | typed recorded outcome states |
 | feature importance as mechanism | feature-family or information-set evidence |
 | population confidence interval | annual fold dispersion or out-of-time evaluation dispersion |
 
@@ -199,8 +203,9 @@ not the other. Do not rely on acronyms alone.
 These boundaries are non-negotiable:
 
 - Public-cascade labels are not alternative names for fraud.
-- Public comment-letter scrutiny is selected and publicly released scrutiny; it
-  is not the full SEC review universe.
+- The comment-thread label is selected, eventually disclosed SEC correspondence
+  dated by its underlying EDGAR submission. It is not a public-release-time
+  outcome and not the full SEC review universe.
 - Amendment evidence is heterogeneous and must not be collapsed into material
   misstatement evidence.
 - Item 4.02 evidence is sparse severe-tail evidence; it cannot alone carry the
@@ -217,6 +222,14 @@ These boundaries are non-negotiable:
   be point-in-time, as-first-reported, or explicitly available at or before the
   filing-origin date. Any restated, retroactive, or post-origin predictor
   ambiguity is a look-ahead-bias risk.
+- Submission-dated comment-thread history must not enter filing-origin
+  predictors unless public-release timing is independently verified. A
+  submission before `origin_date` does not establish public availability before
+  `origin_date`.
+- Public-side folds must use complete origin-calendar-year holdouts. Training
+  rows may enter a holdout only when their 365-day outcome windows mature before
+  the holdout year begins. This establishes temporal ordering under the stated
+  submission-date outcome clock, not a live correspondence-release backtest.
 - Uncertainty intervals are annual fold dispersion summaries only when valid
   folds >= 5. Sparse folds with fewer than 10 positives must be excluded from
   formal interval displays and listed in provenance.
@@ -287,8 +300,9 @@ Important artifact families include:
 Complete these checks before style polish.
 
 Before stylistic polish, three claim-level checks dominate: the bridge tier must
-support any integrated overlap claim; selected public comment-letter scrutiny
-must not be treated as the full SEC review universe; and sparse Item 4.02
+support any integrated overlap claim; submission-dated, eventually disclosed
+SEC correspondence must not be treated as release-time data or the full SEC
+review universe; and sparse Item 4.02
 evidence must remain rare-tail support rather than the whole validation story.
 
 P0 checks:
@@ -300,11 +314,11 @@ P0 checks:
   evidence or diagnostic only. If the current tier is `wrds_validated`,
   WRDS-validated construct-overlap language may be reviewed as reportable
   subject to the stated caveats.
-- **Comment-letter selection check.** Confirm that the manuscript distinguishes
-  public comment-letter scrutiny from the SEC's endogenous scrutiny and release
-  process. A model that ranks `comment_thread_365` may rank both issuer
-  reporting-risk signals and the selection process that makes comment letters
-  public.
+- **Comment-letter date and selection check.** Confirm that the manuscript says
+  `comment_thread_365` is dated by the underlying EDGAR correspondence
+  submission, not by public release. The outcome is eventually disclosed and
+  selected; a model that ranks it may rank both issuer reporting-risk signals
+  and the SEC process that selects correspondence for later disclosure.
 - **Primary-source citation check.** Require primary-source citations for SEC,
   PCAOB, BAR, and Elsevier policy claims. Public-release timing,
   double-anonymization mechanics, AI disclosure, Form AP, inspection data, Item
@@ -335,10 +349,20 @@ P1 checks:
   Financial and public predictors should be as-first-reported or available at or
   before the filing-origin date; retroactively restated or post-origin fields
   require explicit exclusion or a look-ahead-bias caveat.
+- **Public-side fold check.** Verify that public-side holdouts use complete
+  origin-calendar years, that every training outcome window matures before the
+  holdout starts, and that the prose does not misstate this ordering as a
+  release-time availability backtest. Submission-dated correspondence histories
+  must be excluded from predictors unless release dates are verified.
+- **Issuer-dependence check.** Verify that public-opacity nuisance folds keep
+  repeated rows for an issuer together and that reported DML-style intervals
+  use issuer-clustered covariance. Construct-overlap bootstrap intervals must
+  resample issuers rather than rows. If either artifact remains row based,
+  downgrade its inferential language and require an explicit dependence caveat.
 - Keep feature-family results as feature fusion, not XBRL dominance. The bounded
   phrase is: feature fusion helps, metadata remains strong.
 - Apply a common-sample / coverage caveat to XBRL, auditor,
-  Prior-filing history (legacy artifact key: oversight), and other narrower
+  prior-filing history, and other narrower
   feature-family comparisons. If the comparison is not on a
   common evaluation sample, the text must state that differences may reflect
   both source coverage and signal content.
@@ -362,7 +386,7 @@ P1 checks:
   explaining the evaluation unit.
 - Avoid claims about unpriced market risk unless market variables and current
   artifacts directly support the claim.
-- Do not let the single-fold 2020 8k_402 result dominate the evidence narrative.
+- Do not let any single-year `8k_402_365` extreme dominate the evidence narrative.
 - Ensure uncertainty intervals are only reported when valid folds >= 5, and
   sparse folds with fewer than 10 positives are properly excluded from formal
   interval displays.
@@ -393,7 +417,7 @@ Voice and style examples:
 | --- | --- |
 | This paper contributes to the literature in three ways. | The contribution is to make the observability system part of the reporting-risk construct. |
 | The model robustly outperforms alternatives. | The specification has the highest reported mean PR-AUC in this table, subject to fold-dispersion and coverage caveats. |
-| The results show that AI can detect fraud. | The evidence shows that filing-origin public information ranks later public review-and-correction states above their base rates. |
+| The results show that AI can detect fraud. | The evidence shows that filing-origin information ranks later submission-dated correspondence and public correction outcomes above their base rates. |
 | The table reports 180 rows. | The table reports 180 metric rows across task-window evaluations, not 180 issuer-years. |
 
 ## Audit Workflow
@@ -417,9 +441,9 @@ Referee robustness check:
 
 - What is the accounting insight beyond another classifier?
 - Is the estimand clearly distinct from ex post detected misstatement?
-- Why is public comment-letter scrutiny a defensible selected public outcome?
+- Why is submission-dated, eventually disclosed SEC correspondence a defensible selected outcome?
 - Does the paper separate reporting-risk prediction from predicting which
-  filings receive public comment-letter scrutiny?
+  filings enter an eventually disclosed correspondence record?
 - Why is public-data-first a scientific information-set design?
 - Does the benchmark layer remain diagnostic rather than a same-target contest?
 - Does the paper remain credible for a BAR reader who is not interested in
@@ -475,7 +499,8 @@ Public cascade layer checks:
 - Are `comment_thread_365`, `amendment_365`, and `8k_402_365` reported
   separately?
 - Are headline public tasks are comment_thread, amendment, and 8k_402?
-- Are public-cascade labels described as public observability states, not fraud?
+- Are public-cascade labels described as typed recorded outcomes, not fraud or
+  real-time public-release states?
 - Are PR-AUC, ROC-AUC, Brier, Brier Skill Score, ECE, top-k precision,
   top-decile lift, and Bao-style metrics interpreted under rare-event
   prevalence/base-rate?
@@ -500,7 +525,7 @@ Sparse Item 4.02 checks:
 
 - Does any headline claim rely too heavily on sparse `8k_402_365` evidence?
 - Does the text describe Item 4.02 as rare but rankable?
-- Does it avoid promoting the single-fold 2020 8k_402 result over averages or
+- Does it avoid promoting a single-year `8k_402_365` extreme over averages or
   validation ledgers?
 - If top-decile lift is strong but PR-AUC is close to a low base rate, require a
   sparse severe-label caveat.
@@ -578,7 +603,7 @@ Results and Discussion polish:
   evidence unless selection was pre-specified or separately validated.
 - Keep feature-family results as feature fusion, not XBRL dominance.
 - Use common-sample / coverage caveat language for XBRL, auditor, and
-  Prior-filing history (legacy artifact key: oversight) feature-family comparisons.
+  prior-filing history feature-family comparisons.
 - Treat public-data reproducibility as open-science and accounting-measurement
   value. Do not oversell deployment-ready RegTech.
 
@@ -607,18 +632,20 @@ without overstating the evidence. The sequence should be:
 1. Measurement problem: observed restatement, correction, comment-letter, and
    enforcement labels mix occurrence, detection, timing, institutional
    selection, and public observability.
-2. Estimand: filing-origin public reporting-risk state.
-3. Public-data design: dated public filings, first-public dates, and public
-   correction channels give a sharper ex ante information set than many
-   year-level detected-misstatement labels.
-4. Public cascade: comment-letter scrutiny, amendment/friction/correction, and
-   Item 4.02 non-reliance as public observability states.
+2. Estimand: filing-origin, submission-dated review-and-correction outcome state.
+3. Public-data design: dated filing-origin predictors, correspondence submission
+   dates, and public correction dates give a sharper event clock than many
+   year-level detected-misstatement labels without implying correspondence was
+   public on submission.
+4. Public cascade: submission-dated eventually disclosed correspondence,
+   amendment/friction/correction, and Item 4.02 non-reliance as typed recorded
+   outcomes.
 5. Evidence architecture: benchmark layer, public cascade layer, bridge gate.
 6. Contribution: measurement redesign under partial observability,
    reproducible public-data architecture, typed cascade ontology, and
    bridge-gated validation.
-7. Main evidence: public filing-origin information ranks future public
-   review-and-correction events; comment-letter scrutiny is broad and ranked
+7. Main evidence: filing-origin information ranks future submission-dated
+   correspondence and public correction events; correspondence is broad and ranked
    above base rate across folds; amendments are intermediate; Item 4.02 is rare
    but rankable; feature fusion helps, metadata remains strong; bridge-gated
    overlap supports related-but-non-identical constructs.
@@ -646,7 +673,7 @@ the main reasons the paper would receive a major revision.
 Focus on:
 
 - whether the estimand is distinct from prior detected-misstatement prediction;
-- whether comment-letter scrutiny is a defensible selected public outcome;
+- whether submission-dated correspondence is a defensible selected outcome;
 - whether the paper is too close to the comment-letter prediction literature;
 - whether the amendment label is too heterogeneous;
 - whether Item 4.02 is too sparse for headline inference;
@@ -785,8 +812,8 @@ Core literature coverage should include:
 Keep numbering generic in audit language. Refer to functions, not fixed numbers,
 because numbering can change during revision.
 
-- The conceptual figure should show the public reporting-risk cascade as typed
-  public observability states, not contagion.
+- The conceptual figure should show the reporting-risk cascade as typed recorded
+  outcomes, not contagion or a release-time sequence.
 - The label ontology table should define construct, horizon, source, and caveat.
 - Public-lake scale tables should separate public-source construction from
   benchmark compatibility.

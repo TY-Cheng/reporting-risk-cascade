@@ -463,8 +463,6 @@ TABLE_03_REQUIRED = {
     "Mean_Brier",
     "Mean_Brier_Skill",
     "Mean_ECE",
-    "Excluding_2020_PR_AUC",
-    "Excluding_2020_Delta",
 }
 TABLE_09_REQUIRED = {
     "Direction",
@@ -479,6 +477,7 @@ TABLE_09_REQUIRED = {
     "Top_10pct_FDR",
     "Top_Decile_Lift",
     "Lift_Bootstrap_Interval",
+    "Bootstrap_Issuers",
 }
 
 
@@ -501,8 +500,6 @@ def _table_03_matches(
         "Mean_Brier",
         "Mean_Brier_Skill",
         "Mean_ECE",
-        "Excluding_2020_PR_AUC",
-        "Excluding_2020_Delta",
     ]
     numeric = table_03[numeric_columns].apply(pd.to_numeric, errors="coerce")
     positives = pd.to_numeric(
@@ -563,6 +560,9 @@ def _alignment_evidence_matches(
         except (TypeError, ValueError):
             return False
         if not all(math.isfinite(value) for value in ranking_metrics):
+            return False
+        bootstrap_issuers = _nonnegative_integer(row["Bootstrap_Issuers"])
+        if bootstrap_issuers is None or bootstrap_issuers == 0:
             return False
         match = re.fullmatch(
             r"\[\s*([^,]+),\s*([^\]]+)\s*\]",
@@ -1208,6 +1208,8 @@ def _semantic_errors(
         "sample attrition/table 18 consistency": _attrition_matches(public_summary, table_18),
         "construct bootstrap scope": construct_manifest.get("interval_scope")
         == "primary_plus_top_5_per_direction",
+        "construct bootstrap method": construct_manifest.get("interval_method")
+        == "issuer_cluster_percentile_bootstrap",
         "construct bootstrap seed": _is_exact_integer(construct_manifest.get("interval_seed"), 42),
         "construct bootstrap reps": _is_exact_integer(
             construct_manifest.get("interval_reps"), 1000
@@ -1237,7 +1239,7 @@ def _semantic_errors(
                 "high_confidence",
             ),
             (
-                "Detected-misstatement score to public labels",
+                "Detected-misstatement score to recorded outcomes",
                 "benchmark_xgb",
                 "Item 4.02",
                 "benchmark_all",

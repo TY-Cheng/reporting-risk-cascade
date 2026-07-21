@@ -254,8 +254,8 @@ def test_public_task_metrics_include_calibration_diagnostics() -> None:
 
     assert table.loc[0, "Panel_Positives"] == "15"
     assert table.loc[0, "Mean_PR_AUC"] == "0.2600"
-    assert table.loc[0, "Excluding_2020_PR_AUC"] == "0.3000"
-    assert table.loc[0, "Excluding_2020_Delta"] == "0.0400"
+    assert "Excluding_2020_PR_AUC" not in table
+    assert "Excluding_2020_Delta" not in table
     assert table.loc[0, "Mean_Brier_Skill"] == "0.0500"
     assert table.loc[0, "Mean_ECE"] == "0.0400"
 
@@ -335,10 +335,10 @@ def test_public_task_metrics_rejects_non_bijective_fit_ownership(
         )
 
 
-def test_public_task_note_defines_excluding_2020_test_fold_sensitivity() -> None:
+def test_public_task_note_defines_primary_temporal_design() -> None:
     assert "all + expanding" in PUBLIC_TASK_NOTE
-    assert "2020 test fold" in PUBLIC_TASK_NOTE
-    assert "training specifications are unchanged" in PUBLIC_TASK_NOTE
+    assert "complete origin-calendar years" in PUBLIC_TASK_NOTE
+    assert "365-day outcomes are fully mature" in PUBLIC_TASK_NOTE
     assert "one-to-one fit-owner rows" in PUBLIC_TASK_NOTE
 
 
@@ -1040,23 +1040,43 @@ def test_public_opacity_dml_displays_explicit_dimensions_and_nan(tmp_path: Path)
             "n_raw_controls": [60, 60],
             "n_encoded_controls": [64, float("nan")],
             "n_opacity_components": [17, 17],
+            "n_issuer_clusters": [40, 40],
+            "ci_low": [-0.001, float("nan")],
+            "ci_high": [0.041, float("nan")],
+            "inference_method": [
+                "issuer_clustered_ols_t_after_issuer_group_cross_fitting",
+                "issuer_clustered_ols_t_after_issuer_group_cross_fitting",
+            ],
         }
     ).to_csv(cascade_dir / "public_opacity_dml.csv", index=False)
 
     table = _public_opacity_dml_table(tmp_path)
 
-    assert table[["Raw_Controls", "Encoded_Controls", "Opacity_Components"]].to_dict(
-        "records"
-    ) == [
-        {"Raw_Controls": "60", "Encoded_Controls": "64", "Opacity_Components": "17"},
-        {"Raw_Controls": "60", "Encoded_Controls": "", "Opacity_Components": "17"},
+    assert table[
+        ["Raw_Controls", "Encoded_Controls", "Opacity_Components", "Issuer_Clusters"]
+    ].to_dict("records") == [
+        {
+            "Raw_Controls": "60",
+            "Encoded_Controls": "64",
+            "Opacity_Components": "17",
+            "Issuer_Clusters": "40",
+        },
+        {
+            "Raw_Controls": "60",
+            "Encoded_Controls": "",
+            "Opacity_Components": "17",
+            "Issuer_Clusters": "40",
+        },
     ]
+    assert table.loc[0, "Clustered_CI_95"] == "[-0.0010, 0.0410]"
     assert DML_INTERVAL_NOTE == (
         "Raw controls are source variables before encoding; encoded controls are nuisance-model "
         "columns reported at the maximum fold-local width after training-fold categorical "
         "expansion and imputation; opacity components form the missingness-density treatment. "
-        "Intervals use HC3 residual OLS after cross-fitting. The estimates are adjusted "
-        "associations, not identified structural effects."
+        "Cross-fitting keeps all rows for an issuer in the same nuisance fold. Intervals and "
+        "p-values use issuer-clustered OLS covariance with a finite-cluster correction after "
+        "residualization. The estimates are adjusted associations, not identified structural "
+        "effects."
     )
 
 

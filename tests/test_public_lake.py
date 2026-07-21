@@ -4599,8 +4599,8 @@ def test_duckdb_gold_build_matches_pandas_on_toy_public_lake(tmp_path: Path) -> 
             {
                 "issuer_cik": "0000000001",
                 "thread_id": "0000000001-1",
-                "first_public_date": "2022-05-01",
-                "last_public_date": "2022-05-02",
+                "first_submission_date": "2022-05-01",
+                "last_submission_date": "2022-05-02",
                 "upload_count": 1,
                 "corresp_count": 1,
                 "filing_count": 2,
@@ -4921,8 +4921,8 @@ def test_pandas_gold_build_reads_parquet_summaries_core_file_and_form_ap(
         "comment_thread.csv.gz": [
             "issuer_cik",
             "thread_id",
-            "first_public_date",
-            "last_public_date",
+            "first_submission_date",
+            "last_submission_date",
             "upload_count",
             "corresp_count",
             "filing_count",
@@ -5100,8 +5100,8 @@ def test_parquet_gold_build_matches_csv_gz_gold_build(tmp_path: Path) -> None:
             columns=[
                 "issuer_cik",
                 "thread_id",
-                "first_public_date",
-                "last_public_date",
+                "first_submission_date",
+                "last_submission_date",
                 "upload_count",
                 "corresp_count",
                 "filing_count",

@@ -291,6 +291,7 @@ def _public_summary(statuses: tuple[str, str, str]) -> dict[str, Any]:
 def _construct_manifest() -> dict[str, Any]:
     return {
         "validation_tier": "wrds_validated",
+        "interval_method": "issuer_cluster_percentile_bootstrap",
         "interval_scope": "primary_plus_top_5_per_direction",
         "interval_seed": 42,
         "interval_reps": 1000,
@@ -461,6 +462,7 @@ def _write_study_raw(
                 "top_10pct_precision": 0.10,
                 "top_decile_lift_ci_low": 1.2,
                 "top_decile_lift_ci_high": 2.8,
+                "n_bootstrap_clusters": 100,
                 "metric_status": "fit",
                 "bridge_tier": "high_confidence",
             }
@@ -481,6 +483,7 @@ def _write_study_raw(
                 "top_10pct_precision": 0.072,
                 "top_decile_lift_ci_low": 1.1,
                 "top_decile_lift_ci_high": 2.5,
+                "n_bootstrap_clusters": 100,
                 "metric_status": "fit",
                 "bridge_tier": "high_confidence",
             }

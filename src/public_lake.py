@@ -2550,8 +2550,8 @@ def build_comment_threads(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
             columns=[
                 "issuer_cik",
                 "thread_id",
-                "first_public_date",
-                "last_public_date",
+                "first_submission_date",
+                "last_submission_date",
                 "upload_count",
                 "corresp_count",
                 "filing_count",
@@ -2570,13 +2570,13 @@ def build_comment_threads(*, filing_dim_csv: Path, silver_dir: Path) -> Path:
     thread = (
         comment.groupby(["issuer_cik", "thread_id"], as_index=False)
         .agg(
-            first_public_date=("filing_date", "min"),
-            last_public_date=("filing_date", "max"),
+            first_submission_date=("filing_date", "min"),
+            last_submission_date=("filing_date", "max"),
             upload_count=("form", lambda s: int((s == "UPLOAD").sum())),
             corresp_count=("form", lambda s: int((s == "CORRESP").sum())),
             filing_count=("accession", "nunique"),
         )
-        .sort_values(["issuer_cik", "first_public_date"])
+        .sort_values(["issuer_cik", "first_submission_date"])
     )
     silver_dir.mkdir(parents=True, exist_ok=True)
     out_path = silver_dir / "comment_thread.csv.gz"
@@ -3558,7 +3558,7 @@ def _add_public_history_and_filing_friction_features(
     public_history_specs = [
         (
             "public_history_comment_thread",
-            comment_thread.rename(columns={"first_public_date": "event_date"}),
+            comment_thread.rename(columns={"first_submission_date": "event_date"}),
             "event_date",
             None,
             "correction_type",
@@ -4665,8 +4665,8 @@ def _build_gold_panels_duckdb(
             path=silver_dir / "comment_thread.csv.gz",
             empty_columns=(
                 ("issuer_cik", "VARCHAR"),
-                ("first_public_date", "TIMESTAMP"),
-                ("last_public_date", "TIMESTAMP"),
+                ("first_submission_date", "TIMESTAMP"),
+                ("last_submission_date", "TIMESTAMP"),
             ),
         )
         con.execute(
@@ -4674,7 +4674,7 @@ def _build_gold_panels_duckdb(
             CREATE OR REPLACE TEMP VIEW comment_thread_norm_gold AS
             SELECT
                 {_duckdb_cik_expr("issuer_cik")} AS issuer_cik,
-                {_duckdb_timestamp_expr("first_public_date")} AS first_public_date
+                {_duckdb_timestamp_expr("first_submission_date")} AS first_submission_date
             FROM comment_thread_gold
             """
         )
@@ -5022,15 +5022,15 @@ def _build_gold_panels_duckdb(
                     SELECT count(*)
                     FROM comment_thread_norm_gold event
                     WHERE event.issuer_cik = f.issuer_cik
-                      AND event.first_public_date >= f.origin_date - INTERVAL 365 DAY
-                      AND event.first_public_date < f.origin_date
+                      AND event.first_submission_date >= f.origin_date - INTERVAL 365 DAY
+                      AND event.first_submission_date < f.origin_date
                 ) AS public_history_comment_thread_1y_count,
                 (
                     SELECT count(*)
                     FROM comment_thread_norm_gold event
                     WHERE event.issuer_cik = f.issuer_cik
-                      AND event.first_public_date >= f.origin_date - INTERVAL 1095 DAY
-                      AND event.first_public_date < f.origin_date
+                      AND event.first_submission_date >= f.origin_date - INTERVAL 1095 DAY
+                      AND event.first_submission_date < f.origin_date
                 ) AS public_history_comment_thread_3y_count,
                 (
                     SELECT count(*)
@@ -5142,8 +5142,8 @@ def _build_gold_panels_duckdb(
                     SELECT 1
                     FROM comment_thread_norm_gold event
                     WHERE event.issuer_cik = filing_featured_gold.issuer_cik
-                      AND event.first_public_date > filing_featured_gold.origin_date
-                      AND event.first_public_date
+                      AND event.first_submission_date > filing_featured_gold.origin_date
+                      AND event.first_submission_date
                             <= filing_featured_gold.origin_date + INTERVAL 365 DAY
                 ) THEN 1 ELSE 0 END AS label_comment_thread_365,
                 CASE WHEN EXISTS (
@@ -5414,7 +5414,7 @@ def build_gold_panels(
     comment_thread = (
         _read_csv_with_engine(
             silver_dir / "comment_thread.csv.gz",
-            date_cols=["first_public_date", "last_public_date"],
+            date_cols=["first_submission_date", "last_submission_date"],
             engine=engine,
             duckdb_threads=duckdb_threads,
             duckdb_memory_limit=duckdb_memory_limit,
@@ -5795,7 +5795,7 @@ def build_gold_panels(
 
     filing["label_comment_thread_365"] = _event_within_horizon(
         filing,
-        comment_thread.rename(columns={"first_public_date": "event_date"}),
+        comment_thread.rename(columns={"first_submission_date": "event_date"}),
         date_col="event_date",
         horizon_days=365,
     )

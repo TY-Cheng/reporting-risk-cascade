@@ -1465,7 +1465,7 @@ def test_generated_snapshot_is_owner_directed_results_and_discussion(
         "experiment_6": [
             "Exploratory maxima (post-hoc)",
             "Aggregation Sensitivity",
-            "Benchmark-Positive Public-Label Co-occurrence",
+            "Benchmark-Positive Outcome Co-occurrence",
             "Event-Time Concentration",
         ],
     }
@@ -1901,18 +1901,18 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "**Main contribution.**",
         "**Construct claim.**",
         "**Evidence requirement.**",
-        "filing-origin public reporting-risk estimand",
+        "filing-origin, submission-dated review-and-correction estimand",
         "not same-estimand performance rankings",
         "metric-compatible ranking evidence",
         "Peer models and metrics",
         "bridge-based overlap validation",
         "detected-misstatement benchmark labels",
         "ex post detected misconduct",
-        "review-and-correction risk rather than unobserved fraud occurrence",
+        "submission-dated correspondence and public correction outcomes rather than unobserved fraud occurrence",
         "does not by itself identify unobserved fraud occurrence, causal effects",
         "positive-class rate",
         "random-ranking baseline for PR-AUC",
-        "annual out-of-time evaluation",
+        "complete origin-calendar-year holdouts",
         "Cross-fitting appears separately",
         "Double / Debiased Machine Learning (DML)",
         "not alternative names for fraud",
@@ -1940,7 +1940,7 @@ def test_paper_plan_documents_required_research_spine() -> None:
         "Construct-overlap checks",
         "```mermaid",
         "flowchart LR",
-        "pre-disclosure public reporting-risk state",
+        "filing-origin, submission-dated review-and-correction outcome state",
         "gvkey-CIK-year",
         "Label Observability and Detection Timing",
         "Concept Drift and Model Shelf-Life",
@@ -1997,14 +1997,14 @@ def test_paper_plan_assigns_results_owners_and_exact_claim_boundaries() -> None:
     for artifact in ["Table 3", "Table 4", "Table 7", "Table 13", "Table 14", "Table 17"]:
         assert artifact in experiment_5
     for phrase in [
-        "Prior-filing history (legacy artifact key: oversight)",
+            "The prior-filing-history family",
         "`prior_filing_count`",
         "not PCAOB inspection",
         "`is_domestic_us_gaap_proxy`",
         "selected 10-K/10-K/A issuer-years with no observed same-year 20-F/40-F/6-K proxy",
         "validates neither FPI status, domicile, nor US GAAP",
-        "PCAOB inspection archives are provenance/Bronze inputs only",
-        "events are not joined to Gold",
+            "PCAOB inspection archives are provenance inputs only",
+            "inspection events are not joined to the analytical panel",
         "no inspection model features",
         "PCAOB Form AP may supply auditor and engagement-partner features",
         "at least one required outcome is fitted",
@@ -2126,7 +2126,7 @@ def test_paper_plan_stabilizes_revision_frozen_methods_and_reporting_contract() 
         "metadata": "metadata",
         "xbrl": "XBRL",
         "auditor": "auditor",
-        "oversight": "Prior-filing history (legacy artifact key: oversight)",
+        "oversight": "prior-filing history",
         "visibility_history": "visibility/history",
         "all": "all",
     }
@@ -2182,11 +2182,11 @@ def test_paper_plan_stabilizes_revision_frozen_methods_and_reporting_contract() 
         "unknown test categories ignored",
         "one-class train or test task/folds are skipped and reported",
         "expanding and rolling 5-, 7-, and 10-year windows",
-        "excluding-2020 PR-AUC sensitivity",
+        "No single year is designated ex post as the preferred exclusion sensitivity",
         "Brier score",
         "Brier Skill Score",
         "expected calibration error",
-        "seed 42 and 1,000 bootstrap draws",
+            "seed 42 and 1,000 issuer-cluster percentile bootstrap draws",
         "primary plus the top five exploratory rows in each direction",
         "Tables 4 and 14 belong to Experiment 5",
         "Table 18",
@@ -2266,9 +2266,9 @@ def test_faq_explains_cross_audience_design_and_current_boundaries() -> None:
     normalized_faq = " ".join(faq.split())
     required_phrases = [
         "# FAQ",
-        "filing-origin public SEC/PCAOB information",
-        "public review-and-correction cascade",
-        "public observability states",
+        "filing-origin SEC/PCAOB information",
+        "review-and-correction construct",
+        "typed recorded outcome states",
         "not interchangeable with fraud",
         "detected-misstatement benchmark",
         "raw `CIK-GVKEY Link Table.csv`",
@@ -2358,7 +2358,7 @@ def test_development_audit_prompt_targets_code_against_paper_plan() -> None:
     required_phrases = [
         "Development Audit Brief",
         "reporting-risk-cascade paper",
-        "pre-disclosure reporting-risk state",
+        "filing-origin, submission-dated review-and-correction outcome state",
         "docs/paper_plan.md as the binding research and implementation contract",
         "Discover the current file inventory",
         "Source code, wrappers, and tests live under src/, scripts/, and tests/",
@@ -2443,7 +2443,7 @@ def test_manuscript_audit_prompt_targets_manuscript_quality_and_terms() -> None:
         "reporting-risk-cascade paper",
         "reporting-risk-cascade-manuscript",
         "pre-disclosure reporting-risk state",
-        "public comment-letter scrutiny",
+        "submission-dated, eventually disclosed SEC correspondence",
         "public Item 4.02 material-correction proxy",
         "DML-style high-dimensional adjustment",
         "formulaic prose",
@@ -2508,13 +2508,13 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
         "WRDS-validated construct-overlap",
         "reciprocal risk-score alignment",
         "event-time concentration",
-        "single-fold 2020 8k_402",
+        "single-year `8k_402_365` extreme",
         "strong strategic-silence claim",
         "valid folds >= 5",
         "fewer than 10 positives",
         "population confidence interval",
         "out-of-time evaluation dispersion",
-        "public review-and-correction risk",
+        "submission-dated review-and-correction outcomes",
         "comment_thread_365",
         "amendment_365",
         "8k_402_365",
@@ -2526,7 +2526,7 @@ def test_manuscript_audit_prompt_enforces_public_data_first_claim_discipline() -
 
 def test_manuscript_audit_prompt_displays_prior_filing_history_in_feature_directives() -> None:
     prompt = _read("docs/manuscript_audit_prompt.md")
-    legacy_display = "Prior-filing history (legacy artifact key: oversight)"
+    display = "prior-filing history"
     directives = [
         prompt.split("- Apply a common-sample / coverage caveat", maxsplit=1)[1].split(
             "- **Missingness and opacity check.**", maxsplit=1
@@ -2537,8 +2537,8 @@ def test_manuscript_audit_prompt_displays_prior_filing_history_in_feature_direct
     ]
 
     for directive in directives:
-        assert legacy_display in directive
-        assert re.search(r"\boversight\b", directive.replace(legacy_display, "")) is None
+        assert display in directive
+        assert re.search(r"\boversight\b", directive) is None
 
 
 def test_manuscript_audit_prompt_has_structural_hardening_rules() -> None:
@@ -2562,6 +2562,8 @@ def test_manuscript_audit_prompt_has_structural_hardening_rules() -> None:
         "Bridge freshness check.",
         "Primary-source citation check.",
         "Point-in-time predictor check.",
+        "Public-side fold check.",
+        "Issuer-dependence check.",
         "Table/figure interpretation check.",
         "Model-selection optimism check.",
         "Missingness and opacity check.",
@@ -2569,6 +2571,9 @@ def test_manuscript_audit_prompt_has_structural_hardening_rules() -> None:
         "Table-unit clarity check.",
         "primary-source citations",
         "point-in-time predictor discipline",
+        "complete origin-calendar years",
+        "issuer-clustered covariance",
+        "resample issuers rather than rows",
         "table and figure captions",
         "economically informative missingness",
         "parser/source unavailability",
@@ -2634,7 +2639,7 @@ def test_manuscript_package_generator_uses_dispersion_and_bootstrap_language() -
     script = _read("scripts/build_manuscript_package.py")
     assert "PR_AUC_Dispersion" in script
     assert "Lift_Bootstrap_Interval" in script
-    assert "row-level percentile bootstrap intervals" in script
+    assert "issuer-cluster percentile bootstrap intervals" in script
     assert "descriptive fold-dispersion intervals" in script
     assert "PR_AUC_95CI" not in script
     assert "Lift_95CI" not in script

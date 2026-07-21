@@ -19,6 +19,7 @@ from src.public_cascade import (
     _build_preprocessor,
     _evaluate_binary,
     _infer_feature_families,
+    _origin_year_pairs,
     _prepare_xy,
     _public_dml_matrix,
     _resolve_primary_specification,
@@ -65,7 +66,7 @@ def test_public_cascade_feature_families_exclude_labels_availability_and_identif
     assert "note_text_count" in families["text"]
     assert "form_ap_event_count" in families["auditor"]
     assert "auditor_partner_prior_other_issuer_8k_402_count" in families["auditor"]
-    assert "prior_comment_thread_count" in families["oversight"]
+    assert "prior_comment_thread_count" not in all_features
     assert "items" not in all_features
     assert "source_available_notes" not in all_features
     assert "public_date_notes" not in all_features
@@ -104,7 +105,6 @@ def test_visibility_history_is_exact_and_reports_unavailable_fields() -> None:
         "days_since_previous_filing",
         "prior_filing_count",
         "filing_friction_is_nt",
-        "public_history_comment_thread_1y_count",
         "public_history_8k_402_3y_count",
     ]
     assert "xbrl_ratio_leverage" not in families["visibility_history"]
@@ -125,8 +125,6 @@ def test_visibility_history_contract_is_complete_and_ordered() -> None:
         "filing_friction_is_nt",
         "filing_friction_nt_pre_origin",
         "filing_friction_nt_delay_days",
-        "public_history_comment_thread_1y_count",
-        "public_history_comment_thread_3y_count",
         "public_history_amendment_1y_count",
         "public_history_amendment_3y_count",
         "public_history_8k_301_1y_count",
@@ -255,6 +253,7 @@ def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
 
     base_panel = pd.DataFrame(
         {
+            "origin_date": ["2021-03-01", "2022-03-01"],
             "fiscal_year": [2020, 2021],
             "sic": [1234, 1234],
             "label_comment_thread_365": [0, 0],
@@ -294,6 +293,29 @@ def test_public_cascade_helper_branches_cover_degenerate_cases() -> None:
         )
         is None
     )
+
+
+def test_origin_year_pairs_require_complete_holdouts_and_mature_training_labels() -> None:
+    panel = pd.DataFrame(
+        {
+            "origin_date": [f"{year}-03-01" for year in range(2011, 2026)],
+            "as_of_date": ["2026-07-06"] * 15,
+        }
+    )
+
+    pairs = list(
+        _origin_year_pairs(
+            panel,
+            min_train_years=5,
+            candidate_train_windows=[None],
+        )
+    )
+
+    assert [test_year for _, test_year, _ in pairs] == list(range(2017, 2025))
+    for window, test_year, train_years in pairs:
+        assert window is None
+        assert max(train_years) <= test_year - 2
+        assert len(train_years) >= 5
 
 
 def test_sample_attrition_is_sequential_and_task_specific() -> None:
@@ -370,12 +392,30 @@ def test_public_opacity_dml_uses_public_labels_not_benchmark_misstatement() -> N
     assert components
     assert set(dml["status"]) == {"fit"}
     assert (dml["n_obs"] == len(rows) - 1).all()
+    assert (dml["n_issuer_clusters"] == 12).all()
+    assert set(dml["cross_fitting_unit"]) == {"issuer_cik"}
+    assert set(dml["inference_method"]) == {
+        "issuer_clustered_ols_t_after_issuer_group_cross_fitting"
+    }
     assert (dml["n_raw_controls"] == len(meta["control_columns"])).all()
     assert (dml["n_encoded_controls"] == dml["n_controls"]).all()
     assert set(dml["n_controls_definition"]) == {"maximum_fold_local_encoded_nuisance_columns"}
     assert meta["n_raw_controls"] == len(meta["control_columns"])
     assert meta["n_controls_definition"] == "maximum_fold_local_encoded_nuisance_columns"
+    assert meta["cross_fitting_unit"] == "issuer_cik"
+    assert meta["inference_method"] == (
+        "issuer_clustered_ols_t_after_issuer_group_cross_fitting"
+    )
+    assert meta["n_issuer_clusters_by_outcome"] == {
+        "comment_thread": 12,
+        "amendment": 12,
+        "8k_402": 12,
+    }
     for row in dml.itertuples(index=False):
+        assert np.isfinite(row.ci_low)
+        assert np.isfinite(row.ci_high)
+        assert row.ci_low <= row.coef <= row.ci_high
+        assert row.inference_df == 11
         assert meta["n_encoded_controls_by_outcome"][row.outcome] == row.n_encoded_controls
         assert row.n_effective_nuisance_folds == 3
         assert meta["n_effective_nuisance_folds_by_outcome"][row.outcome] == 3
@@ -763,7 +803,7 @@ model:
     assert set(task_status["task"]) == {"comment_thread", "amendment", "8k_402"}
     assert summary["cascade_readiness_level"] == "metadata_baseline"
     oversight = summary["feature_family_summary"]["oversight"]
-    assert oversight["display_name"] == ("Prior-filing history (legacy artifact key: oversight)")
+    assert oversight["display_name"] == "Prior-filing history"
     assert oversight["model_eligible_features"] == ["prior_filing_count"]
     assert oversight["reported_as_standalone"] is True
 

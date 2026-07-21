@@ -53,7 +53,7 @@ RECIPROCAL_ALIGNMENT_KEY_COLUMNS = [
 RES_AN_COLS = ["res_an0", "res_an1", "res_an2", "res_an3"]
 BOOTSTRAP_REPS = 1000
 BOOTSTRAP_SEED = 42
-BOOTSTRAP_INTERVAL_METHOD = "row_level_percentile_bootstrap"
+BOOTSTRAP_INTERVAL_METHOD = "issuer_cluster_percentile_bootstrap"
 BOOTSTRAP_CHUNK_REPS = 100
 MIN_RANKING_POSITIVES = 10
 BOOTSTRAP_POSITIVE_THRESHOLD = 30
@@ -439,14 +439,15 @@ def _bootstrap_lift_ci(
     y_true: np.ndarray,
     score: np.ndarray,
     *,
+    cluster_ids: np.ndarray | None = None,
     reps: int = BOOTSTRAP_REPS,
     seed: int = BOOTSTRAP_SEED,
 ) -> tuple[float, float]:
-    """Row-level percentile bootstrap for top-decile lift.
+    """Percentile bootstrap for top-decile lift, optionally by issuer cluster.
 
-    The implementation resamples rows with replacement by drawing multinomial
-    row counts. Rows are canonicalized by score and label once; for each draw,
-    the top-decile cutoff and any fractional boundary allocation are recomputed.
+    Rows are canonicalized by score and label once. Each draw resamples issuers
+    when cluster identifiers are supplied, then recomputes the top-decile cutoff
+    and any fractional boundary allocation.
     """
     y = np.asarray(y_true, dtype=int)
     s = np.asarray(score, dtype=float)
@@ -456,19 +457,34 @@ def _bootstrap_lift_ci(
     order = np.lexsort((y, -normalized_score))
     y_sorted = y[order].astype(np.int64)
     score_sorted = normalized_score[order]
+    if cluster_ids is None:
+        cluster_codes = np.arange(len(y), dtype=np.int64)
+    else:
+        clusters = pd.Series(np.asarray(cluster_ids, dtype=object)).astype("string")
+        missing = clusters.isna()
+        if missing.any():
+            clusters.loc[missing] = [
+                f"__missing_cluster_{idx}" for idx in clusters.index[missing]
+            ]
+        cluster_codes = pd.factorize(clusters, sort=True)[0].astype(np.int64)
+    cluster_codes = cluster_codes[order]
+    n_clusters = int(cluster_codes.max()) + 1
     group_starts = np.r_[0, np.flatnonzero(score_sorted[1:] != score_sorted[:-1]) + 1]
-    sample_size = len(y_sorted)
-    top_k = min(max(matlab_round_positive(sample_size * 0.10), 1), sample_size)
-    row_prob = np.full(sample_size, 1.0 / sample_size)
+    cluster_prob = np.full(n_clusters, 1.0 / n_clusters)
     rng = np.random.default_rng(seed)
     lift_values: list[float] = []
     for start in range(0, int(reps), BOOTSTRAP_CHUNK_REPS):
         batch_reps = min(BOOTSTRAP_CHUNK_REPS, int(reps) - start)
-        counts = rng.multinomial(sample_size, row_prob, size=batch_reps).astype(np.int64)
+        cluster_counts = rng.multinomial(
+            n_clusters, cluster_prob, size=batch_reps
+        ).astype(np.int64)
+        counts = cluster_counts[:, cluster_codes]
+        sample_sizes = counts.sum(axis=1)
+        top_k = np.clip(np.floor(sample_sizes * 0.10 + 0.5).astype(np.int64), 1, sample_sizes)
         group_counts = np.add.reduceat(counts, group_starts, axis=1)
         group_positive = np.add.reduceat(counts * y_sorted, group_starts, axis=1)
         cumulative = np.cumsum(group_counts, axis=1)
-        boundary = np.argmax(cumulative >= top_k, axis=1)
+        boundary = np.argmax(cumulative >= top_k[:, None], axis=1)
         previous = np.where(boundary > 0, cumulative[np.arange(batch_reps), boundary - 1], 0)
         boundary_take = top_k - previous
         positive_cumulative = np.cumsum(group_positive, axis=1)
@@ -483,7 +499,7 @@ def _bootstrap_lift_ci(
 
         total_positive = group_positive.sum(axis=1)
         with np.errstate(divide="ignore", invalid="ignore"):
-            batch_lift = (top_positive / top_k) / (total_positive / sample_size)
+            batch_lift = (top_positive / top_k) / (total_positive / sample_sizes)
         finite = batch_lift[np.isfinite(batch_lift)]
         lift_values.extend(float(value) for value in finite)
     if not lift_values:
@@ -920,20 +936,27 @@ def _add_bootstrap_intervals_to_selected_rows(
     score_col: str,
     bootstrap_seed: int,
     bootstrap_reps: int,
+    cluster_col: str | None = None,
 ) -> None:
     for idx, row in enumerate(rows):
         if not (row.get("is_primary") or row.get("is_exploratory_top5")):
             continue
         mask = _row_mask(frame, {column: row.get(column) for column in group_cols})
         sample = frame.loc[mask]
+        kwargs: dict[str, Any] = {"reps": bootstrap_reps, "seed": bootstrap_seed}
+        if cluster_col is not None:
+            kwargs["cluster_ids"] = sample[cluster_col].to_numpy()
         ci_low, ci_high = _bootstrap_lift_ci(
-            sample[target_col].to_numpy(),
-            sample[score_col].to_numpy(),
-            reps=bootstrap_reps,
-            seed=bootstrap_seed,
+            sample[target_col].to_numpy(), sample[score_col].to_numpy(), **kwargs
         )
         rows[idx]["top_decile_lift_ci_low"] = ci_low
         rows[idx]["top_decile_lift_ci_high"] = ci_high
+        rows[idx]["interval_method"] = (
+            BOOTSTRAP_INTERVAL_METHOD if cluster_col is not None else "row_level_percentile_bootstrap"
+        )
+        rows[idx]["n_bootstrap_clusters"] = (
+            int(sample[cluster_col].nunique()) if cluster_col is not None else int(len(sample))
+        )
 
 
 def _finalize_alignment_rows(
@@ -948,6 +971,7 @@ def _finalize_alignment_rows(
     direction: str,
     bootstrap_seed: int,
     bootstrap_reps: int,
+    cluster_col: str | None = None,
 ) -> list[dict[str, Any]]:
     marked = _mark_alignment_rows(
         pd.DataFrame(rows),
@@ -965,6 +989,7 @@ def _finalize_alignment_rows(
         score_col=score_col,
         bootstrap_seed=bootstrap_seed,
         bootstrap_reps=bootstrap_reps,
+        cluster_col=cluster_col,
     )
     return finalized
 
@@ -991,6 +1016,7 @@ def _public_score_frames(con: Any, public_predictions_path: Path) -> dict[str, p
           r.raw_row_id,
           r.benchmark_label,
           t.bridge_tier,
+          p.issuer_cik,
           p.feature_set,
           p.train_window,
           p.task,
@@ -1012,6 +1038,7 @@ def _public_score_frames(con: Any, public_predictions_path: Path) -> dict[str, p
             f"""
             SELECT
               raw_row_id,
+              issuer_cik,
               benchmark_label,
               bridge_tier,
               feature_set,
@@ -1019,7 +1046,7 @@ def _public_score_frames(con: Any, public_predictions_path: Path) -> dict[str, p
               task,
               {sql_agg} AS score
             FROM public_score_long
-            GROUP BY raw_row_id, benchmark_label, bridge_tier, feature_set, train_window, task
+            GROUP BY raw_row_id, issuer_cik, benchmark_label, bridge_tier, feature_set, train_window, task
             """
         ).fetchdf()
         outputs[aggregation]["score_aggregation"] = aggregation
@@ -1061,6 +1088,7 @@ def _public_ranking(
         direction="public_to_benchmark",
         bootstrap_seed=int(alignment_config["bootstrap_seed"]),
         bootstrap_reps=int(alignment_config["bootstrap_reps"]),
+        cluster_col="issuer_cik",
     )
     main_out = pd.DataFrame(main_rows)
     _write_csv(main_out, out_dir / "public_score_benchmark_ranking.csv")
@@ -1155,6 +1183,7 @@ def _reciprocal_alignment(
           s.label_mode,
           'benchmark_score' AS score_aggregation,
           p.bridge_tier,
+          p.issuer_ciks AS issuer_cik,
           s.score,
           {label_select}
         FROM ({union_sql}) s
@@ -1174,6 +1203,7 @@ def _reciprocal_alignment(
               label_mode,
               score_aggregation,
               bridge_tier,
+              issuer_cik,
               "{label}" AS target_label,
               score
             FROM reciprocal_base
@@ -1201,6 +1231,7 @@ def _reciprocal_alignment(
         direction="benchmark_to_public",
         bootstrap_seed=int(alignment_config["bootstrap_seed"]),
         bootstrap_reps=int(alignment_config["bootstrap_reps"]),
+        cluster_col="issuer_cik",
     )
     out = pd.DataFrame(rows)
     _write_csv(out, out_dir / "reciprocal_alignment.csv")
@@ -1426,7 +1457,7 @@ def _write_summary(
         lines.append(
             f"In the {matched_sample_label}, detected-misstatement benchmark "
             "firm-years are "
-            f"enriched in the top decile of public review-and-correction risk scores "
+            f"enriched in the top decile of submission-dated review-and-correction scores "
             f"(best top-decile lift = {row['top_decile_lift']:.2f}), but most high-risk "
             "public-cascade firm-years do not correspond to detected-misstatement "
             "benchmark positives. Among benchmark-positive firm-years, a measurable "

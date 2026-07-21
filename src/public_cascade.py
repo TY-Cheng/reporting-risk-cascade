@@ -18,7 +18,7 @@ import yaml
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
 from xgboost import XGBClassifier
@@ -72,6 +72,9 @@ MODEL_EXCLUDED_COLS = {
     "description",
     "phone",
     "ein",
+    "prior_comment_thread_count",
+    "public_history_comment_thread_1y_count",
+    "public_history_comment_thread_3y_count",
 }
 CATEGORICAL_FEATURE_COLS = {"sic", "form", "entity_type"}
 VISIBILITY_HISTORY_FEATURES = (
@@ -87,8 +90,6 @@ VISIBILITY_HISTORY_FEATURES = (
     "filing_friction_is_nt",
     "filing_friction_nt_pre_origin",
     "filing_friction_nt_delay_days",
-    "public_history_comment_thread_1y_count",
-    "public_history_comment_thread_3y_count",
     "public_history_amendment_1y_count",
     "public_history_amendment_3y_count",
     "public_history_8k_301_1y_count",
@@ -101,6 +102,7 @@ VISIBILITY_HISTORY_FEATURES = (
     "public_history_8k_502_3y_count",
 )
 DML_CONTROLS_DEFINITION = "maximum_fold_local_encoded_nuisance_columns"
+OUTCOME_HORIZON_DAYS = 365
 
 
 def stable_task_seed(base_seed: int, *parts: object) -> int:
@@ -373,19 +375,34 @@ def _evaluate_binary(
     return metrics
 
 
-def _rolling_year_pairs(
-    years: Sequence[int],
+def _origin_year_pairs(
+    panel: pd.DataFrame,
     *,
     min_train_years: int,
     candidate_train_windows: Sequence[Optional[int]],
 ) -> Iterable[Tuple[Optional[int], int, List[int]]]:
-    years = sorted(int(y) for y in years)
+    origin_dates = pd.to_datetime(panel["origin_date"], errors="coerce")
+    if origin_dates.isna().any():
+        raise ValueError("origin_date must be nonmissing for point-in-time evaluation")
+    origin_years = origin_dates.dt.year.astype(int)
+    years = sorted(origin_years.unique().tolist())
+    if "as_of_date" in panel:
+        as_of = pd.to_datetime(panel["as_of_date"], errors="coerce").max()
+    else:
+        as_of = pd.NaT
+    if pd.isna(as_of):
+        as_of = origin_dates.max() + pd.to_timedelta(OUTCOME_HORIZON_DAYS, unit="D")
+
     for window in candidate_train_windows:
-        for i in range(min_train_years, len(years)):
-            test_year = years[i]
-            train_years = years[:i]
+        for test_year in years:
+            test_end = pd.Timestamp(year=int(test_year) + 1, month=1, day=1)
+            if test_end + pd.to_timedelta(OUTCOME_HORIZON_DAYS, unit="D") > as_of:
+                continue
+            train_years = [year for year in years if year <= int(test_year) - 2]
             if window is not None:
                 train_years = train_years[-int(window) :]
+            if len(train_years) < int(min_train_years):
+                continue
             yield window, test_year, train_years
 
 
@@ -545,6 +562,7 @@ def fit_public_opacity_dml(
     encoded_counts: Dict[str, int] = {}
     fold_encoded_counts: Dict[str, List[Dict[str, int]]] = {}
     effective_fold_counts: Dict[str, int] = {}
+    issuer_cluster_counts: Dict[str, int] = {}
     for outcome in outcomes:
         if outcome not in TASKS:
             rows.append(
@@ -597,6 +615,16 @@ def fit_public_opacity_dml(
         uncensored = pd.to_numeric(panel_with_score[censor_col], errors="coerce").eq(0)
         work = panel_with_score.loc[uncensored].copy()
         work = work.dropna(subset=[label_col, "missingness_density_score"])
+        if "issuer_cik" not in work:
+            raise ValueError("issuer_cik is required for issuer-aware opacity inference")
+        issuer_groups = work["issuer_cik"].astype("string")
+        missing_groups = issuer_groups.isna()
+        if missing_groups.any():
+            issuer_groups.loc[missing_groups] = [
+                f"__missing_issuer_{index}" for index in work.index[missing_groups]
+            ]
+        n_issuer_clusters = int(issuer_groups.nunique())
+        issuer_cluster_counts[outcome] = n_issuer_clusters
         y = pd.to_numeric(work[label_col], errors="coerce").fillna(0).astype(int).to_numpy()
         t = pd.to_numeric(work["missingness_density_score"], errors="coerce").to_numpy(dtype=float)
         base_row = {
@@ -613,6 +641,11 @@ def fit_public_opacity_dml(
             "n_effective_nuisance_folds": np.nan,
             "n_controls_definition": DML_CONTROLS_DEFINITION,
             "n_opacity_components": int(len(opacity_components)),
+            "n_issuer_clusters": n_issuer_clusters,
+            "cross_fitting_unit": "issuer_cik",
+            "inference_method": (
+                "issuer_clustered_ols_t_after_issuer_group_cross_fitting"
+            ),
         }
         if len(opacity_components) == 0:
             rows.append(
@@ -647,7 +680,7 @@ def fit_public_opacity_dml(
                 }
             )
             continue
-        splits = min(int(n_splits), len(work))
+        splits = min(int(n_splits), n_issuer_clusters)
         if splits < 2:
             rows.append(
                 {
@@ -661,9 +694,15 @@ def fit_public_opacity_dml(
             continue
         y_hat = np.zeros(len(work), dtype=float)
         t_hat = np.zeros(len(work), dtype=float)
-        splitter = KFold(n_splits=splits, shuffle=True, random_state=int(seed))
+        splitter = GroupKFold(n_splits=splits)
         fold_widths: List[Dict[str, int]] = []
-        for fold, (train_idx, test_idx) in enumerate(splitter.split(work), start=1):
+        for fold, (train_idx, test_idx) in enumerate(
+            splitter.split(work, groups=issuer_groups), start=1
+        ):
+            train_groups = set(issuer_groups.iloc[train_idx])
+            test_groups = set(issuer_groups.iloc[test_idx])
+            if train_groups & test_groups:
+                raise ValueError("issuer-group cross-fitting leaked issuers across folds")
             X_train, X_test, used_controls = _public_dml_matrix(
                 work.iloc[train_idx], work.iloc[test_idx], controls
             )
@@ -709,14 +748,25 @@ def fit_public_opacity_dml(
                 }
             )
             continue
-        fitted = sm.OLS(y_res, sm.add_constant(t_res)).fit(cov_type="HC3")
+        fitted = sm.OLS(y_res, sm.add_constant(t_res)).fit(
+            cov_type="cluster",
+            cov_kwds={
+                "groups": issuer_groups.to_numpy(),
+                "use_correction": True,
+            },
+            use_t=True,
+        )
+        ci_low, ci_high = fitted.conf_int(alpha=0.05)[1]
         rows.append(
             {
                 **post_matrix_row,
                 "status": "fit",
                 "coef": float(fitted.params[1]),
                 "std_err": float(fitted.bse[1]),
+                "ci_low": float(ci_low),
+                "ci_high": float(ci_high),
                 "p_value": float(fitted.pvalues[1]),
+                "inference_df": float(n_issuer_clusters - 1),
                 "n_raw_controls": int(len(controls)),
                 "n_encoded_controls": n_encoded_controls,
                 "n_controls": n_encoded_controls,
@@ -732,9 +782,14 @@ def fit_public_opacity_dml(
         "n_encoded_controls_by_outcome": encoded_counts,
         "n_encoded_controls_by_fold": fold_encoded_counts,
         "n_effective_nuisance_folds_by_outcome": effective_fold_counts,
+        "n_issuer_clusters_by_outcome": issuer_cluster_counts,
         "n_controls": max(encoded_counts.values(), default=0),
         "n_controls_definition": DML_CONTROLS_DEFINITION,
         "control_columns_definition": "raw_controls_before_encoding",
+        "cross_fitting_unit": "issuer_cik",
+        "inference_method": (
+            "issuer_clustered_ols_t_after_issuer_group_cross_fitting"
+        ),
     }
     return pd.DataFrame(rows), meta
 
@@ -753,13 +808,30 @@ def _run_public_cascade_unit(
     seed_policy: str,
 ) -> Optional[Dict[str, object]]:
     train_window_label = "expanding" if window is None else f"rolling_{window}y"
-    fiscal_year = panel["fiscal_year"].astype(int)
-    train_mask = fiscal_year.isin([int(year) for year in train_years])
-    test_mask = fiscal_year.eq(int(test_year))
+    origin_dates = pd.to_datetime(panel["origin_date"], errors="coerce")
+    origin_years = origin_dates.dt.year.astype("Int64")
+    test_start = pd.Timestamp(year=int(test_year), month=1, day=1)
+    test_end = pd.Timestamp(year=int(test_year) + 1, month=1, day=1)
+    label_maturity_dates = origin_dates + pd.to_timedelta(OUTCOME_HORIZON_DAYS, unit="D")
+    train_mask = origin_years.isin([int(year) for year in train_years])
+    train_mask &= label_maturity_dates.le(test_start)
+    test_mask = origin_dates.ge(test_start) & origin_dates.lt(test_end)
     train_df = panel.loc[train_mask].copy()
     test_df = panel.loc[test_mask].copy()
     if train_df.empty or test_df.empty:
         return None
+    max_train_maturity = label_maturity_dates.loc[train_df.index].max()
+    if max_train_maturity > test_start:
+        raise ValueError("training labels are not mature at the test-fold cutoff")
+
+    fold_dates = {
+        "test_start": test_start.date().isoformat(),
+        "test_end": test_end.date().isoformat(),
+        "train_origin_year_min": int(min(train_years)),
+        "train_origin_year_max": int(max(train_years)),
+        "train_label_maturity_cutoff": test_start.date().isoformat(),
+        "max_train_label_maturity_date": max_train_maturity.date().isoformat(),
+    }
 
     active_feature_cols = [col for col in feature_cols if not train_df[col].isna().all()]
     if not active_feature_cols:
@@ -805,6 +877,7 @@ def _run_public_cascade_unit(
                     "excluded_test": excluded_test,
                     "positive_train": 0,
                     "positive_test": 0,
+                    **fold_dates,
                 }
             )
             continue
@@ -828,6 +901,7 @@ def _run_public_cascade_unit(
             "excluded_test": excluded_test,
             "positive_train": int(y_train.sum()),
             "positive_test": int(y_test.sum()),
+            **fold_dates,
         }
         if y_train.nunique() < 2:
             task_status_rows.append({**status_base, "status": "skipped_one_class_train"})
@@ -870,6 +944,7 @@ def _run_public_cascade_unit(
                 "n_test": int(len(task_test)),
                 "positive_rate_train": float(y_train.mean()) if len(y_train) else np.nan,
                 "positive_rate_test": float(y_test.mean()) if len(y_test) else np.nan,
+                **fold_dates,
                 **metrics,
             }
         )
@@ -885,6 +960,7 @@ def _run_public_cascade_unit(
         pred_frame["_row_order"] = pred_frame.index.to_numpy()
         pred_frame["feature_set"] = family
         pred_frame["train_window"] = train_window_label
+        pred_frame["test_year"] = int(test_year)
         pred_frame["task"] = task_name
         pred_frame["probability"] = prob
         pred_frame["label"] = y_test.to_numpy()
@@ -969,7 +1045,7 @@ def run_public_cascade(
     feature_family_summary = {
         family: {
             "display_name": (
-                "Prior-filing history (legacy artifact key: oversight)"
+                "Prior-filing history"
                 if family == "oversight"
                 else "XBRL"
                 if family == "xbrl"
@@ -1015,7 +1091,6 @@ def run_public_cascade(
     seed_policy = str(seed_policy or analysis_cfg.get("seed_policy", "shared"))
     if seed_policy not in {"task_isolated", "shared"}:
         raise ValueError("seed_policy must be 'task_isolated' or 'shared'")
-    years = panel["fiscal_year"].dropna().astype(int).sort_values().unique().tolist()
     opacity_dml_cfg = dict(analysis_cfg.get("opacity_dml", {}))
 
     metric_rows: List[Dict[str, object]] = []
@@ -1028,8 +1103,8 @@ def run_public_cascade(
         feature_cols = families[family]
         if not feature_cols:
             continue
-        for window, test_year, train_years in _rolling_year_pairs(
-            years,
+        for window, test_year, train_years in _origin_year_pairs(
+            panel,
             min_train_years=min_train_years,
             candidate_train_windows=train_windows,
         ):
@@ -1092,6 +1167,12 @@ def run_public_cascade(
         "n_test",
         "positive_rate_train",
         "positive_rate_test",
+        "test_start",
+        "test_end",
+        "train_origin_year_min",
+        "train_origin_year_max",
+        "train_label_maturity_cutoff",
+        "max_train_label_maturity_date",
         "roc_auc",
         "pr_auc",
         "brier",
@@ -1116,6 +1197,7 @@ def run_public_cascade(
         "origin_date",
         "feature_set",
         "train_window",
+        "test_year",
         "task",
         "probability",
         "label",
@@ -1137,6 +1219,12 @@ def run_public_cascade(
         "excluded_test",
         "positive_train",
         "positive_test",
+        "test_start",
+        "test_end",
+        "train_origin_year_min",
+        "train_origin_year_max",
+        "train_label_maturity_cutoff",
+        "max_train_label_maturity_date",
     ]
     task_status_df = pd.DataFrame(task_status_rows, columns=status_columns)
     sort_internal = ["_task_order", "_task_suborder"]
@@ -1227,6 +1315,17 @@ def run_public_cascade(
             rows_evaluated and total_equals_item_402_rows == rows_evaluated
         ),
     }
+    primary_test_years = (
+        sorted(
+            pd.to_numeric(primary_metrics["test_year"], errors="coerce")
+            .dropna()
+            .astype(int)
+            .unique()
+            .tolist()
+        )
+        if "test_year" in primary_metrics
+        else []
+    )
     summary: Dict[str, object] = {
         "n_rows": int(len(panel)),
         "sample_attrition": sample_attrition_df.to_dict(orient="records"),
@@ -1264,6 +1363,12 @@ def run_public_cascade(
         "primary_specification_status": "revision_frozen",
         "primary_specification": primary_specification,
         "primary_metric_rows": int(len(primary_metrics)),
+        "evaluation_design": {
+            "fold_unit": "origin_calendar_year",
+            "outcome_horizon_days": OUTCOME_HORIZON_DAYS,
+            "training_labels_mature_at_test_start": True,
+            "test_years": primary_test_years,
+        },
         "visibility_history_metric_rows": int(
             metrics_df["feature_set"].eq("visibility_history").sum()
         ),
@@ -1327,9 +1432,14 @@ def run_public_cascade(
             "n_encoded_controls_by_outcome": {},
             "n_encoded_controls_by_fold": {},
             "n_effective_nuisance_folds_by_outcome": {},
+            "n_issuer_clusters_by_outcome": {},
             "n_controls": 0,
             "n_controls_definition": DML_CONTROLS_DEFINITION,
             "control_columns_definition": "raw_controls_before_encoding",
+            "cross_fitting_unit": "issuer_cik",
+            "inference_method": (
+                "issuer_clustered_ols_t_after_issuer_group_cross_fitting"
+            ),
             "status": "disabled",
         }
     required_opacity_dml_outcomes = list(TASKS)

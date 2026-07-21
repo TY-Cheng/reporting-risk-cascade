@@ -9,15 +9,16 @@ hide:
 
 ### What is the research question?
 
-Can filing-origin public SEC/PCAOB information predict whether an issuer later
-enters observable public review-and-correction channels, and how does that
-public reporting-risk construct relate to, but differ from, the
+Can filing-origin SEC/PCAOB information predict whether an issuer later records
+submission-dated correspondence or a public correction outcome, and how does
+that review-and-correction construct relate to, but differ from, the
 detected-misstatement benchmark?
 
-The filing origin fixes the information set. Predictors must be public at or
-before `origin_date`; the outcomes are later observable review or correction
-events. The design therefore studies a public review-and-correction cascade,
-not latent fraud truth.
+The filing origin fixes the information set. Predictors must be verifiably
+available at or before `origin_date`. Amendment and Item 4.02 outcomes are
+public filings; correspondence is dated by its underlying submission and
+disclosed later. The design therefore studies recorded review-and-correction
+outcomes, not latent fraud truth or correspondence availability on submission.
 
 ### What is the empirical object?
 
@@ -25,11 +26,12 @@ The public cascade contains three 365-day labels:
 
 | Label | Interpretation |
 | --- | --- |
-| `comment_thread` | Public SEC comment-letter scrutiny. |
+| `comment_thread` | Eventually disclosed SEC correspondence, dated by its underlying EDGAR submission. |
 | `amendment` | Amendment, correction, or filing friction. |
 | `8k_402` | Item 4.02 non-reliance or material-correction signal. |
 
-These are public observability states. They are related to reporting risk but
+These are typed recorded outcome states. Comment correspondence is eventually
+disclosed but is not treated as public on its submission date. They are related to reporting risk but
 not interchangeable with fraud, restatement, or enforcement truth, and a
 positive later-stage label does not mechanically imply an earlier-stage label.
 
@@ -140,7 +142,9 @@ silently becoming part of public label or predictor construction.
 ### What is the visibility/history baseline?
 
 The visibility/history information set contains filing visibility, filing
-persistence, pre-origin filing friction, and prior public-event histories. The
+persistence, filing-origin friction, and prior dated filing-event histories.
+Submission-dated correspondence histories are excluded because their release
+dates are not verified. The
 comparison asks whether `all` adds ranking information beyond that compact
 information set. It is not a causal correction for regulator or disclosure
 selection.
@@ -212,17 +216,17 @@ current metric table and no best-model claim.
 
 ### What may the paper claim?
 
-The design can support evidence that filing-origin public information ranks
-later public review-and-correction states, and that those states have bounded
+The design can support evidence that filing-origin information ranks later
+submission-dated correspondence and public correction states, and that those states have bounded
 construct overlap with detected-misstatement labels. The exact strength of
 those statements is controlled by the canonical manifest and generated
 evidence.
 
 ### What must it not claim?
 
-It must not claim that public labels are true fraud labels, that the model
-causally identifies scrutiny or correction, that comment letters exhaust the
-SEC review universe, or that cross-task PR-AUC values form a same-estimand
+It must not claim that the recorded outcomes are true fraud labels, that the model
+causally identifies scrutiny or correction, that correspondence was public on
+its submission date, that correspondence exhausts the SEC review universe, or that cross-task PR-AUC values form a same-estimand
 leaderboard. WRDS-validated linkage does not authorize unobserved true-fraud
 occurrence claims.
 

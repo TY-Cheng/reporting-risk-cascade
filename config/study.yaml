@@ -55,5 +55,5 @@ construct_alignment:
     bridge_tier: "high_confidence"
 
 notes:
-  estimand: "pre-disclosure public reporting-risk state"
+  estimand: "filing-origin submission-dated review-and-correction outcome state"
   active_scope: "benchmark + public cascade study workflow only"

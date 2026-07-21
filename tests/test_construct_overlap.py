@@ -1220,6 +1220,7 @@ def test_alignment_ranking_and_intervals_ignore_physical_row_order(
 ) -> None:
     rows = pd.DataFrame(
         {
+            "issuer_cik": [f"{idx:010d}" for idx in range(40)],
             "gvkey": [str(1000 + idx) for idx in range(40)],
             "data_year": [2018] * 40,
             "benchmark_label": [1] * 30 + [0] * 10,

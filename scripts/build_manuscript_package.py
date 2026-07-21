@@ -93,16 +93,19 @@ DML_INTERVAL_NOTE = (
     "Raw controls are source variables before encoding; encoded controls are nuisance-model "
     "columns reported at the maximum fold-local width after training-fold categorical "
     "expansion and imputation; opacity components form the missingness-density treatment. "
-    "Intervals use HC3 residual OLS after cross-fitting. The estimates are adjusted "
-    "associations, not identified structural effects."
+    "Cross-fitting keeps all rows for an issuer in the same nuisance fold. Intervals and "
+    "p-values use issuer-clustered OLS covariance with a finite-cluster correction after "
+    "residualization. The estimates are adjusted associations, not identified structural "
+    "effects."
 )
 PUBLIC_TASK_NOTE = (
     ANNUAL_INTERVAL_NOTE
     + " Table 3 and Figure 1 report only the revision-frozen all + expanding primary "
-    "specification. The excluding-2020 sensitivity excludes the 2020 test fold; "
-    "training specifications are unchanged."
-    + " The evaluation unit is a public-cascade task summarized over annual "
-    "out-of-time folds at the issuer-CIK fiscal-year origin grain. "
+    "specification."
+    + " Public-side holdouts are complete origin-calendar years. Training rows come only "
+    "from origin years whose 365-day outcomes are fully mature before the holdout year "
+    "begins. The evaluation unit is a public-cascade task summarized over these holdouts "
+    "at the issuer-CIK filing-origin grain. "
     + "Panel positives sum exact positive_test support over the one-to-one fit-owner rows, while "
     "mean "
     "prevalence is averaged over the reported task-window-feature evaluations; "
@@ -128,7 +131,7 @@ BENCHMARK_TIMING_NOTE = (
     "headline model-selection claims."
 )
 FOLD_SUPPORT_NOTE = (
-    "Entries report annual out-of-time test support collapsed across configurations "
+    "Entries report complete origin-calendar-year test support collapsed across configurations "
     "because test rows and positive counts are task-year properties. Sparse folds "
     f"are those with fewer than {SPARSE_POSITIVE_THRESHOLD} positives; such folds "
     "are excluded from formal fold-dispersion intervals."
@@ -141,14 +144,17 @@ TASK_FEATURE_NOTE = (
 )
 SELECTION_PROFILE_NOTE = (
     "Issuer_Years are descriptive strata from the existing public issuer-origin panel. "
-    "They show how public-label rates vary with filing visibility, history, and "
+    "They show how outcome rates vary with filing visibility, history, and "
     "issuer profile variables. Parenthetical values in group labels are split thresholds, "
     "not sample sizes; XBRL log-asset strata are limited to observations with available "
     "XBRL asset values; days since prior filing refers to any prior EDGAR filing, "
     "not only a prior annual report. The observed same-year FPI-form indicator records "
     "whether a 20-F, 40-F, or 6-K is observed for the issuer fiscal year; it does not "
     "validate FPI status or domicile. The table is selection-aware evidence, not a causal "
-    "adjustment model or proof that SEC scrutiny selection has been solved."
+    "adjustment model or proof that SEC scrutiny selection has been solved. Prior "
+    "comment-thread strata use eventually disclosed correspondence submission dates; those "
+    "history fields are excluded from predictive models because release-time availability at "
+    "the filing origin is not verified."
 )
 PUBLIC_ATTRITION_NOTE = (
     "Sequential rows compare with the preceding sample-construction stage. Task rows "
@@ -183,7 +189,7 @@ def _bridge_language(
                 "Rows used for headline bridge-gated construct-alignment statistics"
             ),
             "construct_lift_note": (
-                "Lift bootstrap intervals are row-level percentile bootstrap intervals "
+                "Lift bootstrap intervals are issuer-cluster percentile bootstrap intervals "
                 "from the bridge-gated artifacts, not annual fold-dispersion intervals. "
                 "Bridge tier is wrds_validated, and displayed rows are restricted to "
                 "high-confidence bridge rows. Top-10% precision and FDR report the absolute "
@@ -200,7 +206,7 @@ def _bridge_language(
             ),
             "overlap_note": (
                 "Bridge_Rows are bridge-gated label-overlap diagnostics. The table reports "
-                "absolute public and benchmark rates and lift for each public label by bridge "
+                "absolute outcome and benchmark rates and lift for each recorded outcome by bridge "
                 "tier. These descriptive rates broaden construct-validation evidence beyond "
                 "the sparse Item 4.02 severe-tail ranking rows; they do not imply label "
                 "equivalence."
@@ -229,7 +235,7 @@ def _bridge_language(
         ),
         "construct_lift_note": (
             f"Bridge tier is {tier}; displayed lift rows remain diagnostic and the "
-            "construct-alignment claim is deferred. Top-10% precision, FDR, and row-level "
+            "construct-alignment claim is deferred. Top-10% precision, FDR, and issuer-cluster "
             "bootstrap intervals describe the candidate bridge sample only."
         ),
         "coverage_note": (
@@ -697,8 +703,8 @@ def _component_status(
         "bridge_probe": "CIK-GVKEY coverage and multiplicity checks",
         "construct_overlap": bridge_role,
         "peer_comparison": "Benchmark model-family transfer checks",
-        "public_cascade": "Filing-origin public-label ranking evidence",
-        "public_peer_comparison": "Public-label model-family transfer checks",
+        "public_cascade": "Filing-origin outcome-ranking evidence",
+        "public_peer_comparison": "Review-and-correction model-family transfer checks",
     }
     rows = []
     for component, payload in manifest.get("components", {}).items():
@@ -721,7 +727,7 @@ def _public_lake_scale(report: dict[str, Any]) -> pd.DataFrame:
         ("Normalized", "xbrl_core_fact", "Controlled XBRL core facts"),
         ("Normalized", "xbrl_fact_summary", "Accession-level XBRL coverage"),
         ("Normalized", "note_summary", "Notes summary mode"),
-        ("Normalized", "comment_thread", "SEC comment-thread signal"),
+        ("Normalized", "comment_thread", "Eventually disclosed SEC correspondence archive"),
         ("Normalized", "correction_event", "Amendment/correction signal"),
         ("Analytical", "issuer_origin_panel", "Annual issuer-year modeling table"),
         ("Analytical", "filing_origin_panel", "Filing-origin provenance table"),
@@ -839,15 +845,6 @@ def _public_task_metrics(
         "positive_test"
     ].sum()
     uncertainty = _annual_metric_summary(metrics, ["task"])
-    excluding_2020_summary = _annual_metric_summary(
-        metrics.loc[pd.to_numeric(metrics["test_year"], errors="coerce").ne(2020)],
-        ["task"],
-    )
-    excluding_2020 = (
-        excluding_2020_summary.set_index("task")["mean"].to_dict()
-        if "mean" in excluding_2020_summary
-        else {}
-    )
     grouped = (
         metrics.groupby("task", dropna=False)
         .agg(
@@ -862,18 +859,12 @@ def _public_task_metrics(
     grouped = grouped.merge(uncertainty, on="task", how="left")
     grouped = grouped.sort_values("mean", ascending=False)
     grouped["Mean_PR_AUC"] = grouped["mean"]
-    grouped["Excluding_2020_PR_AUC"] = grouped["task"].map(excluding_2020)
-    grouped["Excluding_2020_Delta"] = (
-        grouped["Excluding_2020_PR_AUC"] - grouped["Mean_PR_AUC"]
-    )
     grouped.insert(1, "Panel_Positives", grouped["task"].map(positives.to_dict()))
     grouped = grouped.rename(columns={"task": "Task"})
     grouped["PR_AUC_Dispersion"] = grouped.apply(_dispersion_text, axis=1)
     for col in [
         "Mean_Prevalence",
         "Mean_PR_AUC",
-        "Excluding_2020_PR_AUC",
-        "Excluding_2020_Delta",
         "Mean_ROC_AUC",
         "Mean_Brier",
         "Mean_Brier_Skill",
@@ -1112,6 +1103,7 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
                 "Top_10pct_Precision": _fmt(best.get("top_10pct_precision")),
                 "Top_10pct_FDR": _fmt(1 - float(best.get("top_10pct_precision"))),
                 "Lift_Bootstrap_Interval": f"[{_fmt(best.get('top_decile_lift_ci_low'))}, {_fmt(best.get('top_decile_lift_ci_high'))}]",
+                "Bootstrap_Issuers": _fmt(best.get("n_bootstrap_clusters")),
                 "top_decile_lift": float(best["top_decile_lift"]),
                 "ci_low": float(best.get("top_decile_lift_ci_low")),
                 "ci_high": float(best.get("top_decile_lift_ci_high")),
@@ -1128,7 +1120,7 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
         )
         rows.append(
             {
-                "Direction": "Detected-misstatement score to public labels",
+                "Direction": "Detected-misstatement score to recorded outcomes",
                 "Model": best["model_id"],
                 "Target": "Item 4.02",
                 "Feature_Set": best.get("feature_set", ""),
@@ -1140,6 +1132,7 @@ def _construct_alignment(study_dir: Path) -> pd.DataFrame:
                 "Top_10pct_Precision": _fmt(best.get("top_10pct_precision")),
                 "Top_10pct_FDR": _fmt(1 - float(best.get("top_10pct_precision"))),
                 "Lift_Bootstrap_Interval": f"[{_fmt(best.get('top_decile_lift_ci_low'))}, {_fmt(best.get('top_decile_lift_ci_high'))}]",
+                "Bootstrap_Issuers": _fmt(best.get("n_bootstrap_clusters")),
                 "top_decile_lift": float(best["top_decile_lift"]),
                 "ci_low": float(best.get("top_decile_lift_ci_low")),
                 "ci_high": float(best.get("top_decile_lift_ci_high")),
@@ -1345,13 +1338,13 @@ def _selection_profile_table(panel_path: Path) -> pd.DataFrame:
             add_profile(stratum, f"At/above median ({_fmt(float(median))})", panel[col].ge(median))
 
     add_profile(
-        "Prior public comment-thread history",
-        "No prior 3y public thread",
+        "Prior correspondence-thread history",
+        "No prior 3y correspondence thread",
         panel["public_history_comment_thread_3y_count"].fillna(0).eq(0),
     )
     add_profile(
-        "Prior public comment-thread history",
-        "Any prior 3y public thread",
+        "Prior correspondence-thread history",
+        "Any prior 3y correspondence thread",
         panel["public_history_comment_thread_3y_count"].fillna(0).gt(0),
     )
     add_profile("Annual form", "10-K", panel["form"].astype("string").eq("10-K"))
@@ -1386,12 +1379,25 @@ def _public_opacity_dml_table(study_dir: Path) -> pd.DataFrame:
         return dml
     dml["coef_num"] = pd.to_numeric(dml.get("coef"), errors="coerce")
     dml["std_err_num"] = pd.to_numeric(dml.get("std_err"), errors="coerce")
-    dml["ci_low"] = dml["coef_num"] - 1.96 * dml["std_err_num"]
-    dml["ci_high"] = dml["coef_num"] + 1.96 * dml["std_err_num"]
-    dml["interval_method"] = "cross_fit_residual_ols_hc3_95"
+    artifact_ci_low = pd.to_numeric(
+        dml.get("ci_low", pd.Series(np.nan, index=dml.index)), errors="coerce"
+    )
+    artifact_ci_high = pd.to_numeric(
+        dml.get("ci_high", pd.Series(np.nan, index=dml.index)), errors="coerce"
+    )
+    dml["ci_low"] = artifact_ci_low.where(
+        artifact_ci_low.notna(), dml["coef_num"] - 1.96 * dml["std_err_num"]
+    )
+    dml["ci_high"] = artifact_ci_high.where(
+        artifact_ci_high.notna(), dml["coef_num"] + 1.96 * dml["std_err_num"]
+    )
+    dml["interval_method"] = dml.get(
+        "inference_method",
+        pd.Series("issuer_clustered_ols_after_group_cross_fitting", index=dml.index),
+    )
     dml["Coef"] = dml["coef_num"].map(_fmt)
-    dml["Std_Err"] = dml["std_err_num"].map(_fmt)
-    dml["CI_95"] = dml.apply(
+    dml["Clustered_SE"] = dml["std_err_num"].map(_fmt)
+    dml["Clustered_CI_95"] = dml.apply(
         lambda row: f"[{_fmt(row['ci_low'])}, {_fmt(row['ci_high'])}]"
         if pd.notna(row["ci_low"]) and pd.notna(row["ci_high"])
         else "",
@@ -1404,8 +1410,11 @@ def _public_opacity_dml_table(study_dir: Path) -> pd.DataFrame:
         ("n_raw_controls", "Raw_Controls"),
         ("n_encoded_controls", "Encoded_Controls"),
         ("n_opacity_components", "Opacity_Components"),
+        ("n_issuer_clusters", "Issuer_Clusters"),
     ]:
-        values = pd.to_numeric(dml[source], errors="coerce")
+        values = pd.to_numeric(
+            dml.get(source, pd.Series(np.nan, index=dml.index)), errors="coerce"
+        )
         dml[target] = values.map(lambda value: str(int(value)) if pd.notna(value) else "")
     dml["Outcome"] = dml["outcome"]
     dml["Status"] = dml["status"]
@@ -1809,9 +1818,10 @@ def _result_narrative(
         "",
         "## Research Object",
         "",
-        "The empirical object is a filing-origin public reporting-risk state: whether an "
-        "issuer later enters an observable public review or correction channel after the "
-        "public information set available at the filing origin. The detected-"
+        "The empirical object is a filing-origin, submission-dated review-and-correction "
+        "outcome state: whether an issuer later enters a typed recorded outcome after the "
+        "verifiably available filing-origin information set. Correspondence is eventually "
+        "disclosed but dated by submission rather than public release. The detected-"
         "misstatement benchmark is retained as a diagnostic and construct-validation "
         "layer, not treated as the sole definition of reporting risk.",
         "",
@@ -1821,7 +1831,7 @@ def _result_narrative(
         f"`{primary_public_label}`. Its task-level results are distinct from feature-family "
         "summaries that average over tasks and training windows. The public tasks show a "
         "natural severity gradient. "
-        "Comment-thread scrutiny is the broadest public-scrutiny "
+        "Submission-dated correspondence is the broadest scrutiny-related "
         f"signal (mean PR-AUC `{value(comment_row, 'Mean_PR_AUC')}`), amendments provide "
         f"a clear correction/friction channel (mean PR-AUC `{value(amendment_row, 'Mean_PR_AUC')}`), "
         f"and 8-K Item 4.02 is rarer but still rankable (mean PR-AUC `{value(severe_row, 'Mean_PR_AUC')}`).",
@@ -1857,7 +1867,7 @@ def _result_narrative(
         bridge_language["narrative"],
         "The revision-frozen "
         "primary public-score-to-benchmark-positive row and reciprocal detected-"
-        "misstatement-score-to-public-label row are the two directional diagnostics "
+        "misstatement-score-to-recorded-outcome row are the two directional diagnostics "
         "reported in Table 9 and Figure 5. "
         f"The validation tier is `{validation_tier}`.",
         "",
@@ -2182,8 +2192,6 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
                     "valid_folds",
                     "Mean_Prevalence",
                     "Mean_PR_AUC",
-                    "Excluding_2020_PR_AUC",
-                    "Excluding_2020_Delta",
                     "PR_AUC_Dispersion",
                     "Mean_ROC_AUC",
                     "Mean_Brier",
@@ -2246,7 +2254,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             public_peer,
             out_dir=tables_dir,
             stem="table_07_public_peer_metrics",
-            caption="Public-label peer-compatible model-family metrics",
+            caption="Review-and-correction peer-compatible model-family metrics",
             label="tab:public-peer",
             note=PEER_TRANSFER_NOTE,
             display_df=_table_view(
@@ -2293,6 +2301,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
                     "Top_10pct_Precision",
                     "Top_10pct_FDR",
                     "Lift_Bootstrap_Interval",
+                    "Bootstrap_Issuers",
                     "Bridge_Tier",
                 ],
             ).rename(columns={"Bridge_Tier": "Confidence_Tier"}),
@@ -2303,7 +2312,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             public_fold_support,
             out_dir=tables_dir,
             stem="table_13_public_fold_support",
-            caption="Annual public-label fold support",
+            caption="Origin-calendar-year outcome fold support",
             label="tab:public-fold-support",
             note=FOLD_SUPPORT_NOTE,
         )
@@ -2322,7 +2331,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             bridge_overlap,
             out_dir=tables_dir,
             stem="table_15_bridge_overlap_matrix",
-            caption="Bridge-gated public-label overlap matrix",
+            caption="Bridge-gated outcome overlap matrix",
             label="tab:bridge-overlap-matrix",
             note=bridge_language["overlap_note"],
         )
@@ -2349,7 +2358,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             selection_profile,
             out_dir=tables_dir,
             stem="table_17_selection_profile",
-            caption="Selection-aware public-label profile",
+            caption="Selection-aware outcome profile",
             label="tab:selection-profile",
             note=SELECTION_PROFILE_NOTE,
         )
@@ -2380,9 +2389,10 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
                     "Raw_Controls",
                     "Encoded_Controls",
                     "Opacity_Components",
+                    "Issuer_Clusters",
                     "Coef",
-                    "Std_Err",
-                    "CI_95",
+                    "Clustered_SE",
+                    "Clustered_CI_95",
                     "P_Value",
                 ],
             ),
@@ -2426,7 +2436,7 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             fold_df=public_peer_folds,
             summary_group_col="Model",
             fold_group_col="peer_model_id",
-            title="Public-label peer-compatible model families",
+            title="Review-and-correction peer-compatible model families",
             ylabel="Mean PR-AUC",
             out_path=figures_dir / "figure_04_public_peer_pr_auc",
             color="#4361ee",
@@ -2465,12 +2475,12 @@ def _build_package(study_dir: Path, out_dir: Path) -> None:
             "annual_metric_interval": "descriptive fold-dispersion interval over valid annual out-of-time fold means when valid_folds >= 5",
             "sparse_fold_rule": f"folds with positive count < {SPARSE_POSITIVE_THRESHOLD} are excluded from dispersion calculations and listed in excluded_sparse_years",
             "fold_dependence_caveat": "rolling and expanding training windows overlap, so fold-dispersion intervals describe evaluation-period variation rather than independent sampling error",
-            "construct_overlap_interval": "row-level percentile bootstrap top-decile lift interval from construct-overlap artifacts",
+            "construct_overlap_interval": "issuer-cluster percentile bootstrap top-decile lift interval from construct-overlap artifacts",
             "construct_overlap_interval_method": construct_manifest.get("interval_method"),
             "construct_overlap_interval_seed": construct_manifest.get("interval_seed"),
             "construct_overlap_interval_reps": construct_manifest.get("interval_reps"),
             "construct_overlap_interval_scope": construct_manifest.get("interval_scope"),
-            "dml_interval": "coef +/- 1.96 * HC3 OLS SE after cross-fitted residualization",
+            "dml_interval": "issuer-clustered OLS interval after issuer-group cross-fitted residualization",
         },
         "claim_boundary": _bridge_claim_boundary(bridge_language),
     }

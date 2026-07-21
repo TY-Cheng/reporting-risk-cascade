@@ -36,10 +36,11 @@ from .peer_comparison import (
     validate_parallel_budget,
 )
 from .public_cascade import (
+    OUTCOME_HORIZON_DAYS,
     TASKS,
     _filter_main_sample,
     _infer_feature_families,
-    _rolling_year_pairs,
+    _origin_year_pairs,
     _sort_panel_for_model,
     _task_exclusion_mask,
     stable_task_seed,
@@ -404,7 +405,8 @@ def _fit_public_peer_unit(
     importance_rows: List[Dict[str, object]] = []
     imbalance_rows: List[Dict[str, object]] = []
 
-    fiscal_year = panel["fiscal_year"].astype(int)
+    origin_dates = pd.to_datetime(panel["origin_date"], errors="coerce")
+    origin_year = origin_dates.dt.year.astype("Int64")
     if peer_model_id == "dechow_fixed_fscore_model1" and mapping_quality != "full":
         for window, test_year, _ in tasks:
             train_window = _window_label(window)
@@ -431,9 +433,16 @@ def _fit_public_peer_unit(
 
     for window, test_year, train_years in tasks:
         train_window = _window_label(window)
-        train_df = panel.loc[fiscal_year.isin([int(year) for year in train_years])].copy()
-        test_df = panel.loc[fiscal_year.eq(int(test_year))].copy()
-        if train_df["fiscal_year"].nunique() < min_train_years or test_df.empty:
+        test_start = pd.Timestamp(year=int(test_year), month=1, day=1)
+        test_end = pd.Timestamp(year=int(test_year) + 1, month=1, day=1)
+        mature = origin_dates.add(pd.to_timedelta(OUTCOME_HORIZON_DAYS, unit="D")).le(
+            test_start
+        )
+        train_df = panel.loc[
+            origin_year.isin([int(year) for year in train_years]) & mature
+        ].copy()
+        test_df = panel.loc[origin_dates.ge(test_start) & origin_dates.lt(test_end)].copy()
+        if origin_year.loc[train_df.index].nunique() < min_train_years or test_df.empty:
             for task_name in [*HEADLINE_TASKS, *SEVERITY_TAIL_TASKS]:
                 status_rows.append(
                     _status_row(
@@ -451,6 +460,17 @@ def _fit_public_peer_unit(
                     )
                 )
             continue
+        max_train_maturity = origin_dates.loc[train_df.index].add(
+            pd.to_timedelta(OUTCOME_HORIZON_DAYS, unit="D")
+        ).max()
+        fold_timing = {
+            "test_start": test_start.date().isoformat(),
+            "test_end": test_end.date().isoformat(),
+            "train_origin_year_min": int(min(train_years)),
+            "train_origin_year_max": int(max(train_years)),
+            "train_label_maturity_cutoff": test_start.date().isoformat(),
+            "max_train_label_maturity_date": max_train_maturity.date().isoformat(),
+        }
 
         for task_name in SEVERITY_TAIL_TASKS:
             label_col = TASKS[task_name]["label"]
@@ -583,6 +603,7 @@ def _fit_public_peer_unit(
                 "test_year": int(test_year),
                 "train_window": train_window,
                 "input_kind": PUBLIC_INPUT_KIND,
+                **fold_timing,
                 "n_train": int(len(y_train)),
                 "n_test": int(len(y_test)),
                 "n_pos_test": pos_test,
@@ -666,6 +687,12 @@ def _metric_columns() -> List[str]:
         "test_year",
         "train_window",
         "input_kind",
+        "test_start",
+        "test_end",
+        "train_origin_year_min",
+        "train_origin_year_max",
+        "train_label_maturity_cutoff",
+        "max_train_label_maturity_date",
         "n_train",
         "n_test",
         "n_pos_test",
@@ -730,7 +757,13 @@ def _empty_outputs(out_dir: Path, *, mode: str, reason: str) -> Dict[str, Path]:
     }
 
 
-def _manifest(*, mode: str, status: str, reason: str = "") -> Dict[str, object]:
+def _manifest(
+    *,
+    mode: str,
+    status: str,
+    reason: str = "",
+    evaluation_design: Dict[str, object] | None = None,
+) -> Dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
         "spec_version": SPEC_VERSION,
@@ -740,7 +773,8 @@ def _manifest(*, mode: str, status: str, reason: str = "") -> Dict[str, object]:
         "paper" + "_anchors": LITERATURE_ANCHORS,
         "peer_variant": "public_label_pr2",
         "sample_scope": "public_issuer_origin",
-        "task_estimand": "filing_origin_public_review_and_correction",
+        "task_estimand": "filing_origin_submission_dated_review_and_correction",
+        "evaluation_design": evaluation_design or {},
         "headline_tasks": HEADLINE_TASKS,
         "severity_tail_tasks": SEVERITY_TAIL_TASKS,
         "input_kind": PUBLIC_INPUT_KIND,
@@ -838,10 +872,9 @@ def run_public_peer_comparison(
 
     families = _infer_feature_families(panel)
     feature_sets = [family for family in PUBLIC_FEATURE_SETS if family in families]
-    years = panel["fiscal_year"].dropna().astype(int).sort_values().unique().tolist()
     tasks = list(
-        _rolling_year_pairs(
-            years,
+        _origin_year_pairs(
+            panel,
             min_train_years=int(analysis.get("min_train_years", 5)),
             candidate_train_windows=analysis.get("candidate_train_windows", [None, 5, 7, 10]),
         )
@@ -944,7 +977,16 @@ def run_public_peer_comparison(
     (out_dir / "public_model_family_blockers.json").write_text(
         json.dumps(blockers, indent=2, sort_keys=True), encoding="utf-8"
     )
-    manifest = _manifest(mode=mode, status="complete")
+    manifest = _manifest(
+        mode=mode,
+        status="complete",
+        evaluation_design={
+            "fold_unit": "origin_calendar_year",
+            "outcome_horizon_days": OUTCOME_HORIZON_DAYS,
+            "training_labels_mature_at_test_start": True,
+            "test_years": sorted({int(test_year) for _, test_year, _ in tasks}),
+        },
+    )
     (out_dir / "public_model_family_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )

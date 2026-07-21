@@ -29,7 +29,7 @@ sources:
     note: "Quarterly before 2020-11, monthly after 2020-11, with historical corrections."
   comment-letters:
     page_url: "https://www.sec.gov/answers/how-to-search-for-edgar-correspondence"
-    note: "Use first public EDGAR date only; public threads correspond to UPLOAD/CORRESP."
+    note: "Use the first underlying EDGAR submission date; UPLOAD/CORRESP threads are eventually disclosed, but this field is not a public-release date."
   insider:
     page_url: "https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets"
   13f:

@@ -489,6 +489,12 @@ def test_r4_rejects_refreshed_hash_table_order_mutation(
         ("construct", ("interval_seed",), 7, "construct bootstrap seed"),
         (
             "construct",
+            ("interval_method",),
+            "row_percentile_bootstrap",
+            "construct bootstrap method",
+        ),
+        (
+            "construct",
             ("primary_alignment", "public_to_benchmark_count"),
             0,
             "public-to-benchmark primary count",

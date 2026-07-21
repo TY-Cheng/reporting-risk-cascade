@@ -86,15 +86,15 @@ PARTIAL_REQUIRED_ARTIFACTS = [
 
 FIGURE_EXPLANATIONS = {
     "figure_01_public_task_pr_auc": {
-        "title": "Public task PR-AUC",
-        "claim": "The revision-frozen primary public specification ranks later public review-and-correction states above task prevalence.",
+        "title": "Review-and-correction outcome PR-AUC",
+        "claim": "The revision-frozen primary specification ranks later review-and-correction outcomes above task prevalence.",
         "evidence": "Figure 1 receives only the declared `all + expanding` rows also owned by generated Table 3.",
         "boundary": "This is ranking evidence, not calibrated deployment evidence; Brier Skill Score and ECE remain the calibration gate.",
     },
     "figure_02_feature_family_pr_auc": {
         "title": "Feature-family PR-AUC",
-        "claim": "Feature-family comparisons provide sensitivity evidence around the frozen public specification.",
-        "evidence": "The figure compares all-feature, metadata, XBRL, auditor, Prior-filing history (legacy artifact key: oversight), and visibility/history information sets under the same public-label evaluation frame.",
+        "claim": "Feature-family comparisons provide sensitivity evidence around the frozen outcome specification.",
+        "evidence": "The figure compares all-feature, metadata, XBRL, auditor, Prior-filing history (legacy artifact key: oversight), and visibility/history information sets under the same outcome evaluation frame.",
         "boundary": "Interpret as information-set evidence rather than a structural source-importance or mechanism claim.",
     },
     "figure_03_detected_misstatement_peer_pr_auc": {
@@ -104,14 +104,14 @@ FIGURE_EXPLANATIONS = {
         "boundary": "These rows are transferred model-family diagnostics, not original-paper numeric replications.",
     },
     "figure_04_public_peer_pr_auc": {
-        "title": "Public-label peer-family PR-AUC",
-        "claim": "Familiar accounting ML model-family vocabularies can be evaluated on public review-and-correction labels.",
-        "evidence": "The figure moves the peer-compatible families to the public-label task and keeps the metric vocabulary comparable.",
+        "title": "Review-and-correction peer-family PR-AUC",
+        "claim": "Familiar accounting ML model-family vocabularies can be evaluated on the review-and-correction outcomes.",
+        "evidence": "The figure moves the peer-compatible families to the outcome task and keeps the metric vocabulary comparable.",
         "boundary": "Do not compare these values as same-estimand superiority over detected-misstatement studies.",
     },
     "figure_05_construct_overlap_lift": {
         "title": "Construct-overlap lift",
-        "claim": "The WRDS-validated bridge supports related-but-non-identical overlap between public labels and detected-misstatement labels.",
+        "claim": "The WRDS-validated bridge supports related-but-non-identical overlap between the recorded outcomes and detected-misstatement labels.",
         "evidence": "Figure 5 receives exactly the two declared primary alignment rows owned by generated Table 9, alongside precision/FDR context in the table.",
         "boundary": "Item 4.02 lift is a severe-tail diagnostic, not the sole construct-validity basis or event-identification proof.",
     },
@@ -122,7 +122,7 @@ FOLD_FIGURE_NOTE = (
     "folds; capped black lines encode descriptive fold-dispersion intervals."
 )
 CONSTRUCT_FIGURE_NOTE = (
-    "Blue bars encode top-decile lift; capped black lines encode row-level "
+    "Blue bars encode top-decile lift; capped black lines encode issuer-cluster "
     "percentile-bootstrap intervals; the dashed vertical line marks lift = 1; "
     "annotations report top-decile precision and FDR."
 )
@@ -148,7 +148,7 @@ TABLE_EXPLANATIONS = {
         "boundary": "Scale and coverage establish feasibility, not causal interpretation or complete regulatory review coverage.",
     },
     "table_03_public_task_metrics": {
-        "claim": "The revision-frozen primary public specification produces above-prevalence ranking evidence for the three public labels.",
+        "claim": "The revision-frozen primary specification produces above-prevalence ranking evidence for the three review-and-correction outcomes.",
         "evidence": "Generated Table 3 owns the `all + expanding` primary rows and reports PR-AUC, ROC-AUC, fold support, calibration diagnostics, and prevalence by task.",
         "boundary": "Weak Brier Skill Score and ECE keep the claim to ranking/prioritization rather than calibrated probability rules.",
     },
@@ -168,9 +168,9 @@ TABLE_EXPLANATIONS = {
         "boundary": "These are model-family transfer checks, not exact replications of prior samples or private data settings.",
     },
     "table_07_public_peer_metrics": {
-        "claim": "Peer-compatible families also rank public-label outcomes under the public-cascade estimand.",
-        "evidence": "Public-label peer-family PR-AUC and ROC-AUC are reported under the same public-label task design.",
-        "boundary": "These values are within-public-label diagnostics, not cross-estimand superiority claims.",
+        "claim": "Peer-compatible families also rank review-and-correction outcomes under the submission-dated estimand.",
+        "evidence": "Peer-family PR-AUC and ROC-AUC are reported under the same outcome design.",
+        "boundary": "These values are within-outcome diagnostics, not cross-estimand superiority claims.",
     },
     "table_08_bridge_coverage": {
         "claim": "The bridge covers most benchmark rows and firms before overlap claims are made.",
@@ -183,12 +183,12 @@ TABLE_EXPLANATIONS = {
         "boundary": "Lift above one supports enrichment, while low absolute precision and high FDR rule out event-identification claims.",
     },
     "table_12_public_opacity_dml": {
-        "claim": "Opacity/missingness has at most diagnostic adjusted-association evidence in the current public-label setting.",
-        "evidence": "DML-style coefficients, robust standard errors, intervals, and p-values are reported by public label.",
+        "claim": "Opacity/missingness has at most diagnostic adjusted-association evidence for the current outcomes.",
+        "evidence": "DML-style coefficients, issuer-clustered standard errors, intervals, and p-values are reported by outcome.",
         "boundary": "These are adjusted associations and do not identify causal selection or strategic silence.",
     },
     "table_13_public_fold_support": {
-        "claim": "Annual public-label test folds have sufficient positive support for reported dispersion summaries.",
+        "claim": "Annual outcome test folds have sufficient positive support for reported dispersion summaries.",
         "evidence": "Task-year rows, positives, prevalence, and sparse-fold flags are reported.",
         "boundary": "Fold support makes dispersion auditable; it does not remove class-imbalance or calibration concerns.",
     },
@@ -198,8 +198,8 @@ TABLE_EXPLANATIONS = {
         "boundary": "Use this table for label-specific prose rather than a single global feature-family ranking.",
     },
     "table_15_bridge_overlap_matrix": {
-        "claim": "Public labels and detected-misstatement labels are related but not identical across bridge tiers.",
-        "evidence": "The matrix reports benchmark/public rates, co-occurrence, and lifts by label and bridge tier.",
+        "claim": "Recorded outcomes and detected-misstatement labels are related but not identical across bridge tiers.",
+        "evidence": "The matrix reports benchmark/outcome rates, co-occurrence, and lifts by outcome and bridge tier.",
         "boundary": "The typed pattern is construct-validity evidence; it does not establish label equivalence.",
     },
     "table_16_bridge_sample_boundaries": {
@@ -208,8 +208,8 @@ TABLE_EXPLANATIONS = {
         "boundary": "Generalization beyond high-confidence mapped rows should be qualified.",
     },
     "table_17_selection_profile": {
-        "claim": "Public labels partly reflect selected public scrutiny and issuer visibility states.",
-        "evidence": "Public-label rates are profiled across filing size, XBRL assets, filing history, prior comments, form type, and FPI proxy strata.",
+        "claim": "Recorded outcomes partly reflect selected scrutiny and issuer visibility states.",
+        "evidence": "Outcome rates are profiled across filing size, XBRL assets, filing history, prior correspondence, form type, and FPI proxy strata.",
         "boundary": "This descriptive profile is not a causal SEC-selection correction.",
     },
     "table_18_public_sample_attrition": {
@@ -267,7 +267,7 @@ def _bridge_language(
             ),
             "contingency": (
                 "The contingency matrix is the broader construct-validity evidence. Comment "
-                "threads are broad public scrutiny, amendments show stronger correction/friction "
+                "threads are broad submission-dated scrutiny outcomes, amendments show stronger correction/friction "
                 "alignment, and Item 4.02 is a rare severe-tail state; the integrated claim rests "
                 "on this typed pattern plus the bridge gate, not on Item 4.02 alone."
             ),
@@ -283,20 +283,18 @@ def _bridge_language(
                 "construct-overlap interpretation."
             ),
             "discussion_relation": (
-                "- Public labels and detected-misstatement benchmark labels are related but "
+                "- Recorded outcomes and detected-misstatement benchmark labels are related but "
                 "non-identical constructs."
             ),
             "discussion_reciprocal": (
                 "- Public-cascade scores can rank benchmark positives in the matched overlap; "
-                "detected-misstatement scores can also rank severe public correction labels."
+                "detected-misstatement scores can also rank severe correction outcomes."
             ),
             "generalizability": (
                 f"Construct-overlap findings generalize only to the covered `{tier}` bridge "
                 "sample."
             ),
-            "claim_text": (
-                "Public and detected-misstatement constructs are related but non-identical."
-            ),
+            "claim_text": "Recorded-outcome and detected-misstatement constructs are related but non-identical.",
             "claim_evidence": (
                 "WRDS bridge coverage, generated Table 9, Figure 5, and contingency matrix."
             ),
@@ -1336,9 +1334,9 @@ def build_snapshot(
         "",
         "## Results Overview",
         "",
-        "- **Research question.** Can filing-origin public SEC/PCAOB information predict "
-        "whether an issuer later enters observable public review-and-correction channels, "
-        "and how does this public reporting-risk construct relate to, but differ from, "
+        "- **Research question.** Can filing-origin SEC/PCAOB information predict "
+        "whether an issuer later records submission-dated correspondence or public correction outcomes, "
+        "and how does this review-and-correction construct relate to, but differ from, "
         "the detected-misstatement benchmark?",
         "",
         "- **Data.** The workflow combines the `gvkey x data_year` "
@@ -1361,8 +1359,8 @@ def build_snapshot(
         "",
         "- **Bridge boundary.** " + bridge_language["overview_boundary"],
         "",
-        "- **Bounded contribution.** The study develops a filing-origin measurement of "
-        "public reporting-risk states and evaluates prevalence-aware ranking. It does not "
+        "- **Bounded contribution.** The study develops a filing-origin, submission-dated "
+        "measure of review-and-correction outcomes and evaluates prevalence-aware ranking. It does not "
         "identify hidden misconduct, causal regulatory effects, or same-estimand "
         "superiority over detected-misstatement studies.",
         "",
@@ -1495,7 +1493,7 @@ def build_snapshot(
         "",
         "## Results for Experiment 5: Public Cascade Prediction",
         "",
-        "This experiment estimates the filing-origin public reporting-risk state and "
+        "This experiment estimates the filing-origin, submission-dated review-and-correction outcome state and "
         "compares the revision-frozen `all + expanding` headline with feature-family, "
         "window, calibration, selection, and peer-transfer sensitivity evidence.",
         "",
@@ -1557,7 +1555,7 @@ def build_snapshot(
         "",
         _table(
             [
-                "Public label",
+                "Outcome label",
                 "Bridge tier",
                 "Aggregation rule",
                 "Rows",
@@ -1581,7 +1579,7 @@ def build_snapshot(
             ),
         ),
         "",
-        "### Benchmark-Positive Public-Label Co-occurrence",
+        "### Benchmark-Positive Outcome Co-occurrence",
         "",
         _table(
             [
@@ -1614,7 +1612,7 @@ def build_snapshot(
         _table(
             [
                 "Relative year",
-                "Public label",
+                "Outcome label",
                 "Benchmark pos rows",
                 "Benchmark neg rows",
                 "Rate if benchmark pos",
@@ -1635,32 +1633,32 @@ def build_snapshot(
         "",
         "### Answers to the research questions",
         "",
-        "- Public task results support a prevalence-aware ranking claim for three "
-        "public cascade labels, but calibration diagnostics keep the interpretation "
+        "- Outcome-model results support a prevalence-aware ranking claim for three "
+        "review-and-correction outcomes, but calibration diagnostics keep the interpretation "
         "to ranking and prioritization.",
         bridge_language["discussion_relation"],
         bridge_language["discussion_reciprocal"],
-        "- Selection-profile rows show that public comment-thread outcomes are "
-        "partly public-scrutiny states, not a clean issuer-risk-only label.",
+        "- Selection-profile rows show that submission-dated correspondence partly reflects "
+        "the scrutiny process, not a clean issuer-risk-only label.",
         "- " + bridge_language["discussion_answer"],
         "",
         "### Comparison with prior literature",
         "",
-        "The detected-misstatement and public-label peer suites align model-family and "
+        "The detected-misstatement and outcome peer suites align model-family and "
         "metric language with prior accounting prediction work. They are transferred "
         "family diagnostics, not original-sample replications or same-estimand leaderboard "
         "comparisons.",
         "",
         "### Accounting and institutional interpretation",
         "",
-        "The public outcomes capture observable review, correction, and filing-friction "
+        "The outcomes record submission-dated correspondence, correction, and filing-friction "
         "states. The accounting contribution is therefore a filing-origin measurement and "
         "prioritization design, with machine learning serving as measurement infrastructure.",
         "",
         "### Selection and visibility",
         "",
-        "Comment-thread and correction labels are partly selected by issuer visibility, "
-        "filing history, source availability, and public scrutiny. Selection-profile and "
+        "Correspondence and correction outcomes are partly selected by issuer visibility, "
+        "filing history, source availability, and scrutiny. Selection-profile and "
         "opacity rows describe those boundaries without claiming a causal selection correction.",
         "",
         f"`{oversight['display_name']}` means `prior_filing_count`, not PCAOB inspection. "
@@ -1679,14 +1677,14 @@ def build_snapshot(
         "",
         "### Generalizability",
         "",
-        "Public-cascade findings generalize to the documented fiscal-year, filing-origin, "
-        "and observability frame. " + bridge_language["generalizability"],
+        "Outcome-model findings generalize to the documented fiscal-year, filing-origin, "
+        "and submission-date frame. " + bridge_language["generalizability"],
         "",
         "### Limitations and future work",
         "",
         "- The evidence supports measurement and decision-useful ranking claims, not causal "
         "proof of hidden misconduct.",
-        "- Comment letters are public scrutiny signals, not the complete SEC review universe.",
+        "- Correspondence is submission-dated and disclosed later; it does not represent the complete SEC review universe.",
         "- Negative Brier Skill Score or large ECE remains evidence against deployment-ready "
         "probability rules.",
         "- External temporal validation and identified selection corrections remain future "
@@ -1701,7 +1699,7 @@ def build_snapshot(
             ["Claim", "Evidence", "Category", "Boundary"],
             [
                 [
-                    "Filing-origin public information ranks later public review-and-correction labels.",
+                    "Filing-origin information ranks later submission-dated correspondence and public correction outcomes.",
                     "Generated Table 3, annual fold support, and Figure 1.",
                     _code(claim_maturity.get("public_prediction", "deferred")),
                     "Ranking evidence relative to prevalence, not calibrated deployment.",
@@ -1719,7 +1717,7 @@ def build_snapshot(
                     "Conditional on bridge tier and covered sample.",
                 ],
                 [
-                    "Opacity/missingness has adjusted-association evidence for public labels.",
+                    "Opacity/missingness has adjusted-association evidence for the recorded outcomes.",
                     "DML adjusted-association rows.",
                     _code(claim_maturity.get("opacity_dml", "deferred")),
                     "Null or weak rows cannot support strategic-silence claims.",

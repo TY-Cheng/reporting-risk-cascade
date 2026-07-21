@@ -246,7 +246,7 @@ def _write_summary(
         "",
         "## Claim",
         "- Combine the old restatement benchmark with the filing-native public cascade.",
-        "- The estimand is a pre-disclosure public reporting-risk state, not latent true fraud.",
+        "- The estimand is a filing-origin, submission-dated review-and-correction outcome state, not latent true fraud.",
         "",
         "## Completed Components",
     ]
